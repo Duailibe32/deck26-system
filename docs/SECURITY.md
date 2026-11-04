@@ -40,3 +40,33 @@ Na Etapa 5, a matriz de RBAC foi expandida com o namespace `hotel:*`:
    - Documentos e e-mails de hóspedes não são trafegados no cardápio digital público nem expostos em logs de console em ambiente de produção.
 3. **Auditoria de Encerramento com Débito Pendente**:
    - O check-out com saldo em aberto gera um registro de auditoria com gravidade crítica no log de segurança (`audit_logs`), documentando o operador responsável e o saldo devedor perdoado ou negociado.
+
+---
+
+## 4. Permissões de Delivery & Gestão Financeira (RBAC — Etapa 6)
+
+Na Etapa 6, a matriz de RBAC foi estendida com os namespaces `delivery:*` e `finance:*`:
+
+| Permissão | Finalidade | Perfis Autorizados |
+| :--- | :--- | :--- |
+| `delivery:manage_orders` | Criar, alterar e cancelar pedidos de delivery | `OWNER`, `MANAGER`, `CASHIER` |
+| `delivery:manage_couriers` | Cadastrar e gerenciar motoboys e regiões | `OWNER`, `MANAGER` |
+| `delivery:settle` | Executar prestação de contas e acerto de entregadores | `OWNER`, `MANAGER`, `CASHIER` |
+| `finance:view_overview` | Consultar painel executivo e saldos da tesouraria | `OWNER`, `MANAGER`, `CASHIER` |
+| `finance:manage_receivables` | Consultar e liquidar contas a receber | `OWNER`, `MANAGER`, `CASHIER` |
+| `finance:manage_payables` | Lançar e pagar obrigações/contas a pagar | `OWNER`, `MANAGER` |
+| `finance:manage_accounts` | Gerenciar contas bancárias, cofres e caixas | `OWNER`, `MANAGER` |
+| `finance:transfers` | Executar transferências internas de numerário | `OWNER`, `MANAGER` |
+| `finance:reconcile` | Efetuar conciliação manual de contas | `OWNER`, `MANAGER` |
+| `finance:view_dre` | Consultar DRE gerencial por competência | `OWNER`, `MANAGER` |
+| `finance:manage_suppliers` | Cadastrar e gerenciar fornecedores | `OWNER`, `MANAGER`, `STOCK_CLERK` |
+| `finance:export_reports` | Exportar relatórios gerenciais e contábeis em CSV | `OWNER`, `MANAGER` |
+
+---
+
+## 5. Mitigação de CSV Formula Injection (Excel / Calc)
+
+O DECK 26 implementa proteção nativa contra ataques de injeção de fórmulas CSV (CWE-1236):
+- Qualquer valor de célula iniciando com `=`, `+`, `-`, `@`, `\t` ou `\r` é automaticamente prefixado com apóstrofo (`'`) via `sanitizeCsvCell()`.
+- Células contendo aspas, vírgulas ou quebras de linha são delimitadas e escapadas como `""`.
+- Impede a execução de comandos DDE, chamadas de shell ou macros maliciosas quando operadores abrem relatórios no Microsoft Excel ou LibreOffice Calc.

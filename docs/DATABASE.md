@@ -41,6 +41,9 @@ Durante o desenvolvimento e operação local sem VPS contratada, o sistema utili
    - Tabelas de serviços de hotelaria: `hotel_services` e `hotel_service_orders`.
    - Tabela de governança: `hotel_housekeeping_logs`.
    - Tabela de manutenção predial: `hotel_maintenance_records`.
+5. **`0005_stage6_delivery_and_finance.sql`**:
+   - Módulo Delivery: tabelas `delivery_zones`, `delivery_couriers`, `delivery_customers`, `delivery_addresses`, `delivery_orders` e `delivery_settlements`.
+   - Módulo Financeiro: tabelas `financial_categories` (plano de contas), `cost_centers`, `financial_accounts` (tesouraria), `suppliers`, `accounts_receivable`, `accounts_payable`, `financial_transactions`, `financial_transfers`, `purchase_invoices`, `purchase_invoice_items` e `account_reconciliations`.
 
 ### Migrações de Nuvem (`packages/contracts/migrations/cloud/`)
 1. **`0001_initial_cloud_schema.sql`**
@@ -48,3 +51,5 @@ Durante o desenvolvimento e operação local sem VPS contratada, o sistema utili
 3. **`0003_stage4_cloud_tables_tabs_kds_cashier.sql`**
 4. **`0004_stage5_cloud_hotel_pms.sql`**:
    - Compatibilidade total PostgreSQL 16 com tipos UUID, TIMESTAMP WITH TIME ZONE, JSONB e índices de busca para o módulo hoteleiro.
+5. **`0005_stage6_cloud_delivery_and_finance.sql`**:
+   - Equivalente completo para PostgreSQL 16+ das 15 tabelas de delivery e finanças gerenciais, com integridade referencial e índices de competência.

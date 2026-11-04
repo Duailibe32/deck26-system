@@ -93,7 +93,46 @@ import {
   calculateStayFolioTotals,
   calculateTabTotals,
   hasPermission,
-  resolveChannelPriceCents
+  resolveChannelPriceCents,
+  // Etapa 6: Delivery e Gestão Financeira
+  AccountReconciliation,
+  AccountsPayable,
+  AccountsPayableOrigin,
+  AccountsPayableStatus,
+  AccountsReceivable,
+  AccountsReceivableOrigin,
+  AccountsReceivableStatus,
+  CashFlowProjectedSummary,
+  CashFlowRealizedSummary,
+  CostCenter,
+  DECK26_INITIAL_COST_CENTERS,
+  DECK26_INITIAL_DELIVERY_ZONES,
+  DECK26_INITIAL_FINANCIAL_ACCOUNTS,
+  DECK26_INITIAL_FINANCIAL_CATEGORIES,
+  DeliveryAddress,
+  DeliveryCourier,
+  DeliveryCourierStatus,
+  DeliveryCustomer,
+  DeliveryOrder,
+  DeliveryOrderStatus,
+  DeliveryOrigin,
+  DeliverySettlement,
+  DeliveryType,
+  DeliveryZone,
+  DreStatement,
+  ExecutiveDashboardMetrics,
+  FinancialAccount,
+  FinancialAccountType,
+  FinancialCategory,
+  FinancialCategoryType,
+  FinancialTransaction,
+  FinancialTransactionType,
+  FinancialTransfer,
+  PurchaseInvoice,
+  PurchaseInvoiceItem,
+  Supplier,
+  calculateDreStatement,
+  sanitizeCsvCell
 } from '@deck26/contracts';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -228,7 +267,24 @@ export class LocalOperationalStore {
         .run('0004_stage5_hotel_pms', new Date().toISOString());
     }
 
-    // Garante compatibilidade de bancos criados na Etapa 2 com novos status das Etapas 3, 4 e 5
+    const existing0005 = this.db
+      .prepare('SELECT version FROM schema_migrations WHERE version = ?')
+      .get('0005_stage6_delivery_and_finance') as { version?: string } | undefined;
+
+    if (!existing0005) {
+      const migration0005Path = path.resolve(
+        __dirname,
+        '../../../packages/contracts/migrations/local/0005_stage6_delivery_and_finance.sql'
+      );
+      const sql0005 = fs.readFileSync(migration0005Path, 'utf-8');
+      this.applySqlStatementsIdempotently(sql0005);
+
+      this.db
+        .prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)')
+        .run('0005_stage6_delivery_and_finance', new Date().toISOString());
+    }
+
+    // Garante compatibilidade de bancos criados na Etapa 2 com novos status das Etapas 3, 4, 5 e 6
     this.db.exec('PRAGMA ignore_check_constraints = ON;');
   }
 
@@ -414,6 +470,93 @@ export class LocalOperationalStore {
       insertService.run('srv-cama-extra', 'Cama Extra Casal/Solteiro', 'CAMA_EXTRA', 5000, now);
       insertService.run('srv-estacionamento-pesado', 'Pátio Veículo Pesado / Caminhão', 'ESTACIONAMENTO', 3000, now);
     }
+
+    // 10. Semeia Regiões de Entrega / Delivery Zones (Etapa 6)
+    const insertZone = this.db.prepare(`
+      INSERT OR IGNORE INTO delivery_zones (id, name, fee_cents, minimum_order_cents, estimated_minutes, active, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+    for (const zone of DECK26_INITIAL_DELIVERY_ZONES) {
+      insertZone.run(zone.id, zone.name, zone.feeCents, zone.minimumOrderCents, zone.estimatedMinutes, zone.active ? 1 : 0, now);
+    }
+
+    // 11. Semeia Centros de Custo (Etapa 6)
+    const insertCostCenter = this.db.prepare(`
+      INSERT OR IGNORE INTO cost_centers (id, code, name, description, active)
+      VALUES (?, ?, ?, ?, ?)
+    `);
+    for (const cc of DECK26_INITIAL_COST_CENTERS) {
+      insertCostCenter.run(cc.id, cc.code, cc.name, cc.description, cc.active ? 1 : 0);
+    }
+
+    // 12. Semeia Plano de Contas Gerencial / Categorias Financeiras (Etapa 6)
+    const insertFinCat = this.db.prepare(`
+      INSERT OR IGNORE INTO financial_categories (id, code, name, type, parent_id, active)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    for (const cat of DECK26_INITIAL_FINANCIAL_CATEGORIES) {
+      insertFinCat.run(cat.id, cat.code, cat.name, cat.type, cat.parentId ?? null, cat.active ? 1 : 0);
+    }
+
+    // 13. Semeia Contas Financeiras / Tesouraria (Etapa 6)
+    const insertFinAcc = this.db.prepare(`
+      INSERT OR IGNORE INTO financial_accounts (
+        id, name, type, bank_name, account_number, pix_key,
+        current_balance_cents, initial_balance_cents, active, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    for (const acc of DECK26_INITIAL_FINANCIAL_ACCOUNTS) {
+      insertFinAcc.run(
+        acc.id,
+        acc.name,
+        acc.type,
+        acc.bankName ?? null,
+        acc.accountNumber ?? null,
+        acc.pixKey ?? null,
+        acc.currentBalanceCents,
+        acc.initialBalanceCents,
+        acc.active ? 1 : 0,
+        acc.createdAt,
+        acc.updatedAt
+      );
+    }
+
+    // 14. Semeia Entregador Inicial (Etapa 6)
+    const insertCourier = this.db.prepare(`
+      INSERT OR IGNORE INTO delivery_couriers (id, name, phone, vehicle_type, vehicle_plate, fee_per_delivery_cents, status, active, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
+    `);
+    insertCourier.run('cr-motoboy-01', 'Carlos Silva (Moto 01)', '98988112233', 'MOTO', 'SLZ-2601', 500, 'DISPONIVEL', now);
+
+    // 15. Semeia Fornecedores Iniciais (Etapa 6)
+    const insertSupplier = this.db.prepare(`
+      INSERT OR IGNORE INTO suppliers (id, name, trade_name, document, email, phone, contact_person, category, active, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+    `);
+    insertSupplier.run(
+      'sup-distribuidora-milla',
+      'Distribuidora Milla Bebidas Ltda',
+      'Milla Bebidas & Gelo',
+      '12.345.678/0001-90',
+      'pedidos@millabebidas.com.br',
+      '9832221100',
+      'Roberto Milla',
+      'Bebidas e Cervejas',
+      now,
+      now
+    );
+    insertSupplier.run(
+      'sup-hortifruti-central',
+      'Hortifruti & Carnes Santa Inês Ltda',
+      'Frigorífico & Hortifruti Central',
+      '98.765.432/0001-10',
+      'comercial@hortifruticentral.com.br',
+      '9832229988',
+      'Mariana Costa',
+      'Alimentos e Insumos',
+      now,
+      now
+    );
   }
 
   public close(): void {
@@ -2663,6 +2806,7 @@ export class LocalOperationalStore {
           productName: product.name,
           movementType: 'SALE_DEDUCTION',
           quantityDelta: -item.quantity,
+          unitCostCents: product.costPriceCents,
           originChannel: order.channel,
           referenceEntityType: 'ORDER',
           referenceEntityId: order.id,
@@ -7088,4 +7232,2081 @@ export class LocalOperationalStore {
       syncedAt: r.synced_at ? String(r.synced_at) : null
     };
   }
+
+  // ============================================================================
+  // ETAPA 6: MÉTODOS DE DELIVERY PRÓPRIO
+  // ============================================================================
+
+  public listDeliveryZones(activeOnly = true): DeliveryZone[] {
+    const sql = activeOnly
+      ? 'SELECT * FROM delivery_zones WHERE active = 1 ORDER BY fee_cents ASC'
+      : 'SELECT * FROM delivery_zones ORDER BY fee_cents ASC';
+    const rows = this.db.prepare(sql).all() as Record<string, unknown>[];
+    return rows.map((r) => this.mapDeliveryZoneRow(r));
+  }
+
+  public getDeliveryZoneById(id: string): DeliveryZone | null {
+    const row = this.db.prepare('SELECT * FROM delivery_zones WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    return row ? this.mapDeliveryZoneRow(row) : null;
+  }
+
+  public createDeliveryZone(zone: Omit<DeliveryZone, 'id'>): DeliveryZone {
+    const id = `zone-${crypto.randomUUID().slice(0, 8)}`;
+    this.db.prepare(`
+      INSERT INTO delivery_zones (id, name, fee_cents, minimum_order_cents, estimated_minutes, active, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, datetime('now'))
+    `).run(id, zone.name, zone.feeCents, zone.minimumOrderCents, zone.estimatedMinutes, zone.active ? 1 : 0);
+    return this.getDeliveryZoneById(id)!;
+  }
+
+  public updateDeliveryZone(id: string, updates: Partial<DeliveryZone>): DeliveryZone {
+    const existing = this.getDeliveryZoneById(id);
+    if (!existing) throw new Error(`Zona de entrega '${id}' não encontrada.`);
+    const name = updates.name ?? existing.name;
+    const feeCents = updates.feeCents ?? existing.feeCents;
+    const minimumOrderCents = updates.minimumOrderCents ?? existing.minimumOrderCents;
+    const estimatedMinutes = updates.estimatedMinutes ?? existing.estimatedMinutes;
+    const active = updates.active !== undefined ? (updates.active ? 1 : 0) : (existing.active ? 1 : 0);
+    this.db.prepare(`
+      UPDATE delivery_zones
+      SET name = ?, fee_cents = ?, minimum_order_cents = ?, estimated_minutes = ?, active = ?
+      WHERE id = ?
+    `).run(name, feeCents, minimumOrderCents, estimatedMinutes, active, id);
+    return this.getDeliveryZoneById(id)!;
+  }
+
+  public listDeliveryCouriers(status?: DeliveryCourierStatus): DeliveryCourier[] {
+    let sql = 'SELECT * FROM delivery_couriers WHERE active = 1';
+    const params: (string | number | bigint | null)[] = [];
+    if (status) {
+      sql += ' AND status = ?';
+      params.push(status);
+    }
+    sql += ' ORDER BY name ASC';
+    const rows = this.db.prepare(sql).all(...params) as Record<string, unknown>[];
+    return rows.map((r) => this.mapDeliveryCourierRow(r));
+  }
+
+  public getDeliveryCourierById(id: string): DeliveryCourier | null {
+    const row = this.db.prepare('SELECT * FROM delivery_couriers WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    return row ? this.mapDeliveryCourierRow(row) : null;
+  }
+
+  public createDeliveryCourier(courier: Omit<DeliveryCourier, 'id' | 'active'> & { active?: boolean }): DeliveryCourier {
+    const id = `cr-${crypto.randomUUID().slice(0, 8)}`;
+    this.db.prepare(`
+      INSERT INTO delivery_couriers (id, name, phone, vehicle_type, vehicle_plate, fee_per_delivery_cents, status, active, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))
+    `).run(
+      id,
+      courier.name,
+      courier.phone,
+      courier.vehicleType,
+      courier.vehiclePlate ?? null,
+      courier.feePerDeliveryCents,
+      courier.status,
+      courier.active !== false ? 1 : 0
+    );
+    return this.getDeliveryCourierById(id)!;
+  }
+
+  public updateDeliveryCourierStatus(id: string, status: DeliveryCourierStatus): DeliveryCourier {
+    const existing = this.getDeliveryCourierById(id);
+    if (!existing) throw new Error(`Entregador '${id}' não encontrado.`);
+    this.db.prepare('UPDATE delivery_couriers SET status = ? WHERE id = ?').run(status, id);
+    return this.getDeliveryCourierById(id)!;
+  }
+
+  public updateDeliveryCourier(id: string, updates: Partial<DeliveryCourier>): DeliveryCourier {
+    const existing = this.getDeliveryCourierById(id);
+    if (!existing) throw new Error(`Entregador '${id}' não encontrado.`);
+    const name = updates.name ?? existing.name;
+    const phone = updates.phone ?? existing.phone;
+    const vehicleType = updates.vehicleType ?? existing.vehicleType;
+    const vehiclePlate = updates.vehiclePlate !== undefined ? (updates.vehiclePlate ?? null) : (existing.vehiclePlate ?? null);
+    const feePerDeliveryCents = updates.feePerDeliveryCents ?? existing.feePerDeliveryCents;
+    const status = updates.status ?? existing.status;
+    const active = updates.active !== undefined ? (updates.active ? 1 : 0) : (existing.active ? 1 : 0);
+    this.db.prepare(`
+      UPDATE delivery_couriers
+      SET name = ?, phone = ?, vehicle_type = ?, vehicle_plate = ?, fee_per_delivery_cents = ?, status = ?, active = ?
+      WHERE id = ?
+    `).run(name, phone, vehicleType, vehiclePlate, feePerDeliveryCents, status, active, id);
+    return this.getDeliveryCourierById(id)!;
+  }
+
+  public listDeliveryCustomers(search?: string): DeliveryCustomer[] {
+    let sql = 'SELECT * FROM delivery_customers';
+    const params: (string | number | bigint | null)[] = [];
+    if (search && search.trim()) {
+      sql += ' WHERE name LIKE ? OR phone LIKE ? OR document LIKE ?';
+      const term = `%${search.trim()}%`;
+      params.push(term, term, term);
+    }
+    sql += ' ORDER BY name ASC LIMIT 100';
+    const rows = this.db.prepare(sql).all(...params) as Record<string, unknown>[];
+    return rows.map((r) => {
+      const addresses = this.listDeliveryAddresses(String(r.id));
+      return this.mapDeliveryCustomerRow(r, addresses);
+    });
+  }
+
+  public getDeliveryCustomerById(id: string): DeliveryCustomer | null {
+    const row = this.db.prepare('SELECT * FROM delivery_customers WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    const addresses = this.listDeliveryAddresses(id);
+    return this.mapDeliveryCustomerRow(row, addresses);
+  }
+
+  public findDeliveryCustomerByPhone(phone: string): DeliveryCustomer | null {
+    const cleanPhone = phone.replace(/\D/g, '');
+    const row = this.db.prepare(`
+      SELECT * FROM delivery_customers
+      WHERE replace(replace(replace(replace(phone, ' ', ''), '-', ''), '(', ''), ')', '') LIKE ?
+      LIMIT 1
+    `).get(`%${cleanPhone}%`) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    const addresses = this.listDeliveryAddresses(String(row.id));
+    return this.mapDeliveryCustomerRow(row, addresses);
+  }
+
+  public createOrUpdateDeliveryCustomer(data: {
+    name: string;
+    phone: string;
+    document?: string | null;
+    email?: string | null;
+    notes?: string | null;
+  }): DeliveryCustomer {
+    const now = new Date().toISOString();
+    const existing = this.findDeliveryCustomerByPhone(data.phone);
+    if (existing) {
+      this.db.prepare(`
+        UPDATE delivery_customers
+        SET name = ?, document = COALESCE(?, document), email = COALESCE(?, email), notes = COALESCE(?, notes), updated_at = ?
+        WHERE id = ?
+      `).run(data.name, data.document ?? null, data.email ?? null, data.notes ?? null, now, existing.id);
+      return this.getDeliveryCustomerById(existing.id)!;
+    }
+    const id = `cust-${crypto.randomUUID().slice(0, 8)}`;
+    this.db.prepare(`
+      INSERT INTO delivery_customers (id, name, phone, document, email, notes, total_orders, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)
+    `).run(id, data.name, data.phone, data.document ?? null, data.email ?? null, data.notes ?? null, now, now);
+    return this.getDeliveryCustomerById(id)!;
+  }
+
+  public listDeliveryAddresses(customerId: string): DeliveryAddress[] {
+    const rows = this.db.prepare('SELECT * FROM delivery_addresses WHERE customer_id = ? ORDER BY is_default DESC, id ASC').all(customerId) as Record<string, unknown>[];
+    return rows.map((r) => this.mapDeliveryAddressRow(r));
+  }
+
+  public addDeliveryAddress(
+    customerId: string,
+    address: Omit<DeliveryAddress, 'id' | 'customerId' | 'city'> & { city?: string }
+  ): DeliveryAddress {
+    const id = `addr-${crypto.randomUUID().slice(0, 8)}`;
+    if (address.isDefault) {
+      this.db.prepare('UPDATE delivery_addresses SET is_default = 0 WHERE customer_id = ?').run(customerId);
+    }
+    this.db.prepare(`
+      INSERT INTO delivery_addresses (id, customer_id, street, number, complement, neighborhood, city, reference, delivery_zone_id, is_default)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      customerId,
+      address.street,
+      address.number,
+      address.complement ?? null,
+      address.neighborhood,
+      address.city || 'Santa Inês',
+      address.reference ?? null,
+      address.deliveryZoneId ?? null,
+      address.isDefault ? 1 : 0
+    );
+    const row = this.db.prepare('SELECT * FROM delivery_addresses WHERE id = ?').get(id) as Record<string, unknown>;
+    return this.mapDeliveryAddressRow(row);
+  }
+
+  public listDeliveryOrders(filter?: {
+    status?: DeliveryOrderStatus;
+    courierId?: string;
+    customerId?: string;
+    date?: string;
+  }): DeliveryOrder[] {
+    let sql = 'SELECT * FROM delivery_orders WHERE 1=1';
+    const params: (string | number | bigint | null)[] = [];
+    if (filter?.status) {
+      sql += ' AND status = ?';
+      params.push(filter.status);
+    }
+    if (filter?.courierId) {
+      sql += ' AND courier_id = ?';
+      params.push(filter.courierId);
+    }
+    if (filter?.customerId) {
+      sql += ' AND customer_id = ?';
+      params.push(filter.customerId);
+    }
+    if (filter?.date) {
+      sql += ' AND date(created_at) = ?';
+      params.push(filter.date.slice(0, 10));
+    }
+    sql += ' ORDER BY created_at DESC';
+    const rows = this.db.prepare(sql).all(...params) as Record<string, unknown>[];
+    return rows.map((r) => this.mapDeliveryOrderRow(r));
+  }
+
+  public getDeliveryOrderById(id: string): DeliveryOrder | null {
+    const row = this.db.prepare('SELECT * FROM delivery_orders WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    return row ? this.mapDeliveryOrderRow(row) : null;
+  }
+
+  public createDeliveryOrder(input: {
+    customerId?: string;
+    customerName: string;
+    customerPhone: string;
+    customerDocument?: string;
+    customerEmail?: string;
+    deliveryType: DeliveryType;
+    origin: DeliveryOrigin;
+    deliveryAddress?: Omit<DeliveryAddress, 'id' | 'customerId'>;
+    deliveryZoneId?: string;
+    items: Array<{
+      productId: string;
+      quantity: number;
+      notes?: string;
+      modifiers?: Array<{
+        groupId: string;
+        groupName: string;
+        optionId: string;
+        optionName: string;
+        priceDeltaCents?: number;
+      }>;
+    }>;
+    paymentMethodDeclared: PaymentMethod;
+    changeForCents?: number | null;
+    notes?: string;
+    waiterId?: string;
+    courierId?: string;
+  }): { deliveryOrder: DeliveryOrder; baseOrder: Order } {
+    const now = new Date().toISOString();
+
+    let customer: DeliveryCustomer;
+    if (input.customerId) {
+      const existing = this.getDeliveryCustomerById(input.customerId);
+      if (!existing) throw new Error(`Cliente '${input.customerId}' não encontrado.`);
+      customer = existing;
+    } else {
+      customer = this.createOrUpdateDeliveryCustomer({
+        name: input.customerName,
+        phone: input.customerPhone,
+        document: input.customerDocument,
+        email: input.customerEmail
+      });
+    }
+
+    let resolvedAddress: DeliveryAddress | null = null;
+    let resolvedZoneId = input.deliveryZoneId ?? null;
+    let deliveryFeeCents = 0;
+
+    if (input.deliveryType === 'DELIVERY') {
+      if (input.deliveryAddress) {
+        resolvedAddress = this.addDeliveryAddress(customer.id, input.deliveryAddress);
+        if (!resolvedZoneId && resolvedAddress.deliveryZoneId) {
+          resolvedZoneId = resolvedAddress.deliveryZoneId;
+        }
+      } else if (customer.addresses.length > 0) {
+        resolvedAddress = customer.addresses[0]!;
+        if (!resolvedZoneId && resolvedAddress.deliveryZoneId) {
+          resolvedZoneId = resolvedAddress.deliveryZoneId;
+        }
+      }
+      if (resolvedZoneId) {
+        const zone = this.getDeliveryZoneById(resolvedZoneId);
+        if (zone) deliveryFeeCents = zone.feeCents;
+      } else {
+        deliveryFeeCents = 500;
+      }
+    } else {
+      deliveryFeeCents = 0;
+    }
+
+    const idempotencyKey = `d26-deliv-${crypto.randomUUID()}`;
+    const salesChannel: SalesChannel = input.deliveryType === 'DELIVERY' ? 'DELIVERY' : 'PICKUP';
+
+    const { order: baseOrder } = this.createOrder({
+      idempotencyKey,
+      channel: salesChannel,
+      originNode: 'WINDOWS_PDV',
+      items: input.items,
+      customerNotes: input.notes,
+      waiterUserId: input.waiterId ?? 'usr-cashier-01'
+    });
+
+    const itemsSubtotalCents = baseOrder.totalOrderCents;
+    const discountCents = 0;
+    const totalCents = itemsSubtotalCents + deliveryFeeCents - discountCents;
+
+    const maxOrderRow = this.db.prepare('SELECT MAX(order_number) as max_num FROM delivery_orders').get() as { max_num?: number };
+    const nextOrderNumber = (maxOrderRow?.max_num ?? 0) + 1;
+
+    let courierName: string | null = null;
+    let courierFeeCents = 0;
+    if (input.courierId) {
+      const courier = this.getDeliveryCourierById(input.courierId);
+      if (courier) {
+        courierName = courier.name;
+        courierFeeCents = courier.feePerDeliveryCents;
+      }
+    }
+
+    const deliveryOrderId = `deliv-${crypto.randomUUID().slice(0, 8)}`;
+    this.db.prepare(`
+      INSERT INTO delivery_orders (
+        id, order_number, order_id, customer_id, customer_name, customer_phone,
+        delivery_type, origin, status, delivery_address_json, delivery_zone_id,
+        delivery_fee_cents, items_subtotal_cents, discount_cents, total_cents,
+        payment_method_declared, payment_status, change_for_cents,
+        courier_id, courier_name, courier_fee_cents,
+        notes, created_at, updated_at
+      ) VALUES (
+        ?, ?, ?, ?, ?, ?,
+        ?, ?, 'NOVO', ?, ?,
+        ?, ?, ?, ?,
+        ?, 'PENDING', ?,
+        ?, ?, ?,
+        ?, ?, ?
+      )
+    `).run(
+      deliveryOrderId,
+      nextOrderNumber,
+      baseOrder.id,
+      customer.id,
+      customer.name,
+      customer.phone,
+      input.deliveryType,
+      input.origin,
+      resolvedAddress ? JSON.stringify(resolvedAddress) : null,
+      resolvedZoneId,
+      deliveryFeeCents,
+      itemsSubtotalCents,
+      discountCents,
+      totalCents,
+      input.paymentMethodDeclared,
+      input.changeForCents ?? null,
+      input.courierId ?? null,
+      courierName,
+      courierFeeCents,
+      input.notes ?? null,
+      now,
+      now
+    );
+
+    this.db.prepare('UPDATE delivery_customers SET total_orders = total_orders + 1, updated_at = ? WHERE id = ?').run(now, customer.id);
+
+    this.createAccountReceivable({
+      description: `Delivery #${nextOrderNumber} — ${customer.name}`,
+      origin: 'DELIVERY',
+      originReferenceId: deliveryOrderId,
+      costCenterId: 'DELIV',
+      categoryId: 'cat-rec-deliv',
+      totalAmountCents: totalCents,
+      accrualDate: now.slice(0, 10),
+      dueDate: now.slice(0, 10),
+      status: 'PENDING',
+      customerName: customer.name,
+      notes: `Pedido Delivery #${nextOrderNumber} (${input.origin})`
+    });
+
+    const deliveryOrder = this.getDeliveryOrderById(deliveryOrderId)!;
+    return { deliveryOrder, baseOrder };
+  }
+
+  public updateDeliveryOrderStatus(
+    deliveryOrderId: string,
+    newStatus: DeliveryOrderStatus,
+    actorUserId: string,
+    reason?: string
+  ): DeliveryOrder {
+    const order = this.getDeliveryOrderById(deliveryOrderId);
+    if (!order) throw new Error(`Pedido delivery '${deliveryOrderId}' não encontrado.`);
+
+    const now = new Date().toISOString();
+    let dispatchedAt = order.dispatchedAt;
+    let deliveredAt = order.deliveredAt;
+    let canceledAt = order.canceledAt;
+    let cancelReason = order.cancelReason;
+    let paymentStatus = order.paymentStatus;
+
+    if (newStatus === 'SAIU_PARA_ENTREGA' && !dispatchedAt) {
+      dispatchedAt = now;
+    }
+    if (newStatus === 'ENTREGUE') {
+      if (!deliveredAt) deliveredAt = now;
+      paymentStatus = 'PAID';
+      const receivable = this.db.prepare(`
+        SELECT id FROM accounts_receivable
+        WHERE origin = 'DELIVERY' AND origin_reference_id = ? AND status != 'PAID'
+      `).get(deliveryOrderId) as { id?: string } | undefined;
+      if (receivable) {
+        this.payAccountReceivable(receivable.id!, {
+          amountCents: order.totalCents,
+          financialAccountId: 'acc-caixa-geral',
+          paymentMethod: order.paymentMethodDeclared,
+          actorUserId,
+          settlementDate: now.slice(0, 10),
+          notes: `Baixa automática entrega concluída pedido #${order.orderNumber}`
+        });
+      }
+      if (order.courierId) {
+        this.updateDeliveryCourierStatus(order.courierId, 'DISPONIVEL');
+      }
+    }
+    if (newStatus === 'CANCELADO') {
+      canceledAt = now;
+      cancelReason = reason || 'Cancelado pelo operador';
+      this.db.prepare(`
+        UPDATE accounts_receivable SET status = 'CANCELED', updated_at = ?
+        WHERE origin = 'DELIVERY' AND origin_reference_id = ?
+      `).run(now, deliveryOrderId);
+      try {
+        this.advanceOrderStatus({
+          orderId: order.orderId,
+          newStatus: 'CANCELLED',
+          originNode: 'WINDOWS_PDV',
+          reverseStockOnCancel: true,
+          cancelReason,
+          actorUserId
+        });
+      } catch {
+        // Ignora se o pedido base já estava cancelado
+      }
+      if (order.courierId) {
+        this.updateDeliveryCourierStatus(order.courierId, 'DISPONIVEL');
+      }
+    }
+
+    this.db.prepare(`
+      UPDATE delivery_orders
+      SET status = ?, dispatched_at = ?, delivered_at = ?, canceled_at = ?, cancel_reason = ?, payment_status = ?, updated_at = ?
+      WHERE id = ?
+    `).run(
+      newStatus,
+      dispatchedAt ?? null,
+      deliveredAt ?? null,
+      canceledAt ?? null,
+      cancelReason ?? null,
+      paymentStatus,
+      now,
+      deliveryOrderId
+    );
+
+    return this.getDeliveryOrderById(deliveryOrderId)!;
+  }
+
+  public dispatchDeliveryOrder(deliveryOrderId: string, courierId: string, actorUserId: string): DeliveryOrder {
+    const courier = this.getDeliveryCourierById(courierId);
+    if (!courier) throw new Error(`Entregador '${courierId}' não encontrado.`);
+    const now = new Date().toISOString();
+    this.db.prepare(`
+      UPDATE delivery_orders
+      SET courier_id = ?, courier_name = ?, courier_fee_cents = ?, status = 'SAIU_PARA_ENTREGA', dispatched_at = ?, updated_at = ?
+      WHERE id = ?
+    `).run(courier.id, courier.name, courier.feePerDeliveryCents, now, now, deliveryOrderId);
+    this.updateDeliveryCourierStatus(courier.id, 'EM_ENTREGA');
+    return this.getDeliveryOrderById(deliveryOrderId)!;
+  }
+
+  public settleCourierDeliveries(params: {
+    courierId: string;
+    financialAccountId: string;
+    deliveryOrderIds: string[];
+    actorUserId: string;
+    shiftId?: string;
+    notes?: string;
+  }): DeliverySettlement {
+    const courier = this.getDeliveryCourierById(params.courierId);
+    if (!courier) throw new Error(`Entregador '${params.courierId}' não encontrado.`);
+    const account = this.getFinancialAccountById(params.financialAccountId);
+    if (!account) throw new Error(`Conta financeira '${params.financialAccountId}' não encontrada.`);
+
+    const orders: DeliveryOrder[] = [];
+    let totalCashCollectedCents = 0;
+    let totalCourierFeesCents = 0;
+
+    for (const orderId of params.deliveryOrderIds) {
+      const o = this.getDeliveryOrderById(orderId);
+      if (!o) continue;
+      orders.push(o);
+      if (o.paymentMethodDeclared === 'CASH') {
+        totalCashCollectedCents += o.totalCents;
+      }
+      totalCourierFeesCents += o.courierFeeCents;
+    }
+
+    const netAmountSettledCents = totalCashCollectedCents - totalCourierFeesCents;
+    const settlementId = `stl-${crypto.randomUUID().slice(0, 8)}`;
+    const now = new Date().toISOString();
+
+    this.db.prepare(`
+      INSERT INTO delivery_settlements (
+        id, courier_id, courier_name, shift_id, financial_account_id,
+        delivery_order_ids_json, total_deliveries, total_cash_collected_cents,
+        total_courier_fees_cents, net_amount_settled_cents, status,
+        settled_at, settled_by_staff_id, notes
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'SETTLED', ?, ?, ?)
+    `).run(
+      settlementId,
+      courier.id,
+      courier.name,
+      params.shiftId ?? null,
+      account.id,
+      JSON.stringify(params.deliveryOrderIds),
+      orders.length,
+      totalCashCollectedCents,
+      totalCourierFeesCents,
+      netAmountSettledCents,
+      now,
+      params.actorUserId,
+      params.notes ?? null
+    );
+
+    for (const orderId of params.deliveryOrderIds) {
+      this.db.prepare('UPDATE delivery_orders SET settlement_id = ?, updated_at = ? WHERE id = ?').run(settlementId, now, orderId);
+    }
+
+    if (netAmountSettledCents !== 0) {
+      const txId = `tx-${crypto.randomUUID().slice(0, 8)}`;
+      const txType: FinancialTransactionType = netAmountSettledCents > 0 ? 'INCOME' : 'EXPENSE';
+      const amountAbs = Math.abs(netAmountSettledCents);
+
+      this.db.prepare(`
+        INSERT INTO financial_transactions (
+          id, financial_account_id, type, category_id, cost_center_id,
+          amount_cents, payment_method, reference_type, reference_id,
+          description, accrual_date, settlement_date, registered_by_staff_id, created_at
+        ) VALUES (?, ?, ?, 'cat-rec-deliv', 'DELIV', ?, 'CASH', 'DELIVERY_SETTLEMENT', ?, ?, ?, ?, ?, ?)
+      `).run(
+        txId,
+        account.id,
+        txType,
+        amountAbs,
+        settlementId,
+        `Prestação de contas entregador ${courier.name} (${orders.length} entregas)`,
+        now.slice(0, 10),
+        now.slice(0, 10),
+        params.actorUserId,
+        now
+      );
+
+      this.db.prepare(`
+        UPDATE financial_accounts
+        SET current_balance_cents = current_balance_cents + ?, updated_at = ?
+        WHERE id = ?
+      `).run(netAmountSettledCents, now, account.id);
+    }
+
+    this.updateDeliveryCourierStatus(courier.id, 'DISPONIVEL');
+    const settlementRow = this.db.prepare('SELECT * FROM delivery_settlements WHERE id = ?').get(settlementId) as Record<string, unknown>;
+    return this.mapDeliverySettlementRow(settlementRow);
+  }
+
+  public listDeliverySettlements(courierId?: string): DeliverySettlement[] {
+    let sql = 'SELECT * FROM delivery_settlements';
+    const params: (string | number | bigint | null)[] = [];
+    if (courierId) {
+      sql += ' WHERE courier_id = ?';
+      params.push(courierId);
+    }
+    sql += ' ORDER BY settled_at DESC';
+    const rows = this.db.prepare(sql).all(...params) as Record<string, unknown>[];
+    return rows.map((r) => this.mapDeliverySettlementRow(r));
+  }
+
+  // ============================================================================
+  // ETAPA 6: MÉTODOS DE GESTÃO FINANCEIRA, CONTAS E TESOURARIA
+  // ============================================================================
+
+  public listCostCenters(): CostCenter[] {
+    const rows = this.db.prepare('SELECT * FROM cost_centers WHERE active = 1 ORDER BY code ASC').all() as Record<string, unknown>[];
+    return rows.map((r) => this.mapCostCenterRow(r));
+  }
+
+  public listFinancialCategories(): FinancialCategory[] {
+    const rows = this.db.prepare('SELECT * FROM financial_categories WHERE active = 1 ORDER BY code ASC').all() as Record<string, unknown>[];
+    return rows.map((r) => this.mapFinancialCategoryRow(r));
+  }
+
+  public listFinancialAccounts(): FinancialAccount[] {
+    const rows = this.db.prepare('SELECT * FROM financial_accounts WHERE active = 1 ORDER BY name ASC').all() as Record<string, unknown>[];
+    return rows.map((r) => this.mapFinancialAccountRow(r));
+  }
+
+  public getFinancialAccountById(id: string): FinancialAccount | null {
+    const row = this.db.prepare('SELECT * FROM financial_accounts WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    return row ? this.mapFinancialAccountRow(row) : null;
+  }
+
+  public createFinancialAccount(
+    account: Omit<FinancialAccount, 'id' | 'createdAt' | 'updatedAt' | 'currentBalanceCents'> & {
+      currentBalanceCents?: number;
+      active?: boolean;
+    }
+  ): FinancialAccount {
+    const id = `acc-${crypto.randomUUID().slice(0, 8)}`;
+    const now = new Date().toISOString();
+    this.db.prepare(`
+      INSERT INTO financial_accounts (
+        id, name, type, bank_name, account_number, pix_key,
+        current_balance_cents, initial_balance_cents, active, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      account.name,
+      account.type,
+      account.bankName ?? null,
+      account.accountNumber ?? null,
+      account.pixKey ?? null,
+      account.currentBalanceCents ?? account.initialBalanceCents,
+      account.initialBalanceCents,
+      account.active !== false ? 1 : 0,
+      now,
+      now
+    );
+    return this.getFinancialAccountById(id)!;
+  }
+
+  public updateFinancialAccount(id: string, updates: Partial<FinancialAccount>): FinancialAccount {
+    const existing = this.getFinancialAccountById(id);
+    if (!existing) throw new Error(`Conta financeira '${id}' não encontrada.`);
+    const name = updates.name ?? existing.name;
+    const type = updates.type ?? existing.type;
+    const bankName = updates.bankName !== undefined ? (updates.bankName ?? null) : (existing.bankName ?? null);
+    const accountNumber = updates.accountNumber !== undefined ? (updates.accountNumber ?? null) : (existing.accountNumber ?? null);
+    const pixKey = updates.pixKey !== undefined ? (updates.pixKey ?? null) : (existing.pixKey ?? null);
+    const active = updates.active !== undefined ? (updates.active ? 1 : 0) : (existing.active ? 1 : 0);
+    const now = new Date().toISOString();
+
+    this.db.prepare(`
+      UPDATE financial_accounts
+      SET name = ?, type = ?, bank_name = ?, account_number = ?, pix_key = ?, active = ?, updated_at = ?
+      WHERE id = ?
+    `).run(name, type, bankName, accountNumber, pixKey, active, now, id);
+    return this.getFinancialAccountById(id)!;
+  }
+
+  public listSuppliers(): Supplier[] {
+    const rows = this.db.prepare('SELECT * FROM suppliers WHERE active = 1 ORDER BY name ASC').all() as Record<string, unknown>[];
+    return rows.map((r) => this.mapSupplierRow(r));
+  }
+
+  public getSupplierById(id: string): Supplier | null {
+    const row = this.db.prepare('SELECT * FROM suppliers WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    return row ? this.mapSupplierRow(row) : null;
+  }
+
+  public createSupplier(supplier: Omit<Supplier, 'id' | 'createdAt' | 'updatedAt'>): Supplier {
+    const id = `sup-${crypto.randomUUID().slice(0, 8)}`;
+    const now = new Date().toISOString();
+    this.db.prepare(`
+      INSERT INTO suppliers (id, name, trade_name, document, email, phone, contact_person, category, active, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      supplier.name,
+      supplier.tradeName ?? null,
+      supplier.document ?? null,
+      supplier.email ?? null,
+      supplier.phone ?? null,
+      supplier.contactPerson ?? null,
+      supplier.category ?? null,
+      supplier.active ? 1 : 0,
+      now,
+      now
+    );
+    return this.getSupplierById(id)!;
+  }
+
+  public updateSupplier(id: string, updates: Partial<Supplier>): Supplier {
+    const existing = this.getSupplierById(id);
+    if (!existing) throw new Error(`Fornecedor '${id}' não encontrado.`);
+    const name = updates.name ?? existing.name;
+    const tradeName = updates.tradeName !== undefined ? (updates.tradeName ?? null) : (existing.tradeName ?? null);
+    const document = updates.document !== undefined ? (updates.document ?? null) : (existing.document ?? null);
+    const email = updates.email !== undefined ? (updates.email ?? null) : (existing.email ?? null);
+    const phone = updates.phone !== undefined ? (updates.phone ?? null) : (existing.phone ?? null);
+    const contactPerson = updates.contactPerson !== undefined ? (updates.contactPerson ?? null) : (existing.contactPerson ?? null);
+    const category = updates.category !== undefined ? (updates.category ?? null) : (existing.category ?? null);
+    const active = updates.active !== undefined ? (updates.active ? 1 : 0) : (existing.active ? 1 : 0);
+    const now = new Date().toISOString();
+
+    this.db.prepare(`
+      UPDATE suppliers
+      SET name = ?, trade_name = ?, document = ?, email = ?, phone = ?, contact_person = ?, category = ?, active = ?, updated_at = ?
+      WHERE id = ?
+    `).run(name, tradeName, document, email, phone, contactPerson, category, active, now, id);
+    return this.getSupplierById(id)!;
+  }
+
+  public listAccountsReceivable(filters?: {
+    status?: AccountsReceivableStatus;
+    costCenterId?: string;
+    startDate?: string;
+    endDate?: string;
+  }): AccountsReceivable[] {
+    let sql = 'SELECT * FROM accounts_receivable WHERE 1=1';
+    const params: (string | number | bigint | null)[] = [];
+    if (filters?.status) {
+      sql += ' AND status = ?';
+      params.push(filters.status);
+    }
+    if (filters?.costCenterId) {
+      sql += ' AND cost_center_id = ?';
+      params.push(filters.costCenterId);
+    }
+    if (filters?.startDate) {
+      sql += ' AND date(due_date) >= ?';
+      params.push(filters.startDate.slice(0, 10));
+    }
+    if (filters?.endDate) {
+      sql += ' AND date(due_date) <= ?';
+      params.push(filters.endDate.slice(0, 10));
+    }
+    sql += ' ORDER BY due_date ASC';
+    const rows = this.db.prepare(sql).all(...params) as Record<string, unknown>[];
+    return rows.map((r) => this.mapAccountsReceivableRow(r));
+  }
+
+  public getAccountReceivableById(id: string): AccountsReceivable | null {
+    const row = this.db.prepare('SELECT * FROM accounts_receivable WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    return row ? this.mapAccountsReceivableRow(row) : null;
+  }
+
+  public createAccountReceivable(data: Omit<AccountsReceivable, 'id' | 'paidAmountCents' | 'remainingAmountCents' | 'createdAt' | 'updatedAt'>): AccountsReceivable {
+    const id = `ar-${crypto.randomUUID().slice(0, 8)}`;
+    const now = new Date().toISOString();
+    const paidAmountCents = 0;
+    const remainingAmountCents = data.totalAmountCents;
+    this.db.prepare(`
+      INSERT INTO accounts_receivable (
+        id, description, origin, origin_reference_id, cost_center_id, category_id,
+        total_amount_cents, paid_amount_cents, remaining_amount_cents, accrual_date, due_date,
+        status, customer_name, notes, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      data.description,
+      data.origin,
+      data.originReferenceId ?? null,
+      data.costCenterId,
+      data.categoryId,
+      data.totalAmountCents,
+      paidAmountCents,
+      remainingAmountCents,
+      data.accrualDate,
+      data.dueDate,
+      data.status || 'PENDING',
+      data.customerName ?? null,
+      data.notes ?? null,
+      now,
+      now
+    );
+    return this.getAccountReceivableById(id)!;
+  }
+
+  public payAccountReceivable(
+    id: string,
+    params: {
+      amountCents: number;
+      financialAccountId: string;
+      paymentMethod: PaymentMethod;
+      actorUserId: string;
+      settlementDate?: string;
+      notes?: string;
+    }
+  ): { accountReceivable: AccountsReceivable; transaction: FinancialTransaction } {
+    const ar = this.getAccountReceivableById(id);
+    if (!ar) throw new Error(`Conta a receber '${id}' não encontrada.`);
+    if (ar.status === 'PAID') throw new Error(`Conta a receber '${id}' já está totalmente quitada.`);
+    if (params.amountCents <= 0) throw new Error('Valor de pagamento deve ser positivo.');
+
+    const account = this.getFinancialAccountById(params.financialAccountId);
+    if (!account) throw new Error(`Conta financeira '${params.financialAccountId}' não encontrada.`);
+
+    const newPaid = ar.paidAmountCents + params.amountCents;
+    const newRemaining = Math.max(0, ar.totalAmountCents - newPaid);
+    const newStatus: AccountsReceivableStatus = newRemaining === 0 ? 'PAID' : 'PARTIALLY_PAID';
+    const now = new Date().toISOString();
+    const settleDate = params.settlementDate || now.slice(0, 10);
+
+    this.db.prepare(`
+      UPDATE accounts_receivable
+      SET paid_amount_cents = ?, remaining_amount_cents = ?, status = ?, updated_at = ?
+      WHERE id = ?
+    `).run(newPaid, newRemaining, newStatus, now, id);
+
+    const txId = `tx-${crypto.randomUUID().slice(0, 8)}`;
+    this.db.prepare(`
+      INSERT INTO financial_transactions (
+        id, financial_account_id, type, category_id, cost_center_id,
+        amount_cents, payment_method, reference_type, reference_id,
+        description, accrual_date, settlement_date, registered_by_staff_id, created_at
+      ) VALUES (?, ?, 'INCOME', ?, ?, ?, ?, 'ACCOUNTS_RECEIVABLE', ?, ?, ?, ?, ?, ?)
+    `).run(
+      txId,
+      account.id,
+      ar.categoryId,
+      ar.costCenterId,
+      params.amountCents,
+      params.paymentMethod,
+      id,
+      params.notes || `Recebimento: ${ar.description}`,
+      ar.accrualDate,
+      settleDate,
+      params.actorUserId,
+      now
+    );
+
+    this.db.prepare(`
+      UPDATE financial_accounts
+      SET current_balance_cents = current_balance_cents + ?, updated_at = ?
+      WHERE id = ?
+    `).run(params.amountCents, now, account.id);
+
+    const updatedAr = this.getAccountReceivableById(id)!;
+    const txRow = this.db.prepare('SELECT * FROM financial_transactions WHERE id = ?').get(txId) as Record<string, unknown>;
+    return { accountReceivable: updatedAr, transaction: this.mapFinancialTransactionRow(txRow) };
+  }
+
+  public listAccountsPayable(filters?: {
+    status?: AccountsPayableStatus;
+    costCenterId?: string;
+    supplierId?: string;
+    startDate?: string;
+    endDate?: string;
+  }): AccountsPayable[] {
+    let sql = 'SELECT * FROM accounts_payable WHERE 1=1';
+    const params: (string | number | bigint | null)[] = [];
+    if (filters?.status) {
+      sql += ' AND status = ?';
+      params.push(filters.status);
+    }
+    if (filters?.costCenterId) {
+      sql += ' AND cost_center_id = ?';
+      params.push(filters.costCenterId);
+    }
+    if (filters?.supplierId) {
+      sql += ' AND supplier_id = ?';
+      params.push(filters.supplierId);
+    }
+    if (filters?.startDate) {
+      sql += ' AND date(due_date) >= ?';
+      params.push(filters.startDate.slice(0, 10));
+    }
+    if (filters?.endDate) {
+      sql += ' AND date(due_date) <= ?';
+      params.push(filters.endDate.slice(0, 10));
+    }
+    sql += ' ORDER BY due_date ASC';
+    const rows = this.db.prepare(sql).all(...params) as Record<string, unknown>[];
+    return rows.map((r) => this.mapAccountsPayableRow(r));
+  }
+
+  public getAccountPayableById(id: string): AccountsPayable | null {
+    const row = this.db.prepare('SELECT * FROM accounts_payable WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    return row ? this.mapAccountsPayableRow(row) : null;
+  }
+
+  public createAccountPayable(data: Omit<AccountsPayable, 'id' | 'paidAmountCents' | 'remainingAmountCents' | 'createdAt' | 'updatedAt'>): AccountsPayable {
+    const id = `ap-${crypto.randomUUID().slice(0, 8)}`;
+    const now = new Date().toISOString();
+    const paidAmountCents = 0;
+    const remainingAmountCents = data.totalAmountCents;
+    this.db.prepare(`
+      INSERT INTO accounts_payable (
+        id, description, origin, origin_reference_id, supplier_id, supplier_name,
+        cost_center_id, category_id, total_amount_cents, paid_amount_cents, remaining_amount_cents,
+        accrual_date, due_date, status, invoice_number, barcode, notes, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      data.description,
+      data.origin,
+      data.originReferenceId ?? null,
+      data.supplierId ?? null,
+      data.supplierName ?? null,
+      data.costCenterId,
+      data.categoryId,
+      data.totalAmountCents,
+      paidAmountCents,
+      remainingAmountCents,
+      data.accrualDate,
+      data.dueDate,
+      data.status || 'PENDING',
+      data.invoiceNumber ?? null,
+      data.barcode ?? null,
+      data.notes ?? null,
+      now,
+      now
+    );
+    return this.getAccountPayableById(id)!;
+  }
+
+  public payAccountPayable(
+    id: string,
+    params: {
+      amountCents: number;
+      financialAccountId: string;
+      paymentMethod: PaymentMethod;
+      actorUserId: string;
+      settlementDate?: string;
+      notes?: string;
+    }
+  ): { accountPayable: AccountsPayable; transaction: FinancialTransaction } {
+    const ap = this.getAccountPayableById(id);
+    if (!ap) throw new Error(`Conta a pagar '${id}' não encontrada.`);
+    if (ap.status === 'PAID') throw new Error(`Conta a pagar '${id}' já está totalmente quitada.`);
+    if (params.amountCents <= 0) throw new Error('Valor de pagamento deve ser positivo.');
+
+    const account = this.getFinancialAccountById(params.financialAccountId);
+    if (!account) throw new Error(`Conta financeira '${params.financialAccountId}' não encontrada.`);
+
+    const newPaid = ap.paidAmountCents + params.amountCents;
+    const newRemaining = Math.max(0, ap.totalAmountCents - newPaid);
+    const newStatus: AccountsPayableStatus = newRemaining === 0 ? 'PAID' : 'PARTIALLY_PAID';
+    const now = new Date().toISOString();
+    const settleDate = params.settlementDate || now.slice(0, 10);
+
+    this.db.prepare(`
+      UPDATE accounts_payable
+      SET paid_amount_cents = ?, remaining_amount_cents = ?, status = ?, updated_at = ?
+      WHERE id = ?
+    `).run(newPaid, newRemaining, newStatus, now, id);
+
+    const txId = `tx-${crypto.randomUUID().slice(0, 8)}`;
+    this.db.prepare(`
+      INSERT INTO financial_transactions (
+        id, financial_account_id, type, category_id, cost_center_id,
+        amount_cents, payment_method, reference_type, reference_id,
+        description, accrual_date, settlement_date, registered_by_staff_id, created_at
+      ) VALUES (?, ?, 'EXPENSE', ?, ?, ?, ?, 'ACCOUNTS_PAYABLE', ?, ?, ?, ?, ?, ?)
+    `).run(
+      txId,
+      account.id,
+      ap.categoryId,
+      ap.costCenterId,
+      params.amountCents,
+      params.paymentMethod,
+      id,
+      params.notes || `Pagamento: ${ap.description}`,
+      ap.accrualDate,
+      settleDate,
+      params.actorUserId,
+      now
+    );
+
+    this.db.prepare(`
+      UPDATE financial_accounts
+      SET current_balance_cents = current_balance_cents - ?, updated_at = ?
+      WHERE id = ?
+    `).run(params.amountCents, now, account.id);
+
+    const updatedAp = this.getAccountPayableById(id)!;
+    const txRow = this.db.prepare('SELECT * FROM financial_transactions WHERE id = ?').get(txId) as Record<string, unknown>;
+    return { accountPayable: updatedAp, transaction: this.mapFinancialTransactionRow(txRow) };
+  }
+
+  public listFinancialTransactions(filters?: {
+    financialAccountId?: string;
+    startDate?: string;
+    endDate?: string;
+    type?: FinancialTransactionType;
+  }): FinancialTransaction[] {
+    let sql = 'SELECT * FROM financial_transactions WHERE 1=1';
+    const params: (string | number | bigint | null)[] = [];
+    if (filters?.financialAccountId) {
+      sql += ' AND financial_account_id = ?';
+      params.push(filters.financialAccountId);
+    }
+    if (filters?.type) {
+      sql += ' AND type = ?';
+      params.push(filters.type);
+    }
+    if (filters?.startDate) {
+      sql += ' AND date(settlement_date) >= ?';
+      params.push(filters.startDate.slice(0, 10));
+    }
+    if (filters?.endDate) {
+      sql += ' AND date(settlement_date) <= ?';
+      params.push(filters.endDate.slice(0, 10));
+    }
+    sql += ' ORDER BY created_at DESC';
+    const rows = this.db.prepare(sql).all(...params) as Record<string, unknown>[];
+    return rows.map((r) => this.mapFinancialTransactionRow(r));
+  }
+
+  public createFinancialTransfer(params: {
+    fromAccountId: string;
+    toAccountId: string;
+    amountCents: number;
+    reason: string;
+    actorUserId: string;
+  }): { transfer: FinancialTransfer; debitTransaction: FinancialTransaction; creditTransaction: FinancialTransaction } {
+    if (params.fromAccountId === params.toAccountId) {
+      throw new Error('A conta de origem e destino devem ser diferentes.');
+    }
+    if (params.amountCents <= 0) {
+      throw new Error('O valor da transferência deve ser estritamente positivo.');
+    }
+    const fromAcc = this.getFinancialAccountById(params.fromAccountId);
+    if (!fromAcc) throw new Error(`Conta origem '${params.fromAccountId}' não encontrada.`);
+    const toAcc = this.getFinancialAccountById(params.toAccountId);
+    if (!toAcc) throw new Error(`Conta destino '${params.toAccountId}' não encontrada.`);
+
+    const now = new Date().toISOString();
+    const transferId = `trf-${crypto.randomUUID().slice(0, 8)}`;
+
+    this.db.prepare(`
+      INSERT INTO financial_transfers (id, from_account_id, to_account_id, amount_cents, reason, registered_by_staff_id, transferred_at, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(transferId, fromAcc.id, toAcc.id, params.amountCents, params.reason, params.actorUserId, now, now);
+
+    const debitTxId = `tx-${crypto.randomUUID().slice(0, 8)}`;
+    this.db.prepare(`
+      INSERT INTO financial_transactions (
+        id, financial_account_id, type, amount_cents, payment_method, reference_type, reference_id,
+        description, accrual_date, settlement_date, registered_by_staff_id, created_at
+      ) VALUES (?, ?, 'INTERNAL_TRANSFER_OUT', ?, 'CASH', 'TRANSFER', ?, ?, ?, ?, ?, ?)
+    `).run(
+      debitTxId,
+      fromAcc.id,
+      params.amountCents,
+      transferId,
+      `Transferência enviada para ${toAcc.name}: ${params.reason}`,
+      now.slice(0, 10),
+      now.slice(0, 10),
+      params.actorUserId,
+      now
+    );
+
+    const creditTxId = `tx-${crypto.randomUUID().slice(0, 8)}`;
+    this.db.prepare(`
+      INSERT INTO financial_transactions (
+        id, financial_account_id, type, amount_cents, payment_method, reference_type, reference_id,
+        description, accrual_date, settlement_date, registered_by_staff_id, created_at
+      ) VALUES (?, ?, 'INTERNAL_TRANSFER_IN', ?, 'CASH', 'TRANSFER', ?, ?, ?, ?, ?, ?)
+    `).run(
+      creditTxId,
+      toAcc.id,
+      params.amountCents,
+      transferId,
+      `Transferência recebida de ${fromAcc.name}: ${params.reason}`,
+      now.slice(0, 10),
+      now.slice(0, 10),
+      params.actorUserId,
+      now
+    );
+
+    this.db.prepare('UPDATE financial_accounts SET current_balance_cents = current_balance_cents - ?, updated_at = ? WHERE id = ?').run(params.amountCents, now, fromAcc.id);
+    this.db.prepare('UPDATE financial_accounts SET current_balance_cents = current_balance_cents + ?, updated_at = ? WHERE id = ?').run(params.amountCents, now, toAcc.id);
+
+    const transferRow = this.db.prepare('SELECT * FROM financial_transfers WHERE id = ?').get(transferId) as Record<string, unknown>;
+    const debitRow = this.db.prepare('SELECT * FROM financial_transactions WHERE id = ?').get(debitTxId) as Record<string, unknown>;
+    const creditRow = this.db.prepare('SELECT * FROM financial_transactions WHERE id = ?').get(creditTxId) as Record<string, unknown>;
+
+    return {
+      transfer: this.mapFinancialTransferRow(transferRow),
+      debitTransaction: this.mapFinancialTransactionRow(debitRow),
+      creditTransaction: this.mapFinancialTransactionRow(creditRow)
+    };
+  }
+
+  public listFinancialTransfers(): FinancialTransfer[] {
+    const rows = this.db.prepare('SELECT * FROM financial_transfers ORDER BY transferred_at DESC').all() as Record<string, unknown>[];
+    return rows.map((r) => this.mapFinancialTransferRow(r));
+  }
+
+  public getPurchaseInvoiceById(id: string): PurchaseInvoice | null {
+    const row = this.db.prepare('SELECT * FROM purchase_invoices WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    const itemRows = this.db.prepare('SELECT * FROM purchase_invoice_items WHERE invoice_id = ?').all(id) as Record<string, unknown>[];
+    const items = itemRows.map((it) => this.mapPurchaseInvoiceItemRow(it));
+    return this.mapPurchaseInvoiceRow(row, items);
+  }
+
+  public listPurchaseInvoices(): PurchaseInvoice[] {
+    const rows = this.db.prepare('SELECT * FROM purchase_invoices ORDER BY issue_date DESC').all() as Record<string, unknown>[];
+    return rows.map((r) => {
+      const itemRows = this.db.prepare('SELECT * FROM purchase_invoice_items WHERE invoice_id = ?').all(String(r.id)) as Record<string, unknown>[];
+      const items = itemRows.map((it) => this.mapPurchaseInvoiceItemRow(it));
+      return this.mapPurchaseInvoiceRow(r, items);
+    });
+  }
+
+  public createPurchaseInvoice(params: {
+    invoiceNumber: string;
+    supplierId: string;
+    costCenterId: string;
+    issueDate: string;
+    dueDate?: string;
+    items: Array<{
+      productId: string;
+      quantity: number;
+      unitCostCents: number;
+      unitOfMeasure?: string;
+    }>;
+    notes?: string;
+    actorUserId: string;
+  }): { invoice: PurchaseInvoice; accountsPayable: AccountsPayable } {
+    const supplier = this.getSupplierById(params.supplierId);
+    if (!supplier) throw new Error(`Fornecedor '${params.supplierId}' não encontrado.`);
+    if (!params.items || params.items.length === 0) {
+      throw new Error('A nota fiscal deve conter ao menos um item de produto.');
+    }
+
+    const now = new Date().toISOString();
+    const invoiceId = `inv-${crypto.randomUUID().slice(0, 8)}`;
+    let totalAmountCents = 0;
+
+    const invoiceItems: PurchaseInvoiceItem[] = [];
+
+    for (const item of params.items) {
+      const product = this.getProductById(item.productId);
+      if (!product) throw new Error(`Produto '${item.productId}' não encontrado no catálogo.`);
+      const itemTotal = Math.round(item.quantity * item.unitCostCents);
+      totalAmountCents += itemTotal;
+      const itemId = `invit-${crypto.randomUUID().slice(0, 8)}`;
+
+      invoiceItems.push({
+        id: itemId,
+        invoiceId,
+        productId: product.id,
+        productName: product.name,
+        unitOfMeasure: item.unitOfMeasure || product.unitOfMeasure || 'UN',
+        quantity: item.quantity,
+        unitCostCents: item.unitCostCents,
+        totalCostCents: itemTotal
+      });
+
+      this.adjustStock({
+        productId: product.id,
+        quantityDelta: item.quantity,
+        movementType: 'PURCHASE_ENTRY',
+        unitCostCents: item.unitCostCents,
+        reason: `Entrada NF #${params.invoiceNumber} — ${supplier.name}`,
+        userId: params.actorUserId
+      });
+
+      this.db.prepare('UPDATE catalog_products SET cost_price_cents = ?, updated_at = ? WHERE id = ?').run(item.unitCostCents, now, product.id);
+    }
+
+    const accountsPayable = this.createAccountPayable({
+      description: `NF #${params.invoiceNumber} — ${supplier.name}`,
+      origin: 'PURCHASE_INVOICE',
+      originReferenceId: invoiceId,
+      supplierId: supplier.id,
+      supplierName: supplier.name,
+      costCenterId: params.costCenterId,
+      categoryId: 'cat-custo-cmv-alim',
+      totalAmountCents,
+      accrualDate: params.issueDate,
+      dueDate: params.dueDate || params.issueDate,
+      status: 'PENDING',
+      invoiceNumber: params.invoiceNumber,
+      notes: params.notes ?? null
+    });
+
+    this.db.prepare(`
+      INSERT INTO purchase_invoices (
+        id, invoice_number, supplier_id, supplier_name, cost_center_id,
+        issue_date, total_amount_cents, status, accounts_payable_id, stock_moved, notes, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'CONFIRMED', ?, 1, ?, ?, ?)
+    `).run(
+      invoiceId,
+      params.invoiceNumber,
+      supplier.id,
+      supplier.name,
+      params.costCenterId,
+      params.issueDate,
+      totalAmountCents,
+      accountsPayable.id,
+      params.notes ?? null,
+      now,
+      now
+    );
+
+    const insertItem = this.db.prepare(`
+      INSERT INTO purchase_invoice_items (id, invoice_id, product_id, product_name, unit_of_measure, quantity, unit_cost_cents, total_cost_cents)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    for (const it of invoiceItems) {
+      insertItem.run(it.id, it.invoiceId, it.productId, it.productName, it.unitOfMeasure, it.quantity, it.unitCostCents, it.totalCostCents);
+    }
+
+    const invoice = this.getPurchaseInvoiceById(invoiceId)!;
+    return { invoice, accountsPayable };
+  }
+
+  public reconcileFinancialAccount(params: {
+    financialAccountId: string;
+    reconciliationDate: string;
+    declaredPhysicalBalanceCents: number;
+    actorUserId: string;
+    adjustBalance?: boolean;
+    notes?: string;
+  }): AccountReconciliation {
+    const account = this.getFinancialAccountById(params.financialAccountId);
+    if (!account) throw new Error(`Conta financeira '${params.financialAccountId}' não encontrada.`);
+
+    const systemCalculatedBalanceCents = account.currentBalanceCents;
+    const differenceCents = params.declaredPhysicalBalanceCents - systemCalculatedBalanceCents;
+    const now = new Date().toISOString();
+    const recId = `rec-${crypto.randomUUID().slice(0, 8)}`;
+    let adjustmentTxId: string | null = null;
+    let status: AccountReconciliation['status'] = differenceCents === 0 ? 'BALANCED' : 'DISCREPANCY_PENDING';
+
+    if (differenceCents !== 0 && params.adjustBalance) {
+      adjustmentTxId = `tx-${crypto.randomUUID().slice(0, 8)}`;
+      const txType: FinancialTransactionType = differenceCents > 0 ? 'INCOME' : 'EXPENSE';
+      const absDiff = Math.abs(differenceCents);
+
+      this.db.prepare(`
+        INSERT INTO financial_transactions (
+          id, financial_account_id, type, amount_cents, payment_method, reference_type, reference_id,
+          description, accrual_date, settlement_date, registered_by_staff_id, created_at
+        ) VALUES (?, ?, ?, ?, 'CASH', 'MANUAL', ?, ?, ?, ?, ?, ?)
+      `).run(
+        adjustmentTxId,
+        account.id,
+        txType,
+        absDiff,
+        recId,
+        `Ajuste de conciliação bancária/caixa: ${params.notes || 'Ajuste auditado'}`,
+        params.reconciliationDate,
+        params.reconciliationDate,
+        params.actorUserId,
+        now
+      );
+
+      this.db.prepare('UPDATE financial_accounts SET current_balance_cents = ?, updated_at = ? WHERE id = ?').run(
+        params.declaredPhysicalBalanceCents,
+        now,
+        account.id
+      );
+
+      status = 'DISCREPANCY_ADJUSTED';
+    }
+
+    this.db.prepare(`
+      INSERT INTO account_reconciliations (
+        id, financial_account_id, reconciliation_date, system_calculated_balance_cents,
+        declared_physical_balance_cents, difference_cents, adjustment_transaction_id, status,
+        reconciled_by_staff_id, notes, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      recId,
+      account.id,
+      params.reconciliationDate,
+      systemCalculatedBalanceCents,
+      params.declaredPhysicalBalanceCents,
+      differenceCents,
+      adjustmentTxId,
+      status,
+      params.actorUserId,
+      params.notes ?? null,
+      now
+    );
+
+    const row = this.db.prepare('SELECT * FROM account_reconciliations WHERE id = ?').get(recId) as Record<string, unknown>;
+    return this.mapAccountReconciliationRow(row);
+  }
+
+  public listAccountReconciliations(financialAccountId?: string): AccountReconciliation[] {
+    let sql = 'SELECT * FROM account_reconciliations';
+    const params: (string | number | bigint | null)[] = [];
+    if (financialAccountId) {
+      sql += ' WHERE financial_account_id = ?';
+      params.push(financialAccountId);
+    }
+    sql += ' ORDER BY reconciliation_date DESC';
+    const rows = this.db.prepare(sql).all(...params) as Record<string, unknown>[];
+    return rows.map((r) => this.mapAccountReconciliationRow(r));
+  }
+
+  // ============================================================================
+  // ETAPA 6: DRE GERENCIAL, FLUXO DE CAIXA E RELATÓRIOS
+  // ============================================================================
+
+  public generateDreStatement(params: {
+    startDate: string;
+    endDate: string;
+    costCenterId?: string | null;
+  }): DreStatement {
+    const startDay = params.startDate.slice(0, 10);
+    const endDay = params.endDate.slice(0, 10);
+
+    let restGrossRevenue = 0;
+    let deductionsCents = 0;
+
+    const tabSql = `
+      SELECT subtotal_cents, service_fee_cents, discount_cents, total_cents
+      FROM tabs
+      WHERE date(opened_at) >= ? AND date(opened_at) <= ? AND status = 'CLOSED'
+    `;
+    const tabs = this.db.prepare(tabSql).all(startDay, endDay) as Array<{
+      subtotal_cents: number;
+      service_fee_cents: number;
+      discount_cents: number;
+      total_cents: number;
+    }>;
+    for (const t of tabs) {
+      restGrossRevenue += (t.subtotal_cents + t.service_fee_cents);
+      deductionsCents += t.discount_cents;
+    }
+
+    let deliveryGrossRevenue = 0;
+    const delivOrders = this.db.prepare(`
+      SELECT items_subtotal_cents, delivery_fee_cents, discount_cents, total_cents
+      FROM delivery_orders
+      WHERE date(created_at) >= ? AND date(created_at) <= ? AND status = 'ENTREGUE'
+    `).all(startDay, endDay) as Array<{
+      items_subtotal_cents: number;
+      delivery_fee_cents: number;
+      discount_cents: number;
+      total_cents: number;
+    }>;
+    for (const d of delivOrders) {
+      deliveryGrossRevenue += (d.items_subtotal_cents + d.delivery_fee_cents);
+      deductionsCents += d.discount_cents;
+    }
+
+    let hotelGrossRevenue = 0;
+    const hotelFolios = this.db.prepare(`
+      SELECT entry_type, amount_cents
+      FROM hotel_folio_entries
+      WHERE date(created_at) >= ? AND date(created_at) <= ? AND source_reference_type != 'TAB' AND entry_type != 'PAYMENT_CREDIT'
+    `).all(startDay, endDay) as Array<{
+      entry_type: string;
+      amount_cents: number;
+    }>;
+    for (const h of hotelFolios) {
+      hotelGrossRevenue += h.amount_cents;
+    }
+
+    const manualAr = this.db.prepare(`
+      SELECT cost_center_id, total_amount_cents
+      FROM accounts_receivable
+      WHERE date(accrual_date) >= ? AND date(accrual_date) <= ? AND origin = 'MANUAL' AND status != 'CANCELED'
+    `).all(startDay, endDay) as Array<{ cost_center_id: string; total_amount_cents: number }>;
+    let otherRevenue = 0;
+    for (const m of manualAr) {
+      otherRevenue += m.total_amount_cents;
+    }
+
+    const revenueByCostCenter: Record<string, number> = {
+      REST: Math.round(restGrossRevenue * 0.7),
+      BAR: Math.round(restGrossRevenue * 0.3),
+      DELIV: deliveryGrossRevenue,
+      HOTEL: hotelGrossRevenue,
+      ADMIN: otherRevenue
+    };
+
+    let grossRevenueCents = restGrossRevenue + deliveryGrossRevenue + hotelGrossRevenue + otherRevenue;
+
+    if (params.costCenterId && revenueByCostCenter[params.costCenterId] !== undefined) {
+      grossRevenueCents = revenueByCostCenter[params.costCenterId]!;
+    }
+
+    let directCostsCents = 0;
+    const movements = this.db.prepare(`
+      SELECT sm.quantity_delta, COALESCE(sm.unit_cost_cents, cp.cost_price_cents, 0) as unit_cost_cents, sm.movement_type
+      FROM stock_movements sm
+      LEFT JOIN catalog_products cp ON cp.id = sm.product_id
+      WHERE date(sm.created_at) >= ? AND date(sm.created_at) <= ?
+        AND sm.movement_type IN ('SALE_DEDUCTION', 'RECIPE_CONSUMPTION', 'MINIBAR_RESTOCK')
+    `).all(startDay, endDay) as Array<{
+      quantity_delta: number;
+      unit_cost_cents: number;
+      movement_type: string;
+    }>;
+    for (const m of movements) {
+      const cost = m.unit_cost_cents || 0;
+      directCostsCents += Math.round(Math.abs(m.quantity_delta) * cost);
+    }
+
+    const courierFees = this.db.prepare(`
+      SELECT SUM(courier_fee_cents) as total_courier
+      FROM delivery_orders
+      WHERE date(created_at) >= ? AND date(created_at) <= ? AND status = 'ENTREGUE'
+    `).get(startDay, endDay) as { total_courier?: number };
+    directCostsCents += (courierFees?.total_courier ?? 0);
+
+    let operationalExpensesCents = 0;
+    const expensesByCategory: Record<string, number> = {};
+
+    const expenses = this.db.prepare(`
+      SELECT ap.category_id, fc.name as category_name, SUM(ap.total_amount_cents) as total
+      FROM accounts_payable ap
+      JOIN financial_categories fc ON fc.id = ap.category_id
+      WHERE date(ap.accrual_date) >= ? AND date(ap.accrual_date) <= ?
+        AND fc.type = 'EXPENSE_OP' AND ap.status != 'CANCELED'
+      GROUP BY ap.category_id, fc.name
+    `).all(startDay, endDay) as Array<{ category_id: string; category_name: string; total: number }>;
+
+    for (const exp of expenses) {
+      operationalExpensesCents += exp.total;
+      expensesByCategory[exp.category_name] = exp.total;
+    }
+
+    let financialResultCents = 0;
+    const finTxs = this.db.prepare(`
+      SELECT ft.type, ft.amount_cents
+      FROM financial_transactions ft
+      LEFT JOIN financial_categories fc ON fc.id = ft.category_id
+      WHERE date(ft.accrual_date) >= ? AND date(ft.accrual_date) <= ?
+        AND fc.type = 'FINANCIAL_RESULT'
+    `).all(startDay, endDay) as Array<{ type: string; amount_cents: number }>;
+
+    for (const f of finTxs) {
+      if (f.type === 'INCOME') financialResultCents += f.amount_cents;
+      else if (f.type === 'EXPENSE') financialResultCents -= f.amount_cents;
+    }
+
+    return calculateDreStatement({
+      grossRevenueCents,
+      deductionsCents,
+      directCostsCents,
+      operationalExpensesCents,
+      financialResultCents,
+      periodStart: startDay,
+      periodEnd: endDay,
+      costCenterId: params.costCenterId,
+      revenueByCostCenter,
+      expensesByCategory
+    });
+  }
+
+  public generateCashFlowRealized(params: {
+    startDate: string;
+    endDate: string;
+    accountId?: string | null;
+  }): CashFlowRealizedSummary {
+    const startDay = params.startDate.slice(0, 10);
+    const endDay = params.endDate.slice(0, 10);
+
+    let txSql = `
+      SELECT ft.*, fc.name as category_name
+      FROM financial_transactions ft
+      LEFT JOIN financial_categories fc ON fc.id = ft.category_id
+      WHERE date(ft.settlement_date) >= ? AND date(ft.settlement_date) <= ?
+    `;
+    const txParams: (string | number | bigint | null)[] = [startDay, endDay];
+    if (params.accountId) {
+      txSql += ' AND ft.financial_account_id = ?';
+      txParams.push(params.accountId);
+    }
+    const txs = this.db.prepare(txSql).all(...txParams) as Array<Record<string, unknown>>;
+
+    let totalInflowsCents = 0;
+    let totalOutflowsCents = 0;
+    const inflowsByCategory: Record<string, number> = {};
+    const outflowsByCategory: Record<string, number> = {};
+    const inflowsByPaymentMethod: Record<string, number> = {};
+
+    for (const tx of txs) {
+      const type = String(tx.type);
+      const amount = Number(tx.amount_cents);
+      const catName = tx.category_name ? String(tx.category_name) : 'Outros';
+      const method = String(tx.payment_method || 'CASH');
+
+      if (type === 'INCOME' || type === 'INTERNAL_TRANSFER_IN') {
+        totalInflowsCents += amount;
+        inflowsByCategory[catName] = (inflowsByCategory[catName] || 0) + amount;
+        inflowsByPaymentMethod[method] = (inflowsByPaymentMethod[method] || 0) + amount;
+      } else if (type === 'EXPENSE' || type === 'INTERNAL_TRANSFER_OUT') {
+        totalOutflowsCents += amount;
+        outflowsByCategory[catName] = (outflowsByCategory[catName] || 0) + amount;
+      }
+    }
+
+    const netCashFlowCents = totalInflowsCents - totalOutflowsCents;
+
+    let totalCurrentBalance = 0;
+    if (params.accountId) {
+      const acc = this.getFinancialAccountById(params.accountId);
+      totalCurrentBalance = acc ? acc.currentBalanceCents : 0;
+    } else {
+      const accs = this.listFinancialAccounts();
+      totalCurrentBalance = accs.reduce((sum, a) => sum + a.currentBalanceCents, 0);
+    }
+    const closingBalanceCents = totalCurrentBalance;
+    const openingBalanceCents = closingBalanceCents - netCashFlowCents;
+
+    return {
+      periodStart: startDay,
+      periodEnd: endDay,
+      accountId: params.accountId ?? null,
+      openingBalanceCents,
+      totalInflowsCents,
+      totalOutflowsCents,
+      netCashFlowCents,
+      closingBalanceCents,
+      inflowsByCategory,
+      outflowsByCategory,
+      inflowsByPaymentMethod
+    };
+  }
+
+  public generateCashFlowProjected(params: {
+    startDate: string;
+    endDate: string;
+  }): CashFlowProjectedSummary {
+    const startDay = params.startDate.slice(0, 10);
+    const endDay = params.endDate.slice(0, 10);
+    const nowDay = new Date().toISOString().slice(0, 10);
+
+    const accs = this.listFinancialAccounts();
+    const currentBalanceCents = accs.reduce((sum, a) => sum + a.currentBalanceCents, 0);
+
+    const receivables = this.db.prepare(`
+      SELECT due_date, SUM(remaining_amount_cents) as expected_in
+      FROM accounts_receivable
+      WHERE date(due_date) >= ? AND date(due_date) <= ? AND status IN ('PENDING', 'PARTIALLY_PAID')
+      GROUP BY due_date
+      ORDER BY due_date ASC
+    `).all(startDay, endDay) as Array<{ due_date: string; expected_in: number }>;
+
+    const payables = this.db.prepare(`
+      SELECT due_date, SUM(remaining_amount_cents) as expected_out
+      FROM accounts_payable
+      WHERE date(due_date) >= ? AND date(due_date) <= ? AND status IN ('PENDING', 'PARTIALLY_PAID')
+      GROUP BY due_date
+      ORDER BY due_date ASC
+    `).all(startDay, endDay) as Array<{ due_date: string; expected_out: number }>;
+
+    const inByDate: Record<string, number> = {};
+    for (const r of receivables) inByDate[r.due_date] = r.expected_in;
+    const outByDate: Record<string, number> = {};
+    for (const p of payables) outByDate[p.due_date] = p.expected_out;
+
+    let totalReceivables = 0;
+    for (const v of Object.values(inByDate)) totalReceivables += v;
+    let totalPayables = 0;
+    for (const v of Object.values(outByDate)) totalPayables += v;
+
+    const datesSet = new Set([...Object.keys(inByDate), ...Object.keys(outByDate)]);
+    const sortedDates = Array.from(datesSet).sort();
+
+    let runningBalance = currentBalanceCents;
+    const dailyProjections = sortedDates.map((d) => {
+      const expectedIn = inByDate[d] || 0;
+      const expectedOut = outByDate[d] || 0;
+      runningBalance += (expectedIn - expectedOut);
+      return {
+        date: d,
+        expectedInflowsCents: expectedIn,
+        expectedOutflowsCents: expectedOut,
+        projectedBalanceCents: runningBalance
+      };
+    });
+
+    return {
+      asOfDate: nowDay,
+      periodStart: startDay,
+      periodEnd: endDay,
+      currentBalanceCents,
+      projectedReceivablesCents: totalReceivables,
+      projectedPayablesCents: totalPayables,
+      projectedNetCashFlowCents: totalReceivables - totalPayables,
+      projectedFinalBalanceCents: runningBalance,
+      dailyProjections
+    };
+  }
+
+  public getExecutiveDashboardMetrics(): ExecutiveDashboardMetrics {
+    const today = new Date().toISOString().slice(0, 10);
+    const monthStart = today.slice(0, 7) + '-01';
+
+    const todayTabSales = (this.db.prepare(`
+      SELECT SUM(total_cents) as total FROM tabs
+      WHERE (date(closed_at) = ? OR date(opened_at) = ?) AND status = 'CLOSED'
+    `).get(today, today) as { total?: number })?.total ?? 0;
+
+    const todayDelivOrders = this.db.prepare(`
+      SELECT COUNT(*) as count, SUM(total_cents) as total
+      FROM delivery_orders
+      WHERE date(created_at) = ? AND status != 'CANCELADO'
+    `).get(today) as { count?: number; total?: number };
+
+    const activeDelivOrdersCount = (this.db.prepare(`
+      SELECT COUNT(*) as count FROM delivery_orders
+      WHERE status NOT IN ('ENTREGUE', 'CANCELADO')
+    `).get() as { count?: number })?.count ?? 0;
+
+    const todayHotelRev = (this.db.prepare(`
+      SELECT SUM(amount_cents) as total FROM hotel_folio_entries
+      WHERE date(created_at) = ? AND source_reference_type != 'TAB' AND entry_type != 'PAYMENT_CREDIT'
+    `).get(today) as { total?: number })?.total ?? 0;
+
+    const hotelStats = this.db.prepare(`
+      SELECT
+        COUNT(*) as total_rooms,
+        SUM(CASE WHEN occupancy_status = 'OCUPADO' THEN 1 ELSE 0 END) as occupied_rooms
+      FROM hotel_rooms WHERE active = 1
+    `).get() as { total_rooms?: number; occupied_rooms?: number };
+    const occupancyRate = (hotelStats?.total_rooms && hotelStats.total_rooms > 0)
+      ? Math.round(((hotelStats.occupied_rooms || 0) / hotelStats.total_rooms) * 10000) / 100
+      : 0;
+
+    const monthInflows = (this.db.prepare(`
+      SELECT SUM(amount_cents) as total FROM financial_transactions
+      WHERE date(settlement_date) >= ? AND type IN ('INCOME', 'INTERNAL_TRANSFER_IN')
+    `).get(monthStart) as { total?: number })?.total ?? 0;
+
+    const monthOutflows = (this.db.prepare(`
+      SELECT SUM(amount_cents) as total FROM financial_transactions
+      WHERE date(settlement_date) >= ? AND type IN ('EXPENSE', 'INTERNAL_TRANSFER_OUT')
+    `).get(monthStart) as { total?: number })?.total ?? 0;
+
+    const arOverdue = (this.db.prepare(`
+      SELECT SUM(remaining_amount_cents) as total FROM accounts_receivable
+      WHERE date(due_date) < ? AND status IN ('PENDING', 'PARTIALLY_PAID')
+    `).get(today) as { total?: number })?.total ?? 0;
+
+    const apDueToday = (this.db.prepare(`
+      SELECT SUM(remaining_amount_cents) as total FROM accounts_payable
+      WHERE date(due_date) <= ? AND status IN ('PENDING', 'PARTIALLY_PAID')
+    `).get(today) as { total?: number })?.total ?? 0;
+
+    const accounts = this.listFinancialAccounts();
+    const treasuryTotal = accounts.reduce((sum, a) => sum + a.currentBalanceCents, 0);
+
+    return {
+      todaySalesCents: todayTabSales + (todayDelivOrders?.total ?? 0),
+      todayDeliveryOrdersCount: todayDelivOrders?.count ?? 0,
+      activeDeliveryOrdersCount: activeDelivOrdersCount,
+      todayHotelRevenueCents: todayHotelRev,
+      currentOccupancyRatePercent: occupancyRate,
+      monthRealizedRevenueCents: monthInflows,
+      monthRealizedExpensesCents: monthOutflows,
+      monthEstimatedNetProfitCents: monthInflows - monthOutflows,
+      accountsReceivableOverdueCents: arOverdue,
+      accountsPayableDueTodayCents: apDueToday,
+      treasuryTotalBalanceCents: treasuryTotal
+    };
+  }
+
+  public exportReportCsv(
+    reportType: 'sales' | 'dre' | 'cash_flow' | 'receivables' | 'payables' | 'stock' | 'delivery',
+    params?: Record<string, string>
+  ): string {
+    const lines: string[] = [];
+
+    if (reportType === 'delivery') {
+      lines.push(['ID', 'Numero', 'Cliente', 'Telefone', 'Tipo', 'Canal', 'Status', 'Subtotal', 'Taxa', 'Total', 'Pagamento', 'Entregador', 'Data'].map(sanitizeCsvCell).join(','));
+      const orders = this.listDeliveryOrders();
+      for (const o of orders) {
+        lines.push([
+          o.id,
+          o.orderNumber,
+          o.customerName,
+          o.customerPhone,
+          o.deliveryType,
+          o.origin,
+          o.status,
+          (o.itemsSubtotalCents / 100).toFixed(2),
+          (o.deliveryFeeCents / 100).toFixed(2),
+          (o.totalCents / 100).toFixed(2),
+          o.paymentMethodDeclared,
+          o.courierName || 'N/A',
+          o.createdAt
+        ].map(sanitizeCsvCell).join(','));
+      }
+    } else if (reportType === 'receivables') {
+      lines.push(['ID', 'Descricao', 'Origem', 'Centro de Custo', 'Valor Total', 'Valor Pago', 'Saldo', 'Vencimento', 'Status', 'Cliente'].map(sanitizeCsvCell).join(','));
+      const arList = this.listAccountsReceivable();
+      for (const ar of arList) {
+        lines.push([
+          ar.id,
+          ar.description,
+          ar.origin,
+          ar.costCenterId,
+          (ar.totalAmountCents / 100).toFixed(2),
+          (ar.paidAmountCents / 100).toFixed(2),
+          (ar.remainingAmountCents / 100).toFixed(2),
+          ar.dueDate,
+          ar.status,
+          ar.customerName || 'N/A'
+        ].map(sanitizeCsvCell).join(','));
+      }
+    } else if (reportType === 'payables') {
+      lines.push(['ID', 'Descricao', 'Origem', 'Fornecedor', 'Valor Total', 'Valor Pago', 'Saldo', 'Vencimento', 'Status'].map(sanitizeCsvCell).join(','));
+      const apList = this.listAccountsPayable();
+      for (const ap of apList) {
+        lines.push([
+          ap.id,
+          ap.description,
+          ap.origin,
+          ap.supplierName || 'N/A',
+          (ap.totalAmountCents / 100).toFixed(2),
+          (ap.paidAmountCents / 100).toFixed(2),
+          (ap.remainingAmountCents / 100).toFixed(2),
+          ap.dueDate,
+          ap.status
+        ].map(sanitizeCsvCell).join(','));
+      }
+    } else if (reportType === 'dre') {
+      const start = params?.startDate || new Date().toISOString().slice(0, 7) + '-01';
+      const end = params?.endDate || new Date().toISOString().slice(0, 10);
+      const dre = this.generateDreStatement({ startDate: start, endDate: end });
+      lines.push(['Demonstrativo de Resultado do Exercício (DRE Gerencial por Competência)'].map(sanitizeCsvCell).join(','));
+      lines.push(['Periodo:', `${dre.periodStart} a ${dre.periodEnd}`].map(sanitizeCsvCell).join(','));
+      lines.push(['Linha DRE', 'Valor (R$)', '% Receita Liquida'].map(sanitizeCsvCell).join(','));
+      lines.push(['(=) Receita Operacional Bruta', (dre.grossRevenueCents / 100).toFixed(2), '-'].map(sanitizeCsvCell).join(','));
+      lines.push(['(-) Deduções e Cancelamentos', (dre.deductionsCents / 100).toFixed(2), '-'].map(sanitizeCsvCell).join(','));
+      lines.push(['(=) Receita Operacional Líquida', (dre.netRevenueCents / 100).toFixed(2), '100.00%'].map(sanitizeCsvCell).join(','));
+      lines.push(['(-) Custos Diretos / CMV (Kardex)', (dre.directCostsCents / 100).toFixed(2), `${((dre.directCostsCents / (dre.netRevenueCents || 1)) * 100).toFixed(2)}%`].map(sanitizeCsvCell).join(','));
+      lines.push(['(=) Lucro Bruto', (dre.grossProfitCents / 100).toFixed(2), `${dre.grossMarginPercent.toFixed(2)}%`].map(sanitizeCsvCell).join(','));
+      lines.push(['(-) Despesas Operacionais', (dre.operationalExpensesCents / 100).toFixed(2), `${((dre.operationalExpensesCents / (dre.netRevenueCents || 1)) * 100).toFixed(2)}%`].map(sanitizeCsvCell).join(','));
+      lines.push(['(=) Resultado Operacional (EBITDA)', (dre.operatingResultCents / 100).toFixed(2), `${dre.operatingMarginPercent.toFixed(2)}%`].map(sanitizeCsvCell).join(','));
+      lines.push(['(+/-) Resultado Financeiro', (dre.financialResultCents / 100).toFixed(2), `${((dre.financialResultCents / (dre.netRevenueCents || 1)) * 100).toFixed(2)}%`].map(sanitizeCsvCell).join(','));
+      lines.push(['(=) Resultado Gerencial Líquido', (dre.netProfitCents / 100).toFixed(2), `${dre.netMarginPercent.toFixed(2)}%`].map(sanitizeCsvCell).join(','));
+    } else if (reportType === 'cash_flow') {
+      const start = params?.startDate || new Date().toISOString().slice(0, 7) + '-01';
+      const end = params?.endDate || new Date().toISOString().slice(0, 10);
+      const cf = this.generateCashFlowRealized({ startDate: start, endDate: end });
+      lines.push(['Fluxo de Caixa Realizado'].map(sanitizeCsvCell).join(','));
+      lines.push(['Periodo:', `${cf.periodStart} a ${cf.periodEnd}`].map(sanitizeCsvCell).join(','));
+      lines.push(['Saldo Inicial:', (cf.openingBalanceCents / 100).toFixed(2)].map(sanitizeCsvCell).join(','));
+      lines.push(['Total Entradas (+):', (cf.totalInflowsCents / 100).toFixed(2)].map(sanitizeCsvCell).join(','));
+      lines.push(['Total Saídas (-):', (cf.totalOutflowsCents / 100).toFixed(2)].map(sanitizeCsvCell).join(','));
+      lines.push(['Resultado do Período (=):', (cf.netCashFlowCents / 100).toFixed(2)].map(sanitizeCsvCell).join(','));
+      lines.push(['Saldo Final Realizado:', (cf.closingBalanceCents / 100).toFixed(2)].map(sanitizeCsvCell).join(','));
+    } else {
+      lines.push(['Codigo', 'Produto', 'Unidade', 'Saldo Físico', 'Custo Unit (R$)', 'Valor Total (R$)'].map(sanitizeCsvCell).join(','));
+      const prods = this.getCatalog({ includeInactive: true }).products;
+      for (const p of prods) {
+        const balance = this.getProductCurrentStock(p.id);
+        const unitCost = p.costPriceCents || 0;
+        const totalVal = Math.round(balance * unitCost);
+        lines.push([
+          p.id,
+          p.name,
+          p.unitOfMeasure,
+          balance,
+          (unitCost / 100).toFixed(2),
+          (totalVal / 100).toFixed(2)
+        ].map(sanitizeCsvCell).join(','));
+      }
+    }
+
+    return lines.join('\r\n');
+  }
+
+  // ============================================================================
+  // ETAPA 6: ROW MAPPERS
+  // ============================================================================
+
+  private mapDeliveryZoneRow(r: Record<string, unknown>): DeliveryZone {
+    return {
+      id: String(r.id),
+      name: String(r.name),
+      feeCents: Number(r.fee_cents),
+      minimumOrderCents: Number(r.minimum_order_cents || 0),
+      estimatedMinutes: Number(r.estimated_minutes || 40),
+      active: Number(r.active) === 1
+    };
+  }
+
+  private mapDeliveryCourierRow(r: Record<string, unknown>): DeliveryCourier {
+    return {
+      id: String(r.id),
+      name: String(r.name),
+      phone: String(r.phone),
+      vehicleType: r.vehicle_type as DeliveryCourier['vehicleType'],
+      vehiclePlate: r.vehicle_plate ? String(r.vehicle_plate) : null,
+      feePerDeliveryCents: Number(r.fee_per_delivery_cents || 500),
+      status: r.status as DeliveryCourierStatus,
+      active: Number(r.active) === 1
+    };
+  }
+
+  private mapDeliveryAddressRow(r: Record<string, unknown>): DeliveryAddress {
+    return {
+      id: String(r.id),
+      customerId: String(r.customer_id),
+      street: String(r.street),
+      number: String(r.number),
+      complement: r.complement ? String(r.complement) : null,
+      neighborhood: String(r.neighborhood),
+      city: String(r.city || 'Santa Inês'),
+      reference: r.reference ? String(r.reference) : null,
+      deliveryZoneId: r.delivery_zone_id ? String(r.delivery_zone_id) : null,
+      isDefault: Number(r.is_default) === 1
+    };
+  }
+
+  private mapDeliveryCustomerRow(r: Record<string, unknown>, addresses: DeliveryAddress[] = []): DeliveryCustomer {
+    return {
+      id: String(r.id),
+      name: String(r.name),
+      phone: String(r.phone),
+      document: r.document ? String(r.document) : null,
+      email: r.email ? String(r.email) : null,
+      addresses,
+      notes: r.notes ? String(r.notes) : null,
+      totalOrders: Number(r.total_orders || 0),
+      createdAt: String(r.created_at),
+      updatedAt: String(r.updated_at)
+    };
+  }
+
+  private mapDeliveryOrderRow(r: Record<string, unknown>): DeliveryOrder {
+    let address: DeliveryAddress | null = null;
+    if (r.delivery_address_json) {
+      try {
+        address = JSON.parse(String(r.delivery_address_json));
+      } catch {
+        address = null;
+      }
+    }
+    return {
+      id: String(r.id),
+      orderNumber: Number(r.order_number),
+      orderId: String(r.order_id),
+      customerId: String(r.customer_id),
+      customerName: String(r.customer_name),
+      customerPhone: String(r.customer_phone),
+      deliveryType: r.delivery_type as DeliveryType,
+      origin: r.origin as DeliveryOrigin,
+      status: r.status as DeliveryOrderStatus,
+      deliveryAddress: address,
+      deliveryZoneId: r.delivery_zone_id ? String(r.delivery_zone_id) : null,
+      deliveryFeeCents: Number(r.delivery_fee_cents || 0),
+      itemsSubtotalCents: Number(r.items_subtotal_cents || 0),
+      discountCents: Number(r.discount_cents || 0),
+      totalCents: Number(r.total_cents || 0),
+      paymentMethodDeclared: r.payment_method_declared as PaymentMethod,
+      paymentStatus: r.payment_status as DeliveryOrder['paymentStatus'],
+      changeForCents: r.change_for_cents !== null && r.change_for_cents !== undefined ? Number(r.change_for_cents) : null,
+      courierId: r.courier_id ? String(r.courier_id) : null,
+      courierName: r.courier_name ? String(r.courier_name) : null,
+      courierFeeCents: Number(r.courier_fee_cents || 0),
+      estimatedDeliveryAt: r.estimated_delivery_at ? String(r.estimated_delivery_at) : null,
+      dispatchedAt: r.dispatched_at ? String(r.dispatched_at) : null,
+      deliveredAt: r.delivered_at ? String(r.delivered_at) : null,
+      canceledAt: r.canceled_at ? String(r.canceled_at) : null,
+      cancelReason: r.cancel_reason ? String(r.cancel_reason) : null,
+      settlementId: r.settlement_id ? String(r.settlement_id) : null,
+      notes: r.notes ? String(r.notes) : null,
+      createdAt: String(r.created_at),
+      updatedAt: String(r.updated_at)
+    };
+  }
+
+  private mapDeliverySettlementRow(r: Record<string, unknown>): DeliverySettlement {
+    let orderIds: string[] = [];
+    if (r.delivery_order_ids_json) {
+      try {
+        orderIds = JSON.parse(String(r.delivery_order_ids_json));
+      } catch {
+        orderIds = [];
+      }
+    }
+    return {
+      id: String(r.id),
+      courierId: String(r.courier_id),
+      courierName: String(r.courier_name),
+      shiftId: r.shift_id ? String(r.shift_id) : null,
+      financialAccountId: String(r.financial_account_id),
+      deliveryOrderIds: orderIds,
+      totalDeliveries: Number(r.total_deliveries || 0),
+      totalCashCollectedCents: Number(r.total_cash_collected_cents || 0),
+      totalCourierFeesCents: Number(r.total_courier_fees_cents || 0),
+      netAmountSettledCents: Number(r.net_amount_settled_cents || 0),
+      status: r.status as DeliverySettlement['status'],
+      settledAt: String(r.settled_at),
+      settledByStaffId: String(r.settled_by_staff_id),
+      notes: r.notes ? String(r.notes) : null
+    };
+  }
+
+  private mapCostCenterRow(r: Record<string, unknown>): CostCenter {
+    return {
+      id: String(r.id),
+      code: String(r.code),
+      name: String(r.name),
+      description: String(r.description),
+      active: Number(r.active) === 1
+    };
+  }
+
+  private mapFinancialCategoryRow(r: Record<string, unknown>): FinancialCategory {
+    return {
+      id: String(r.id),
+      code: String(r.code),
+      name: String(r.name),
+      type: r.type as FinancialCategoryType,
+      parentId: r.parent_id ? String(r.parent_id) : null,
+      active: Number(r.active) === 1
+    };
+  }
+
+  private mapFinancialAccountRow(r: Record<string, unknown>): FinancialAccount {
+    return {
+      id: String(r.id),
+      name: String(r.name),
+      type: r.type as FinancialAccountType,
+      bankName: r.bank_name ? String(r.bank_name) : null,
+      accountNumber: r.account_number ? String(r.account_number) : null,
+      pixKey: r.pix_key ? String(r.pix_key) : null,
+      currentBalanceCents: Number(r.current_balance_cents || 0),
+      initialBalanceCents: Number(r.initial_balance_cents || 0),
+      active: Number(r.active) === 1,
+      createdAt: String(r.created_at),
+      updatedAt: String(r.updated_at)
+    };
+  }
+
+  private mapSupplierRow(r: Record<string, unknown>): Supplier {
+    return {
+      id: String(r.id),
+      name: String(r.name),
+      tradeName: r.trade_name ? String(r.trade_name) : null,
+      document: r.document ? String(r.document) : null,
+      email: r.email ? String(r.email) : null,
+      phone: r.phone ? String(r.phone) : null,
+      contactPerson: r.contact_person ? String(r.contact_person) : null,
+      category: r.category ? String(r.category) : null,
+      active: Number(r.active) === 1,
+      createdAt: String(r.created_at),
+      updatedAt: String(r.updated_at)
+    };
+  }
+
+  private mapAccountsReceivableRow(r: Record<string, unknown>): AccountsReceivable {
+    return {
+      id: String(r.id),
+      description: String(r.description),
+      origin: r.origin as AccountsReceivableOrigin,
+      originReferenceId: r.origin_reference_id ? String(r.origin_reference_id) : null,
+      costCenterId: String(r.cost_center_id),
+      categoryId: String(r.category_id),
+      totalAmountCents: Number(r.total_amount_cents),
+      paidAmountCents: Number(r.paid_amount_cents || 0),
+      remainingAmountCents: Number(r.remaining_amount_cents),
+      accrualDate: String(r.accrual_date),
+      dueDate: String(r.due_date),
+      status: r.status as AccountsReceivableStatus,
+      customerName: r.customer_name ? String(r.customer_name) : null,
+      notes: r.notes ? String(r.notes) : null,
+      createdAt: String(r.created_at),
+      updatedAt: String(r.updated_at)
+    };
+  }
+
+  private mapAccountsPayableRow(r: Record<string, unknown>): AccountsPayable {
+    return {
+      id: String(r.id),
+      description: String(r.description),
+      origin: r.origin as AccountsPayableOrigin,
+      originReferenceId: r.origin_reference_id ? String(r.origin_reference_id) : null,
+      supplierId: r.supplier_id ? String(r.supplier_id) : null,
+      supplierName: r.supplier_name ? String(r.supplier_name) : null,
+      costCenterId: String(r.cost_center_id),
+      categoryId: String(r.category_id),
+      totalAmountCents: Number(r.total_amount_cents),
+      paidAmountCents: Number(r.paid_amount_cents || 0),
+      remainingAmountCents: Number(r.remaining_amount_cents),
+      accrualDate: String(r.accrual_date),
+      dueDate: String(r.due_date),
+      status: r.status as AccountsPayableStatus,
+      invoiceNumber: r.invoice_number ? String(r.invoice_number) : null,
+      barcode: r.barcode ? String(r.barcode) : null,
+      notes: r.notes ? String(r.notes) : null,
+      createdAt: String(r.created_at),
+      updatedAt: String(r.updated_at)
+    };
+  }
+
+  private mapFinancialTransactionRow(r: Record<string, unknown>): FinancialTransaction {
+    return {
+      id: String(r.id),
+      financialAccountId: String(r.financial_account_id),
+      type: r.type as FinancialTransactionType,
+      categoryId: r.category_id ? String(r.category_id) : null,
+      costCenterId: r.cost_center_id ? String(r.cost_center_id) : null,
+      amountCents: Number(r.amount_cents),
+      paymentMethod: r.payment_method as PaymentMethod,
+      referenceType: r.reference_type as FinancialTransaction['referenceType'],
+      referenceId: r.reference_id ? String(r.reference_id) : null,
+      description: String(r.description),
+      accrualDate: String(r.accrual_date),
+      settlementDate: String(r.settlement_date),
+      registeredByStaffId: String(r.registered_by_staff_id),
+      createdAt: String(r.created_at)
+    };
+  }
+
+  private mapFinancialTransferRow(r: Record<string, unknown>): FinancialTransfer {
+    return {
+      id: String(r.id),
+      fromAccountId: String(r.from_account_id),
+      toAccountId: String(r.to_account_id),
+      amountCents: Number(r.amount_cents),
+      reason: String(r.reason),
+      registeredByStaffId: String(r.registered_by_staff_id),
+      transferredAt: String(r.transferred_at),
+      createdAt: String(r.created_at)
+    };
+  }
+
+  private mapPurchaseInvoiceRow(r: Record<string, unknown>, items: PurchaseInvoiceItem[] = []): PurchaseInvoice {
+    return {
+      id: String(r.id),
+      invoiceNumber: String(r.invoice_number),
+      supplierId: String(r.supplier_id),
+      supplierName: String(r.supplier_name),
+      costCenterId: String(r.cost_center_id),
+      issueDate: String(r.issue_date),
+      totalAmountCents: Number(r.total_amount_cents),
+      status: r.status as PurchaseInvoice['status'],
+      accountsPayableId: r.accounts_payable_id ? String(r.accounts_payable_id) : null,
+      stockMoved: Number(r.stock_moved) === 1,
+      items,
+      notes: r.notes ? String(r.notes) : null,
+      createdAt: String(r.created_at),
+      updatedAt: String(r.updated_at)
+    };
+  }
+
+  private mapPurchaseInvoiceItemRow(r: Record<string, unknown>): PurchaseInvoiceItem {
+    return {
+      id: String(r.id),
+      invoiceId: String(r.invoice_id),
+      productId: String(r.product_id),
+      productName: String(r.product_name),
+      unitOfMeasure: String(r.unit_of_measure || 'UN'),
+      quantity: Number(r.quantity),
+      unitCostCents: Number(r.unit_cost_cents),
+      totalCostCents: Number(r.total_cost_cents)
+    };
+  }
+
+  private mapAccountReconciliationRow(r: Record<string, unknown>): AccountReconciliation {
+    return {
+      id: String(r.id),
+      financialAccountId: String(r.financial_account_id),
+      reconciliationDate: String(r.reconciliation_date),
+      systemCalculatedBalanceCents: Number(r.system_calculated_balance_cents),
+      declaredPhysicalBalanceCents: Number(r.declared_physical_balance_cents),
+      differenceCents: Number(r.difference_cents),
+      adjustmentTransactionId: r.adjustment_transaction_id ? String(r.adjustment_transaction_id) : null,
+      status: r.status as AccountReconciliation['status'],
+      reconciledByStaffId: String(r.reconciled_by_staff_id),
+      notes: r.notes ? String(r.notes) : null,
+      createdAt: String(r.created_at)
+    };
+  }
+
 }

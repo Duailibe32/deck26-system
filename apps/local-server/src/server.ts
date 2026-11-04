@@ -49,7 +49,18 @@ import {
   TablePhysicalStatusSchema,
   UserRole,
   calculateStayFolioTotals,
-  hasPermission
+  hasPermission,
+  // Etapa 6: Delivery e Gestão Financeira
+  AccountsPayableStatus,
+  AccountsReceivableStatus,
+  DeliveryCourierStatus,
+  DeliveryCourierStatusSchema,
+  DeliveryOrderStatus,
+  DeliveryOrderStatusSchema,
+  DeliveryOriginSchema,
+  DeliveryTypeSchema,
+  FinancialAccountTypeSchema,
+  PaymentMethod
 } from '@deck26/contracts';
 import { z } from 'zod';
 import { LocalOperationalStore } from './store.js';
@@ -274,6 +285,17 @@ export async function buildLocalServer(options?: {
     const kdsSlaConfig = store.getKdsSlaConfig();
     const cashierSummary = store.getCashierOperationalSummary();
     const auditLogs = store.listAuditLogs(undefined, 50);
+    const deliveryZones = store.listDeliveryZones(false);
+    const deliveryCouriers = store.listDeliveryCouriers();
+    const deliveryOrders = store.listDeliveryOrders();
+    const deliveryCustomers = store.listDeliveryCustomers();
+    const costCenters = store.listCostCenters();
+    const financialCategories = store.listFinancialCategories();
+    const financialAccounts = store.listFinancialAccounts();
+    const suppliers = store.listSuppliers();
+    const accountsReceivable = store.listAccountsReceivable();
+    const accountsPayable = store.listAccountsPayable();
+    const executiveMetrics = store.getExecutiveDashboardMetrics();
 
     return {
       lanAddresses: getLanIpv4Addresses(),
@@ -296,7 +318,18 @@ export async function buildLocalServer(options?: {
       notifications,
       kdsSlaConfig,
       cashierSummary,
-      auditLogs
+      auditLogs,
+      deliveryZones,
+      deliveryCouriers,
+      deliveryOrders,
+      deliveryCustomers,
+      costCenters,
+      financialCategories,
+      financialAccounts,
+      suppliers,
+      accountsReceivable,
+      accountsPayable,
+      executiveMetrics
     };
   });
 
@@ -2100,6 +2133,607 @@ export async function buildLocalServer(options?: {
         cloudSyncState: lastSyncStatus
       };
     }
+  });
+
+
+  // ============================================================================
+  // ETAPA 6: ROTAS DE DELIVERY PRÓPRIO
+  // ============================================================================
+
+  app.get('/api/delivery/zones', async () => {
+    return store.listDeliveryZones(false);
+  });
+
+  app.post('/api/delivery/zones', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'delivery:manage_orders');
+    if (!session) return;
+    const Schema = z.object({
+      name: z.string().min(1),
+      feeCents: z.number().int().nonnegative(),
+      minimumOrderCents: z.number().int().nonnegative().default(0),
+      estimatedMinutes: z.number().int().positive().default(40),
+      active: z.boolean().default(true)
+    });
+    const parsed = Schema.safeParse(req.body);
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.format() });
+    const zone = store.createDeliveryZone(parsed.data);
+    return reply.status(201).send(zone);
+  });
+
+  app.put<{ Params: { id: string } }>('/api/delivery/zones/:id', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'delivery:manage_orders');
+    if (!session) return;
+    const Schema = z.object({
+      name: z.string().optional(),
+      feeCents: z.number().int().nonnegative().optional(),
+      minimumOrderCents: z.number().int().nonnegative().optional(),
+      estimatedMinutes: z.number().int().positive().optional(),
+      active: z.boolean().optional()
+    });
+    const parsed = Schema.safeParse(req.body);
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.format() });
+    try {
+      const updated = store.updateDeliveryZone(req.params.id, parsed.data);
+      return reply.send(updated);
+    } catch (err) {
+      return reply.status(404).send({ error: (err as Error).message });
+    }
+  });
+
+  app.get<{ Querystring: { status?: DeliveryCourierStatus } }>('/api/delivery/couriers', async (req) => {
+    return store.listDeliveryCouriers(req.query.status);
+  });
+
+  app.post('/api/delivery/couriers', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'delivery:manage_couriers');
+    if (!session) return;
+    const Schema = z.object({
+      name: z.string().min(1),
+      phone: z.string().min(8),
+      vehicleType: z.enum(['MOTO', 'BICICLETA', 'CARRO', 'OUTRO']).default('MOTO'),
+      vehiclePlate: z.string().nullable().optional(),
+      feePerDeliveryCents: z.number().int().nonnegative().default(500),
+      status: DeliveryCourierStatusSchema.default('DISPONIVEL'),
+      active: z.boolean().default(true)
+    });
+    const parsed = Schema.safeParse(req.body);
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.format() });
+    const courier = store.createDeliveryCourier(parsed.data);
+    return reply.status(201).send(courier);
+  });
+
+  app.patch<{ Params: { id: string } }>('/api/delivery/couriers/:id/status', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'delivery:manage_couriers');
+    if (!session) return;
+    const Schema = z.object({ status: DeliveryCourierStatusSchema });
+    const parsed = Schema.safeParse(req.body);
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.format() });
+    try {
+      const updated = store.updateDeliveryCourierStatus(req.params.id, parsed.data.status);
+      return reply.send(updated);
+    } catch (err) {
+      return reply.status(404).send({ error: (err as Error).message });
+    }
+  });
+
+  app.put<{ Params: { id: string } }>('/api/delivery/couriers/:id', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'delivery:manage_couriers');
+    if (!session) return;
+    const Schema = z.object({
+      name: z.string().optional(),
+      phone: z.string().optional(),
+      vehicleType: z.enum(['MOTO', 'BICICLETA', 'CARRO', 'OUTRO']).optional(),
+      vehiclePlate: z.string().nullable().optional(),
+      feePerDeliveryCents: z.number().int().nonnegative().optional(),
+      status: DeliveryCourierStatusSchema.optional(),
+      active: z.boolean().optional()
+    });
+    const parsed = Schema.safeParse(req.body);
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.format() });
+    try {
+      const updated = store.updateDeliveryCourier(req.params.id, parsed.data);
+      return reply.send(updated);
+    } catch (err) {
+      return reply.status(404).send({ error: (err as Error).message });
+    }
+  });
+
+  app.get<{ Querystring: { search?: string } }>('/api/delivery/customers', async (req) => {
+    return store.listDeliveryCustomers(req.query.search);
+  });
+
+  app.post('/api/delivery/customers', async (req, reply) => {
+    const Schema = z.object({
+      name: z.string().min(1),
+      phone: z.string().min(8),
+      document: z.string().nullable().optional(),
+      email: z.string().nullable().optional(),
+      notes: z.string().nullable().optional()
+    });
+    const parsed = Schema.safeParse(req.body);
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.format() });
+    const customer = store.createOrUpdateDeliveryCustomer(parsed.data);
+    return reply.status(201).send(customer);
+  });
+
+  app.post<{ Params: { id: string } }>('/api/delivery/customers/:id/addresses', async (req, reply) => {
+    const Schema = z.object({
+      street: z.string().min(1),
+      number: z.string().min(1),
+      complement: z.string().nullable().optional(),
+      neighborhood: z.string().min(1),
+      city: z.string().default('Santa Inês'),
+      reference: z.string().nullable().optional(),
+      deliveryZoneId: z.string().nullable().optional(),
+      isDefault: z.boolean().default(false)
+    });
+    const parsed = Schema.safeParse(req.body);
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.format() });
+    try {
+      const addr = store.addDeliveryAddress(req.params.id, parsed.data);
+      return reply.status(201).send(addr);
+    } catch (err) {
+      return reply.status(404).send({ error: (err as Error).message });
+    }
+  });
+
+  app.get<{ Querystring: { status?: DeliveryOrderStatus; courierId?: string; customerId?: string; date?: string } }>(
+    '/api/delivery/orders',
+    async (req) => store.listDeliveryOrders(req.query)
+  );
+
+  app.get<{ Params: { id: string } }>('/api/delivery/orders/:id', async (req, reply) => {
+    const order = store.getDeliveryOrderById(req.params.id);
+    if (!order) return reply.status(404).send({ error: `Pedido '${req.params.id}' não encontrado.` });
+    return reply.send(order);
+  });
+
+  app.post('/api/delivery/orders', async (req, reply) => {
+    const Schema = z.object({
+      customerId: z.string().optional(),
+      customerName: z.string().min(1),
+      customerPhone: z.string().min(8),
+      customerDocument: z.string().optional(),
+      customerEmail: z.string().optional(),
+      deliveryType: DeliveryTypeSchema,
+      origin: DeliveryOriginSchema,
+      deliveryAddress: z.object({
+        street: z.string().min(1),
+        number: z.string().min(1),
+        complement: z.string().nullable().optional(),
+        neighborhood: z.string().min(1),
+        city: z.string().default('Santa Inês'),
+        reference: z.string().nullable().optional(),
+        deliveryZoneId: z.string().nullable().optional(),
+        isDefault: z.boolean().default(false)
+      }).optional(),
+      deliveryZoneId: z.string().optional(),
+      items: z.array(z.object({
+        productId: z.string().min(1),
+        quantity: z.number().int().positive(),
+        notes: z.string().optional(),
+        modifiers: z.array(z.object({
+          groupId: z.string(),
+          groupName: z.string(),
+          optionId: z.string(),
+          optionName: z.string(),
+          priceDeltaCents: z.number().int().optional()
+        })).optional()
+      })).min(1),
+      paymentMethodDeclared: PaymentMethodSchema,
+      changeForCents: z.number().int().nullable().optional(),
+      notes: z.string().optional(),
+      courierId: z.string().optional()
+    });
+
+    const parsed = Schema.safeParse(req.body);
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.format() });
+
+    const session = resolveSession(req);
+    try {
+      const result = store.createDeliveryOrder({
+        ...parsed.data,
+        waiterId: session?.userId ?? 'usr-cashier-01'
+      });
+      return reply.status(201).send(result);
+    } catch (err) {
+      return reply.status(400).send({ error: (err as Error).message });
+    }
+  });
+
+  app.patch<{ Params: { id: string } }>('/api/delivery/orders/:id/status', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'delivery:manage_orders');
+    if (!session) return;
+    const Schema = z.object({
+      status: DeliveryOrderStatusSchema,
+      reason: z.string().optional()
+    });
+    const parsed = Schema.safeParse(req.body);
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.format() });
+    try {
+      const updated = store.updateDeliveryOrderStatus(req.params.id, parsed.data.status, session.userId, parsed.data.reason);
+      return reply.send(updated);
+    } catch (err) {
+      return reply.status(400).send({ error: (err as Error).message });
+    }
+  });
+
+  app.post<{ Params: { id: string } }>('/api/delivery/orders/:id/dispatch', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'delivery:manage_orders');
+    if (!session) return;
+    const Schema = z.object({ courierId: z.string().min(1) });
+    const parsed = Schema.safeParse(req.body);
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.format() });
+    try {
+      const updated = store.dispatchDeliveryOrder(req.params.id, parsed.data.courierId, session.userId);
+      return reply.send(updated);
+    } catch (err) {
+      return reply.status(400).send({ error: (err as Error).message });
+    }
+  });
+
+  app.post<{ Params: { id: string } }>('/api/delivery/orders/:id/deliver', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'delivery:manage_orders');
+    if (!session) return;
+    try {
+      const updated = store.updateDeliveryOrderStatus(req.params.id, 'ENTREGUE', session.userId);
+      return reply.send(updated);
+    } catch (err) {
+      return reply.status(400).send({ error: (err as Error).message });
+    }
+  });
+
+  app.post<{ Params: { id: string } }>('/api/delivery/orders/:id/cancel', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'delivery:manage_orders');
+    if (!session) return;
+    const Schema = z.object({ reason: z.string().min(1) });
+    const parsed = Schema.safeParse(req.body);
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.format() });
+    try {
+      const updated = store.updateDeliveryOrderStatus(req.params.id, 'CANCELADO', session.userId, parsed.data.reason);
+      return reply.send(updated);
+    } catch (err) {
+      return reply.status(400).send({ error: (err as Error).message });
+    }
+  });
+
+  app.get<{ Querystring: { courierId?: string } }>('/api/delivery/settlements', async (req) => {
+    return store.listDeliverySettlements(req.query.courierId);
+  });
+
+  app.post('/api/delivery/settlements', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'delivery:settle');
+    if (!session) return;
+    const Schema = z.object({
+      courierId: z.string().min(1),
+      financialAccountId: z.string().default('acc-caixa-geral'),
+      deliveryOrderIds: z.array(z.string()).min(1),
+      shiftId: z.string().optional(),
+      notes: z.string().optional()
+    });
+    const parsed = Schema.safeParse(req.body);
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.format() });
+    try {
+      const settlement = store.settleCourierDeliveries({
+        ...parsed.data,
+        actorUserId: session.userId
+      });
+      return reply.status(201).send(settlement);
+    } catch (err) {
+      return reply.status(400).send({ error: (err as Error).message });
+    }
+  });
+
+  // ============================================================================
+  // ETAPA 6: ROTAS DE GESTÃO FINANCEIRA, CONTAS E TESOURARIA
+  // ============================================================================
+
+  app.get('/api/finance/cost-centers', async () => store.listCostCenters());
+  app.get('/api/finance/categories', async () => store.listFinancialCategories());
+  app.get('/api/finance/accounts', async () => store.listFinancialAccounts());
+
+  app.post('/api/finance/accounts', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'finance:manage_accounts');
+    if (!session) return;
+    const Schema = z.object({
+      name: z.string().min(1),
+      type: FinancialAccountTypeSchema,
+      bankName: z.string().nullable().optional(),
+      accountNumber: z.string().nullable().optional(),
+      pixKey: z.string().nullable().optional(),
+      initialBalanceCents: z.number().int().default(0),
+      active: z.boolean().default(true)
+    });
+    const parsed = Schema.safeParse(req.body);
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.format() });
+    const acc = store.createFinancialAccount({ ...parsed.data, currentBalanceCents: parsed.data.initialBalanceCents });
+    return reply.status(201).send(acc);
+  });
+
+  app.put<{ Params: { id: string } }>('/api/finance/accounts/:id', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'finance:manage_accounts');
+    if (!session) return;
+    const Schema = z.object({
+      name: z.string().optional(),
+      type: FinancialAccountTypeSchema.optional(),
+      bankName: z.string().nullable().optional(),
+      accountNumber: z.string().nullable().optional(),
+      pixKey: z.string().nullable().optional(),
+      active: z.boolean().optional()
+    });
+    const parsed = Schema.safeParse(req.body);
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.format() });
+    try {
+      const updated = store.updateFinancialAccount(req.params.id, parsed.data);
+      return reply.send(updated);
+    } catch (err) {
+      return reply.status(404).send({ error: (err as Error).message });
+    }
+  });
+
+  app.get('/api/finance/suppliers', async () => store.listSuppliers());
+
+  app.post('/api/finance/suppliers', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'finance:manage_suppliers');
+    if (!session) return;
+    const Schema = z.object({
+      name: z.string().min(1),
+      tradeName: z.string().nullable().optional(),
+      document: z.string().nullable().optional(),
+      email: z.string().nullable().optional(),
+      phone: z.string().nullable().optional(),
+      contactPerson: z.string().nullable().optional(),
+      category: z.string().nullable().optional(),
+      active: z.boolean().default(true)
+    });
+    const parsed = Schema.safeParse(req.body);
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.format() });
+    const sup = store.createSupplier(parsed.data);
+    return reply.status(201).send(sup);
+  });
+
+  app.put<{ Params: { id: string } }>('/api/finance/suppliers/:id', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'finance:manage_suppliers');
+    if (!session) return;
+    const Schema = z.object({
+      name: z.string().optional(),
+      tradeName: z.string().nullable().optional(),
+      document: z.string().nullable().optional(),
+      email: z.string().nullable().optional(),
+      phone: z.string().nullable().optional(),
+      contactPerson: z.string().nullable().optional(),
+      category: z.string().nullable().optional(),
+      active: z.boolean().optional()
+    });
+    const parsed = Schema.safeParse(req.body);
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.format() });
+    try {
+      const updated = store.updateSupplier(req.params.id, parsed.data);
+      return reply.send(updated);
+    } catch (err) {
+      return reply.status(404).send({ error: (err as Error).message });
+    }
+  });
+
+  app.get<{ Querystring: { status?: AccountsReceivableStatus; costCenterId?: string; startDate?: string; endDate?: string } }>(
+    '/api/finance/receivables',
+    async (req) => store.listAccountsReceivable(req.query)
+  );
+
+  app.post('/api/finance/receivables', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'finance:manage_receivables');
+    if (!session) return;
+    const Schema = z.object({
+      description: z.string().min(1),
+      origin: z.enum(['TAB', 'DELIVERY', 'HOTEL_FOLIO', 'DIRECT_SALE', 'MANUAL']).default('MANUAL'),
+      originReferenceId: z.string().optional(),
+      costCenterId: z.string().min(1),
+      categoryId: z.string().min(1),
+      totalAmountCents: z.number().int().positive(),
+      accrualDate: z.string(),
+      dueDate: z.string(),
+      status: z.enum(['PENDING', 'PARTIALLY_PAID', 'PAID', 'CANCELED']).default('PENDING'),
+      customerName: z.string().optional(),
+      notes: z.string().optional()
+    });
+    const parsed = Schema.safeParse(req.body);
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.format() });
+    const ar = store.createAccountReceivable(parsed.data);
+    return reply.status(201).send(ar);
+  });
+
+  app.post<{ Params: { id: string } }>('/api/finance/receivables/:id/pay', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'finance:manage_receivables');
+    if (!session) return;
+    const Schema = z.object({
+      amountCents: z.number().int().positive(),
+      financialAccountId: z.string().min(1),
+      paymentMethod: PaymentMethodSchema,
+      settlementDate: z.string().optional(),
+      notes: z.string().optional()
+    });
+    const parsed = Schema.safeParse(req.body);
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.format() });
+    try {
+      const result = store.payAccountReceivable(req.params.id, {
+        ...parsed.data,
+        actorUserId: session.userId
+      });
+      return reply.send(result);
+    } catch (err) {
+      return reply.status(400).send({ error: (err as Error).message });
+    }
+  });
+
+  app.get<{ Querystring: { status?: AccountsPayableStatus; costCenterId?: string; supplierId?: string; startDate?: string; endDate?: string } }>(
+    '/api/finance/payables',
+    async (req) => store.listAccountsPayable(req.query)
+  );
+
+  app.post('/api/finance/payables', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'finance:manage_payables');
+    if (!session) return;
+    const Schema = z.object({
+      description: z.string().min(1),
+      origin: z.enum(['PURCHASE_INVOICE', 'OPERATIONAL_EXPENSE', 'PAYROLL', 'MAINTENANCE', 'UTILITY', 'MANUAL']).default('MANUAL'),
+      originReferenceId: z.string().optional(),
+      supplierId: z.string().optional(),
+      supplierName: z.string().optional(),
+      costCenterId: z.string().min(1),
+      categoryId: z.string().min(1),
+      totalAmountCents: z.number().int().positive(),
+      accrualDate: z.string(),
+      dueDate: z.string(),
+      status: z.enum(['PENDING', 'PARTIALLY_PAID', 'PAID', 'CANCELED']).default('PENDING'),
+      invoiceNumber: z.string().optional(),
+      barcode: z.string().optional(),
+      notes: z.string().optional()
+    });
+    const parsed = Schema.safeParse(req.body);
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.format() });
+    const ap = store.createAccountPayable(parsed.data);
+    return reply.status(201).send(ap);
+  });
+
+  app.post<{ Params: { id: string } }>('/api/finance/payables/:id/pay', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'finance:manage_payables');
+    if (!session) return;
+    const Schema = z.object({
+      amountCents: z.number().int().positive(),
+      financialAccountId: z.string().min(1),
+      paymentMethod: PaymentMethodSchema,
+      settlementDate: z.string().optional(),
+      notes: z.string().optional()
+    });
+    const parsed = Schema.safeParse(req.body);
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.format() });
+    try {
+      const result = store.payAccountPayable(req.params.id, {
+        ...parsed.data,
+        actorUserId: session.userId
+      });
+      return reply.send(result);
+    } catch (err) {
+      return reply.status(400).send({ error: (err as Error).message });
+    }
+  });
+
+  app.get<{ Querystring: { financialAccountId?: string; startDate?: string; endDate?: string } }>(
+    '/api/finance/transactions',
+    async (req) => store.listFinancialTransactions(req.query)
+  );
+
+  app.post('/api/finance/transfers', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'finance:transfers');
+    if (!session) return;
+    const Schema = z.object({
+      fromAccountId: z.string().min(1),
+      toAccountId: z.string().min(1),
+      amountCents: z.number().int().positive(),
+      reason: z.string().min(1)
+    });
+    const parsed = Schema.safeParse(req.body);
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.format() });
+    try {
+      const result = store.createFinancialTransfer({
+        ...parsed.data,
+        actorUserId: session.userId
+      });
+      return reply.status(201).send(result);
+    } catch (err) {
+      return reply.status(400).send({ error: (err as Error).message });
+    }
+  });
+
+  app.get('/api/finance/transfers', async () => store.listFinancialTransfers());
+
+  app.get('/api/finance/purchases', async () => store.listPurchaseInvoices());
+
+  app.post('/api/finance/purchases', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'finance:manage_suppliers');
+    if (!session) return;
+    const Schema = z.object({
+      invoiceNumber: z.string().min(1),
+      supplierId: z.string().min(1),
+      costCenterId: z.string().min(1),
+      issueDate: z.string(),
+      dueDate: z.string().optional(),
+      items: z.array(z.object({
+        productId: z.string().min(1),
+        quantity: z.number().positive(),
+        unitCostCents: z.number().int().nonnegative(),
+        unitOfMeasure: z.string().optional()
+      })).min(1),
+      notes: z.string().optional()
+    });
+    const parsed = Schema.safeParse(req.body);
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.format() });
+    try {
+      const result = store.createPurchaseInvoice({
+        ...parsed.data,
+        actorUserId: session.userId
+      });
+      return reply.status(201).send(result);
+    } catch (err) {
+      return reply.status(400).send({ error: (err as Error).message });
+    }
+  });
+
+  app.post('/api/finance/reconcile', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'finance:reconcile');
+    if (!session) return;
+    const Schema = z.object({
+      financialAccountId: z.string().min(1),
+      reconciliationDate: z.string(),
+      declaredPhysicalBalanceCents: z.number().int(),
+      adjustBalance: z.boolean().default(false),
+      notes: z.string().optional()
+    });
+    const parsed = Schema.safeParse(req.body);
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.format() });
+    try {
+      const result = store.reconcileFinancialAccount({
+        ...parsed.data,
+        actorUserId: session.userId
+      });
+      return reply.status(201).send(result);
+    } catch (err) {
+      return reply.status(400).send({ error: (err as Error).message });
+    }
+  });
+
+  app.get<{ Querystring: { financialAccountId?: string } }>('/api/finance/reconciliations', async (req) => {
+    return store.listAccountReconciliations(req.query.financialAccountId);
+  });
+
+  app.get<{ Querystring: { startDate?: string; endDate?: string; costCenterId?: string } }>('/api/finance/dre', async (req) => {
+    const start = req.query.startDate || new Date().toISOString().slice(0, 7) + '-01';
+    const end = req.query.endDate || new Date().toISOString().slice(0, 10);
+    return store.generateDreStatement({ startDate: start, endDate: end, costCenterId: req.query.costCenterId });
+  });
+
+  app.get<{ Querystring: { startDate?: string; endDate?: string; accountId?: string } }>('/api/finance/cash-flow/realized', async (req) => {
+    const start = req.query.startDate || new Date().toISOString().slice(0, 7) + '-01';
+    const end = req.query.endDate || new Date().toISOString().slice(0, 10);
+    return store.generateCashFlowRealized({ startDate: start, endDate: end, accountId: req.query.accountId });
+  });
+
+  app.get<{ Querystring: { startDate?: string; endDate?: string } }>('/api/finance/cash-flow/projected', async (req) => {
+    const start = req.query.startDate || new Date().toISOString().slice(0, 10);
+    const end = req.query.endDate || new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
+    return store.generateCashFlowProjected({ startDate: start, endDate: end });
+  });
+
+  app.get('/api/finance/dashboard', async () => store.getExecutiveDashboardMetrics());
+
+  app.get<{ Querystring: { type: string; startDate?: string; endDate?: string } }>('/api/finance/export/csv', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'finance:export_reports');
+    if (!session) return;
+    const reportType = (req.query.type || 'sales') as any;
+    const csvData = store.exportReportCsv(reportType, req.query as Record<string, string>);
+    reply.header('Content-Type', 'text/csv; charset=utf-8');
+    reply.header('Content-Disposition', `attachment; filename="deck26_${reportType}_${new Date().toISOString().slice(0, 10)}.csv"`);
+    return reply.send(csvData);
   });
 
   return {

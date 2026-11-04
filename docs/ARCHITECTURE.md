@@ -104,3 +104,33 @@ Essa separação impede que um quarto marcado como `SUJO` seja erroneamente libe
   - Estadia é marcada como `CHECKED_OUT`.
   - Quarto passa para ocupação `LIVRE`.
   - Quarto passa para governança `SUJO` (obrigando passagem pela equipe de limpeza).
+
+---
+
+## 5. Arquitetura de Delivery Próprio, Gestão Financeira e DRE (Etapa 6)
+
+A Etapa 6 expandiu o DECK 26 com módulos essenciais de delivery próprio e inteligência contábil-financeira:
+
+### 5.1 Motor de Delivery Próprio & Despacho
+- **Zonas de Entrega (`delivery_zones`)**: Taxas fixas em centavos inteiros (`feeCents`) e tempo estimado por bairro, eliminando APIs externas pagas de mapas.
+- **Ciclo Transacional do Pedido (`delivery_orders`)**: `NOVO` -> `CONFIRMADO` -> `EM_PREPARO` -> `PRONTO` -> `SAIU_PARA_ENTREGA` -> `ENTREGUE` (ou `CANCELADO`).
+- **Recálculo Seguro**: O servidor recalcula subtotal de itens, taxa de entrega por bairro e total (`totalCents`), sem confiar em valores submetidos pelo cliente.
+- **Despacho e Custódia (`delivery_settlements`)**: Entregadores vinculados a pedidos recebem dinheiro em espécie na entrega. O fechamento de turno do motoboy realiza a transferência auditada de custódia para o Caixa Geral, pagando as taxas de entrega devidas e emitindo o termo de liquidação.
+
+### 5.2 Gestão Financeira Integrada & Tesouraria Multi-Contas
+- **Plano de Contas Gerencial (`financial_categories`)**: Categorias estruturadas por natureza contábil (`REVENUE`, `DEDUCTION`, `COST_DIRECT`, `EXPENSE_OP`, `FINANCIAL_RESULT`).
+- **Centros de Custo (`cost_centers`)**: `REST` (Restaurante), `BAR` (Bar e Conveniência), `DELIV` (Delivery Próprio), `HOTEL` (Hotel Auto Posto Milla), `ADMIN` (Administração Geral).
+- **Contas Financeiras (`financial_accounts`)**: Caixas físicos (`CASH_DRAWER`, `SAFE_DEPOSIT`), contas bancárias (`BANK_ACCOUNT`), carteiras digitais/chaves PIX (`PIX_KEY`) e custódia temporária (`COURIER_WALLET`).
+- **Transferências Internas (`financial_transfers`)**: Sangrias de segurança do PDV para o cofre ou depósitos bancários com duplo lançamento débito/crédito.
+- **Conciliação Manual (`account_reconciliations`)**: Confronto do saldo contábil com o extrato real ou conferência física de numerário.
+
+### 5.3 Invariantes Contábeis Rigorosas no DRE Gerencial
+O Demonstrativo do Resultado do Exercício por Competência respeita três invariantes contábeis absolutas:
+1. **Sem Duplicidade de Receita por `ROOM_CHARGE`**: O consumo de restaurante/bar faturado para apartamento do hotel é reconhecido por competência na origem e deduzido das diárias hoteleiras no DRE, impedindo dupla contagem.
+2. **Ativo Circulante vs Despesa (Estoque & Kardex)**: Notas fiscais de compra (`purchase_invoices`) creditam contas a pagar e debitam o estoque Kardex como ativo circulante; o CMV (Custo das Mercadorias Vendidas) ocorre estritamente na venda ou consumo por ficha técnica.
+3. **Movimentações de Custódia**: Prestação de contas de motoboys, sangrias e transferências de saldo são movimentações de custódia e não afetam receitas nem despesas no DRE.
+
+### 5.4 Exportação CSV Blindada contra Formula Injection
+Todos os endpoints de exportação utilizam `sanitizeCsvCell()`:
+- Qualquer valor que inicie com `=`, `+`, `-`, `@`, `\t` ou `\r` é neutralizado com prefixo de apóstrofo (`'`) e envolvido em aspas duplas escapadas (`""`).
+- Garante total segurança para abertura dos relatórios no Excel, LibreOffice Calc e Google Planilhas.

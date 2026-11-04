@@ -12,7 +12,7 @@ npm run typecheck
 
 ---
 
-## 2. Cobertura Atual (71 Testes Aprovados com 100% de Sucesso)
+## 2. Cobertura Atual (95 Testes Aprovados com 100% de Sucesso)
 
 ### `packages/contracts/src/contracts.test.ts` (5 testes de unidade)
 - Cálculo exato de totais de comanda em centavos inteiros (sem erro de ponto flutuante).
@@ -53,3 +53,31 @@ npm run typecheck
   - RBAC hoteleiro (`hotel:*`) e eventos no outbox de sincronização offline.
 - **Teste de Ponta a Ponta Operacional Hoteleiro (20 passos)**:
   - Ciclo completo e auditado: cadastro de hóspede -> reserva futura com sinal -> check-in com diária -> consumo de restaurante transferido via `ROOM_CHARGE` -> consumo de frigobar -> serviço de lavanderia -> auditoria de extrato do folio -> bloqueio de check-out por saldo pendente -> quitação total via PIX -> check-out bem-sucedido -> transição para `SUJO` -> limpeza aprovada -> chamado de manutenção com interdição -> resolução e liberação final do apartamento.
+
+### `apps/local-server/src/stage6.test.ts` (24 testes — Delivery Próprio, Finanças, DRE e E2E)
+- **1. Segurança, Formula Injection e RBAC**:
+  - `sanitizeCsvCell` neutraliza injeções (`=`, `+`, `-`, `@`, `\t`, `\r`) com apóstrofo e aspas.
+  - Validação estrita de permissões `delivery:*` e `finance:*` por perfil de usuário.
+- **2. Motor de Delivery Próprio & Zonas de Entrega**:
+  - Taxas fixas por bairro e tempo estimado sem chamadas a APIs pagas.
+  - Recálculo seguro no servidor de itens, taxas e descontos.
+  - Ciclo de status (`NOVO` -> `CONFIRMADO` -> `EM_PREPARO` -> `PRONTO` -> `SAIU_PARA_ENTREGA` -> `ENTREGUE`).
+  - Cancelamento operacional com estorno de estoque no Kardex.
+- **3. Despacho & Prestação de Contas (Liquidação de Motoboys)**:
+  - Vinculação de entregador com trava de disponibilidade e cálculo de taxa por entrega.
+  - Liquidação de pedidos em dinheiro com transferência auditada de custódia para o Caixa Geral.
+- **4. Gestão Financeira Integrada & Tesouraria Multi-Contas**:
+  - Plano de contas gerencial (`REVENUE`, `DEDUCTION`, `COST_DIRECT`, `EXPENSE_OP`, `FINANCIAL_RESULT`).
+  - Centros de custo (`REST`, `BAR`, `DELIV`, `HOTEL`, `ADMIN`) e contas financeiras.
+  - Contas a pagar e receber com liquidação multi-meio e crédito/débito em contas.
+  - Registro de compras com Nota Fiscal: entrada no estoque Kardex e geração de obrigação no Contas a Pagar.
+  - Transferências internas entre contas (sangrias, suprimentos, depósitos).
+  - Conciliação manual de contas com apuração de divergências.
+- **5. DRE Gerencial por Competência & Invariantes Contábeis**:
+  - Invariante 1: Transferência de comanda para quarto (`ROOM_CHARGE`) não duplica receita.
+  - Invariante 2: Compra de estoque entra como ativo circulante no Kardex e não gera despesa operacional imediata no DRE; CMV ocorre exclusivamente no consumo real por ficha técnica ou venda.
+  - Invariante 3: Prestação de contas de motoboys e transferências entre contas são movimentações de custódia e não alteram o DRE.
+  - Fluxo de caixa realizado (entradas/saídas por meio de pagamento) e previsto (projeção diária por vencimento).
+  - Exportações CSV seguras de DRE, Vendas, Contas a Pagar e Contas a Receber.
+- **6. Teste Ponta a Ponta Operacional Integrado (28 Passos)**:
+  - Jornada completa do estabelecimento: abertura de turno de caixa -> cadastro de fornecedor de alimentos -> compra faturada de 100 caldos com entrada no Kardex -> abertura de mesa no salão com pedido de 2 caldos -> avanço na cozinha -> cadastro de cliente delivery -> pedido delivery em dinheiro -> avanço e despacho com motoboy -> entrega e recebimento do dinheiro -> prestação de contas com custódia no caixa -> check-in de hóspede no Hotel Milla -> transferência de comanda do salão para o folio do quarto (`ROOM_CHARGE`) -> serviço de lavanderia no quarto -> check-out com quitação total via PIX -> pagamento de fatura do fornecedor com débito em conta bancária -> sangria do caixa para o cofre -> conciliação de caixa -> apuração final do DRE gerencial com validação de receita bruta, CMV, lucro bruto, despesas operacionais e lucro líquido -> validação do fluxo de caixa realizado -> verificação do painel executivo -> exportação do DRE em CSV sanitizado -> fechamento do turno de caixa com conferência cega.

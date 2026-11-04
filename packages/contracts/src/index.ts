@@ -73,7 +73,20 @@ export const PermissionSchema = z.enum([
   'admin:configure',
   'printers:manage',
   'fiscal:configure',
-  'sync:manage'
+  'sync:manage',
+  // Etapa 6: Delivery e Gestão Financeira Avançada
+  'delivery:manage_orders',
+  'delivery:manage_couriers',
+  'delivery:settle',
+  'finance:view_overview',
+  'finance:manage_receivables',
+  'finance:manage_payables',
+  'finance:manage_accounts',
+  'finance:transfers',
+  'finance:reconcile',
+  'finance:view_dre',
+  'finance:manage_suppliers',
+  'finance:export_reports'
 ]);
 export type Permission = z.infer<typeof PermissionSchema>;
 
@@ -86,7 +99,11 @@ export const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     'hotel:manage_rates', 'hotel:checkin_checkout', 'hotel:post_charges',
     'hotel:housekeeping', 'hotel:maintenance', 'hotel:view_pii', 'hotel:reports',
     'finance:view_and_manage', 'reports:view', 'staff:manage',
-    'admin:configure', 'printers:manage', 'fiscal:configure', 'sync:manage'
+    'admin:configure', 'printers:manage', 'fiscal:configure', 'sync:manage',
+    'delivery:manage_orders', 'delivery:manage_couriers', 'delivery:settle',
+    'finance:view_overview', 'finance:manage_receivables', 'finance:manage_payables',
+    'finance:manage_accounts', 'finance:transfers', 'finance:reconcile',
+    'finance:view_dre', 'finance:manage_suppliers', 'finance:export_reports'
   ],
   MANAGER: [
     'dashboard:view', 'pos:operate', 'pos:open_close_register', 'tabs:manage',
@@ -96,12 +113,18 @@ export const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     'hotel:manage_rates', 'hotel:checkin_checkout', 'hotel:post_charges',
     'hotel:housekeeping', 'hotel:maintenance', 'hotel:view_pii', 'hotel:reports',
     'finance:view_and_manage', 'reports:view', 'staff:manage',
-    'printers:manage', 'sync:manage'
+    'printers:manage', 'sync:manage',
+    'delivery:manage_orders', 'delivery:manage_couriers', 'delivery:settle',
+    'finance:view_overview', 'finance:manage_receivables', 'finance:manage_payables',
+    'finance:manage_accounts', 'finance:transfers', 'finance:reconcile',
+    'finance:view_dre', 'finance:manage_suppliers', 'finance:export_reports'
   ],
   CASHIER: [
     'dashboard:view', 'pos:operate', 'pos:open_close_register',
     'tabs:manage', 'orders:create', 'printers:manage',
-    'hotel:post_charges', 'hotel:checkin_checkout'
+    'hotel:post_charges', 'hotel:checkin_checkout',
+    'delivery:manage_orders', 'delivery:settle',
+    'finance:view_overview', 'finance:manage_receivables'
   ],
   WAITER: [
     'tabs:manage', 'orders:create'
@@ -116,7 +139,7 @@ export const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     'hotel:housekeeping', 'hotel:maintenance', 'hotel:view_pii', 'hotel:reports'
   ],
   STOCK_CLERK: [
-    'catalog:manage', 'stock:adjust'
+    'catalog:manage', 'stock:adjust', 'finance:manage_suppliers'
   ]
 };
 
@@ -1307,7 +1330,23 @@ export const SyncEntityTypeSchema = z.enum([
   'HOTEL_MINIBAR',
   'HOTEL_SERVICE',
   'HOTEL_MAINTENANCE',
-  'FISCAL_CONFIG'
+  'FISCAL_CONFIG',
+  // Etapa 6: Delivery e Gestão Financeira
+  'DELIVERY_ORDER',
+  'DELIVERY_CUSTOMER',
+  'DELIVERY_COURIER',
+  'DELIVERY_ZONE',
+  'DELIVERY_SETTLEMENT',
+  'FINANCIAL_CATEGORY',
+  'COST_CENTER',
+  'FINANCIAL_ACCOUNT',
+  'ACCOUNTS_RECEIVABLE',
+  'ACCOUNTS_PAYABLE',
+  'FINANCIAL_TRANSACTION',
+  'FINANCIAL_TRANSFER',
+  'SUPPLIER',
+  'PURCHASE_INVOICE',
+  'ACCOUNT_RECONCILIATION'
 ]);
 export type SyncEntityType = z.infer<typeof SyncEntityTypeSchema>;
 
@@ -2098,3 +2137,613 @@ export function buildEscPosProductionTicket(
   lines.push('================================================\n\n');
   return lines.join('\n');
 }
+
+
+// ============================================================================
+// 12. ETAPA 6 — DELIVERY PRÓPRIO COMPLETO
+// ============================================================================
+
+export const DeliveryOrderStatusSchema = z.enum([
+  'NOVO',
+  'AGUARDANDO_CONFIRMACAO',
+  'CONFIRMADO',
+  'EM_PREPARO',
+  'PRONTO',
+  'AGUARDANDO_ENTREGADOR',
+  'SAIU_PARA_ENTREGA',
+  'ENTREGUE',
+  'CANCELADO'
+]);
+export type DeliveryOrderStatus = z.infer<typeof DeliveryOrderStatusSchema>;
+
+export const DeliveryTypeSchema = z.enum(['DELIVERY', 'TAKEOUT']);
+export type DeliveryType = z.infer<typeof DeliveryTypeSchema>;
+
+export const DeliveryOriginSchema = z.enum([
+  'SITE_WEB',
+  'PHONE',
+  'WHATSAPP_MANUAL',
+  'COUNTER'
+]);
+export type DeliveryOrigin = z.infer<typeof DeliveryOriginSchema>;
+
+export const DeliveryCourierStatusSchema = z.enum([
+  'DISPONIVEL',
+  'EM_ENTREGA',
+  'INDISPONIVEL'
+]);
+export type DeliveryCourierStatus = z.infer<typeof DeliveryCourierStatusSchema>;
+
+export const DeliveryZoneSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  feeCents: z.number().int().nonnegative(),
+  minimumOrderCents: z.number().int().nonnegative().default(0),
+  estimatedMinutes: z.number().int().positive().default(40),
+  active: z.boolean().default(true)
+});
+export type DeliveryZone = z.infer<typeof DeliveryZoneSchema>;
+
+export const DeliveryCourierSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  phone: z.string().min(1),
+  vehicleType: z.enum(['MOTO', 'BICICLETA', 'CARRO', 'OUTRO']).default('MOTO'),
+  vehiclePlate: z.string().nullable().optional(),
+  feePerDeliveryCents: z.number().int().nonnegative().default(500),
+  status: DeliveryCourierStatusSchema.default('DISPONIVEL'),
+  active: z.boolean().default(true)
+});
+export type DeliveryCourier = z.infer<typeof DeliveryCourierSchema>;
+
+export const DeliveryAddressSchema = z.object({
+  id: z.string().min(1),
+  customerId: z.string().min(1),
+  street: z.string().min(1),
+  number: z.string().min(1),
+  complement: z.string().nullable().optional(),
+  neighborhood: z.string().min(1),
+  city: z.string().default('Santa Inês'),
+  reference: z.string().nullable().optional(),
+  deliveryZoneId: z.string().nullable().optional(),
+  isDefault: z.boolean().default(false)
+});
+export type DeliveryAddress = z.infer<typeof DeliveryAddressSchema>;
+
+export const DeliveryCustomerSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  phone: z.string().min(8),
+  document: z.string().nullable().optional(),
+  email: z.string().nullable().optional(),
+  addresses: z.array(DeliveryAddressSchema).default([]),
+  notes: z.string().nullable().optional(),
+  totalOrders: z.number().int().nonnegative().default(0),
+  createdAt: z.string(),
+  updatedAt: z.string()
+});
+export type DeliveryCustomer = z.infer<typeof DeliveryCustomerSchema>;
+
+export const DeliveryOrderSchema = z.object({
+  id: z.string().min(1),
+  orderNumber: z.number().int().positive(),
+  orderId: z.string().min(1),
+  customerId: z.string().min(1),
+  customerName: z.string().min(1),
+  customerPhone: z.string().min(1),
+  deliveryType: DeliveryTypeSchema,
+  origin: DeliveryOriginSchema,
+  status: DeliveryOrderStatusSchema,
+  deliveryAddress: DeliveryAddressSchema.nullable().optional(),
+  deliveryZoneId: z.string().nullable().optional(),
+  deliveryFeeCents: z.number().int().nonnegative().default(0),
+  itemsSubtotalCents: z.number().int().nonnegative(),
+  discountCents: z.number().int().nonnegative().default(0),
+  totalCents: z.number().int().nonnegative(),
+  paymentMethodDeclared: PaymentMethodSchema,
+  paymentStatus: z.enum(['PENDING', 'PAID', 'REFUNDED']).default('PENDING'),
+  changeForCents: z.number().int().nullable().optional(),
+  courierId: z.string().nullable().optional(),
+  courierName: z.string().nullable().optional(),
+  courierFeeCents: z.number().int().nonnegative().default(0),
+  estimatedDeliveryAt: z.string().nullable().optional(),
+  dispatchedAt: z.string().nullable().optional(),
+  deliveredAt: z.string().nullable().optional(),
+  canceledAt: z.string().nullable().optional(),
+  cancelReason: z.string().nullable().optional(),
+  settlementId: z.string().nullable().optional(),
+  notes: z.string().nullable().optional(),
+  createdAt: z.string(),
+  updatedAt: z.string()
+});
+export type DeliveryOrder = z.infer<typeof DeliveryOrderSchema>;
+
+export const DeliverySettlementSchema = z.object({
+  id: z.string().min(1),
+  courierId: z.string().min(1),
+  courierName: z.string().min(1),
+  shiftId: z.string().nullable().optional(),
+  financialAccountId: z.string().min(1),
+  deliveryOrderIds: z.array(z.string()),
+  totalDeliveries: z.number().int().nonnegative(),
+  totalCashCollectedCents: z.number().int().nonnegative(),
+  totalCourierFeesCents: z.number().int().nonnegative(),
+  netAmountSettledCents: z.number().int(),
+  status: z.enum(['PENDING', 'SETTLED']).default('SETTLED'),
+  settledAt: z.string(),
+  settledByStaffId: z.string().min(1),
+  notes: z.string().nullable().optional()
+});
+export type DeliverySettlement = z.infer<typeof DeliverySettlementSchema>;
+
+// ============================================================================
+// 13. ETAPA 6 — GESTÃO FINANCEIRA INTEGRADA, FLUXO DE CAIXA E DRE
+// ============================================================================
+
+export const FinancialCategoryTypeSchema = z.enum([
+  'REVENUE',          // 1. Receitas operacionais
+  'DEDUCTION',        // 2. Deduções da receita bruta (descontos, estornos)
+  'COST_DIRECT',      // 3. Custos diretos / CMV (consumo de estoque Kardex)
+  'EXPENSE_OP',       // 4. Despesas operacionais (fixas e variáveis)
+  'FINANCIAL_RESULT'  // 5. Resultado financeiro (juros, tarifas de cartão)
+]);
+export type FinancialCategoryType = z.infer<typeof FinancialCategoryTypeSchema>;
+
+export const FinancialCategorySchema = z.object({
+  id: z.string().min(1),
+  code: z.string().min(1),
+  name: z.string().min(1),
+  type: FinancialCategoryTypeSchema,
+  parentId: z.string().nullable().optional(),
+  active: z.boolean().default(true)
+});
+export type FinancialCategory = z.infer<typeof FinancialCategorySchema>;
+
+export const CostCenterSchema = z.object({
+  id: z.string().min(1),
+  code: z.string().min(1),
+  name: z.string().min(1),
+  description: z.string().min(1),
+  active: z.boolean().default(true)
+});
+export type CostCenter = z.infer<typeof CostCenterSchema>;
+
+export const FinancialAccountTypeSchema = z.enum([
+  'CASH_DRAWER',    // Gaveta de caixa do turno
+  'BANK_ACCOUNT',  // Conta corrente bancária
+  'PIX_KEY',       // Chave PIX direta PJ
+  'COURIER_WALLET', // Carteira transitória de motoboy
+  'SAFE_DEPOSIT'   // Cofre geral da empresa / tesouraria
+]);
+export type FinancialAccountType = z.infer<typeof FinancialAccountTypeSchema>;
+
+export const FinancialAccountSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  type: FinancialAccountTypeSchema,
+  bankName: z.string().nullable().optional(),
+  accountNumber: z.string().nullable().optional(),
+  pixKey: z.string().nullable().optional(),
+  currentBalanceCents: z.number().int().default(0),
+  initialBalanceCents: z.number().int().default(0),
+  active: z.boolean().default(true),
+  createdAt: z.string(),
+  updatedAt: z.string()
+});
+export type FinancialAccount = z.infer<typeof FinancialAccountSchema>;
+
+export const SupplierSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  tradeName: z.string().nullable().optional(),
+  document: z.string().nullable().optional(),
+  email: z.string().nullable().optional(),
+  phone: z.string().nullable().optional(),
+  contactPerson: z.string().nullable().optional(),
+  category: z.string().nullable().optional(),
+  active: z.boolean().default(true),
+  createdAt: z.string(),
+  updatedAt: z.string()
+});
+export type Supplier = z.infer<typeof SupplierSchema>;
+
+export const AccountsReceivableStatusSchema = z.enum([
+  'PENDING',
+  'PARTIALLY_PAID',
+  'PAID',
+  'CANCELED'
+]);
+export type AccountsReceivableStatus = z.infer<typeof AccountsReceivableStatusSchema>;
+
+export const AccountsReceivableOriginSchema = z.enum([
+  'TAB',
+  'DELIVERY',
+  'HOTEL_FOLIO',
+  'DIRECT_SALE',
+  'MANUAL'
+]);
+export type AccountsReceivableOrigin = z.infer<typeof AccountsReceivableOriginSchema>;
+
+export const AccountsReceivableSchema = z.object({
+  id: z.string().min(1),
+  description: z.string().min(1),
+  origin: AccountsReceivableOriginSchema,
+  originReferenceId: z.string().nullable().optional(),
+  costCenterId: z.string().min(1),
+  categoryId: z.string().min(1),
+  totalAmountCents: z.number().int().positive(),
+  paidAmountCents: z.number().int().nonnegative().default(0),
+  remainingAmountCents: z.number().int().nonnegative(),
+  accrualDate: z.string(),
+  dueDate: z.string(),
+  status: AccountsReceivableStatusSchema.default('PENDING'),
+  customerName: z.string().nullable().optional(),
+  notes: z.string().nullable().optional(),
+  createdAt: z.string(),
+  updatedAt: z.string()
+});
+export type AccountsReceivable = z.infer<typeof AccountsReceivableSchema>;
+
+export const AccountsPayableStatusSchema = z.enum([
+  'PENDING',
+  'PARTIALLY_PAID',
+  'PAID',
+  'CANCELED'
+]);
+export type AccountsPayableStatus = z.infer<typeof AccountsPayableStatusSchema>;
+
+export const AccountsPayableOriginSchema = z.enum([
+  'PURCHASE_INVOICE',
+  'OPERATIONAL_EXPENSE',
+  'PAYROLL',
+  'MAINTENANCE',
+  'UTILITY',
+  'MANUAL'
+]);
+export type AccountsPayableOrigin = z.infer<typeof AccountsPayableOriginSchema>;
+
+export const AccountsPayableSchema = z.object({
+  id: z.string().min(1),
+  description: z.string().min(1),
+  origin: AccountsPayableOriginSchema,
+  originReferenceId: z.string().nullable().optional(),
+  supplierId: z.string().nullable().optional(),
+  supplierName: z.string().nullable().optional(),
+  costCenterId: z.string().min(1),
+  categoryId: z.string().min(1),
+  totalAmountCents: z.number().int().positive(),
+  paidAmountCents: z.number().int().nonnegative().default(0),
+  remainingAmountCents: z.number().int().nonnegative(),
+  accrualDate: z.string(),
+  dueDate: z.string(),
+  status: AccountsPayableStatusSchema.default('PENDING'),
+  invoiceNumber: z.string().nullable().optional(),
+  barcode: z.string().nullable().optional(),
+  notes: z.string().nullable().optional(),
+  createdAt: z.string(),
+  updatedAt: z.string()
+});
+export type AccountsPayable = z.infer<typeof AccountsPayableSchema>;
+
+export const FinancialTransactionTypeSchema = z.enum([
+  'INCOME',
+  'EXPENSE',
+  'INTERNAL_TRANSFER_IN',
+  'INTERNAL_TRANSFER_OUT'
+]);
+export type FinancialTransactionType = z.infer<typeof FinancialTransactionTypeSchema>;
+
+export const FinancialTransactionSchema = z.object({
+  id: z.string().min(1),
+  financialAccountId: z.string().min(1),
+  type: FinancialTransactionTypeSchema,
+  categoryId: z.string().nullable().optional(),
+  costCenterId: z.string().nullable().optional(),
+  amountCents: z.number().int().positive(),
+  paymentMethod: PaymentMethodSchema,
+  referenceType: z.enum([
+    'ACCOUNTS_RECEIVABLE',
+    'ACCOUNTS_PAYABLE',
+    'POS_SALE',
+    'DELIVERY_SETTLEMENT',
+    'TRANSFER',
+    'MANUAL'
+  ]),
+  referenceId: z.string().nullable().optional(),
+  description: z.string().min(1),
+  accrualDate: z.string(),
+  settlementDate: z.string(),
+  registeredByStaffId: z.string().min(1),
+  createdAt: z.string()
+});
+export type FinancialTransaction = z.infer<typeof FinancialTransactionSchema>;
+
+export const FinancialTransferSchema = z.object({
+  id: z.string().min(1),
+  fromAccountId: z.string().min(1),
+  toAccountId: z.string().min(1),
+  amountCents: z.number().int().positive(),
+  reason: z.string().min(1),
+  registeredByStaffId: z.string().min(1),
+  transferredAt: z.string(),
+  createdAt: z.string()
+});
+export type FinancialTransfer = z.infer<typeof FinancialTransferSchema>;
+
+export const PurchaseInvoiceItemSchema = z.object({
+  id: z.string().min(1),
+  invoiceId: z.string().min(1),
+  productId: z.string().min(1),
+  productName: z.string().min(1),
+  unitOfMeasure: z.string().default('UN'),
+  quantity: z.number().positive(),
+  unitCostCents: z.number().int().nonnegative(),
+  totalCostCents: z.number().int().nonnegative()
+});
+export type PurchaseInvoiceItem = z.infer<typeof PurchaseInvoiceItemSchema>;
+
+export const PurchaseInvoiceSchema = z.object({
+  id: z.string().min(1),
+  invoiceNumber: z.string().min(1),
+  supplierId: z.string().min(1),
+  supplierName: z.string().min(1),
+  costCenterId: z.string().min(1),
+  issueDate: z.string(),
+  totalAmountCents: z.number().int().nonnegative(),
+  status: z.enum(['DRAFT', 'CONFIRMED', 'CANCELED']).default('CONFIRMED'),
+  accountsPayableId: z.string().nullable().optional(),
+  stockMoved: z.boolean().default(true),
+  items: z.array(PurchaseInvoiceItemSchema).default([]),
+  notes: z.string().nullable().optional(),
+  createdAt: z.string(),
+  updatedAt: z.string()
+});
+export type PurchaseInvoice = z.infer<typeof PurchaseInvoiceSchema>;
+
+export const AccountReconciliationSchema = z.object({
+  id: z.string().min(1),
+  financialAccountId: z.string().min(1),
+  reconciliationDate: z.string(),
+  systemCalculatedBalanceCents: z.number().int(),
+  declaredPhysicalBalanceCents: z.number().int(),
+  differenceCents: z.number().int(),
+  adjustmentTransactionId: z.string().nullable().optional(),
+  status: z.enum(['BALANCED', 'DISCREPANCY_ADJUSTED', 'DISCREPANCY_PENDING']),
+  reconciledByStaffId: z.string().min(1),
+  notes: z.string().nullable().optional(),
+  createdAt: z.string()
+});
+export type AccountReconciliation = z.infer<typeof AccountReconciliationSchema>;
+
+export const DreStatementSchema = z.object({
+  periodStart: z.string(),
+  periodEnd: z.string(),
+  costCenterId: z.string().nullable().optional(),
+  grossRevenueCents: z.number().int(),
+  deductionsCents: z.number().int(),
+  netRevenueCents: z.number().int(),
+  directCostsCents: z.number().int(), // CMV
+  grossProfitCents: z.number().int(),
+  grossMarginPercent: z.number(),
+  operationalExpensesCents: z.number().int(),
+  operatingResultCents: z.number().int(), // EBITDA
+  operatingMarginPercent: z.number(),
+  financialResultCents: z.number().int(),
+  netProfitCents: z.number().int(),
+  netMarginPercent: z.number(),
+  revenueByCostCenter: z.record(z.string(), z.number().int()),
+  expensesByCategory: z.record(z.string(), z.number().int())
+});
+export type DreStatement = z.infer<typeof DreStatementSchema>;
+
+export const CashFlowRealizedSummarySchema = z.object({
+  periodStart: z.string(),
+  periodEnd: z.string(),
+  accountId: z.string().nullable().optional(),
+  openingBalanceCents: z.number().int(),
+  totalInflowsCents: z.number().int(),
+  totalOutflowsCents: z.number().int(),
+  netCashFlowCents: z.number().int(),
+  closingBalanceCents: z.number().int(),
+  inflowsByCategory: z.record(z.string(), z.number().int()),
+  outflowsByCategory: z.record(z.string(), z.number().int()),
+  inflowsByPaymentMethod: z.record(z.string(), z.number().int())
+});
+export type CashFlowRealizedSummary = z.infer<typeof CashFlowRealizedSummarySchema>;
+
+export const DailyCashFlowProjectionSchema = z.object({
+  date: z.string(),
+  expectedInflowsCents: z.number().int(),
+  expectedOutflowsCents: z.number().int(),
+  projectedBalanceCents: z.number().int()
+});
+export type DailyCashFlowProjection = z.infer<typeof DailyCashFlowProjectionSchema>;
+
+export const CashFlowProjectedSummarySchema = z.object({
+  asOfDate: z.string(),
+  periodStart: z.string(),
+  periodEnd: z.string(),
+  currentBalanceCents: z.number().int(),
+  projectedReceivablesCents: z.number().int(),
+  projectedPayablesCents: z.number().int(),
+  projectedNetCashFlowCents: z.number().int(),
+  projectedFinalBalanceCents: z.number().int(),
+  dailyProjections: z.array(DailyCashFlowProjectionSchema)
+});
+export type CashFlowProjectedSummary = z.infer<typeof CashFlowProjectedSummarySchema>;
+
+export const ExecutiveDashboardMetricsSchema = z.object({
+  todaySalesCents: z.number().int(),
+  todayDeliveryOrdersCount: z.number().int(),
+  activeDeliveryOrdersCount: z.number().int(),
+  todayHotelRevenueCents: z.number().int(),
+  currentOccupancyRatePercent: z.number(),
+  monthRealizedRevenueCents: z.number().int(),
+  monthRealizedExpensesCents: z.number().int(),
+  monthEstimatedNetProfitCents: z.number().int(),
+  accountsReceivableOverdueCents: z.number().int(),
+  accountsPayableDueTodayCents: z.number().int(),
+  treasuryTotalBalanceCents: z.number().int()
+});
+export type ExecutiveDashboardMetrics = z.infer<typeof ExecutiveDashboardMetricsSchema>;
+
+/**
+ * Sanitiza valores para exportação segura em CSV, prevenindo ataques de CSV Formula Injection.
+ * Caracteres perigosos no início (=, +, -, @, \t, \r) recebem prefixo de apóstrofo (')
+ * e campos com delimitadores são protegidos com aspas duplas escapadas.
+ */
+export function sanitizeCsvCell(value: unknown): string {
+  if (value === null || value === undefined) {
+    return '""';
+  }
+  let str = String(value);
+  if (/^[=+\-@\t\r]/.test(str)) {
+    str = `'${str}`;
+  }
+  str = str.replace(/"/g, '""');
+  return `"${str}"`;
+}
+
+/**
+ * Cálculo padronizado de DRE Gerencial por competência.
+ */
+export function calculateDreStatement(params: {
+  grossRevenueCents: number;
+  deductionsCents: number;
+  directCostsCents: number;
+  operationalExpensesCents: number;
+  financialResultCents: number;
+  periodStart: string;
+  periodEnd: string;
+  costCenterId?: string | null;
+  revenueByCostCenter?: Record<string, number>;
+  expensesByCategory?: Record<string, number>;
+}): DreStatement {
+  const netRevenueCents = Math.max(0, params.grossRevenueCents - params.deductionsCents);
+  const grossProfitCents = netRevenueCents - params.directCostsCents;
+  const grossMarginPercent = netRevenueCents > 0
+    ? Math.round((grossProfitCents / netRevenueCents) * 10000) / 100
+    : 0;
+  const operatingResultCents = grossProfitCents - params.operationalExpensesCents;
+  const operatingMarginPercent = netRevenueCents > 0
+    ? Math.round((operatingResultCents / netRevenueCents) * 10000) / 100
+    : 0;
+  const netProfitCents = operatingResultCents + params.financialResultCents;
+  const netMarginPercent = netRevenueCents > 0
+    ? Math.round((netProfitCents / netRevenueCents) * 10000) / 100
+    : 0;
+
+  return {
+    periodStart: params.periodStart,
+    periodEnd: params.periodEnd,
+    costCenterId: params.costCenterId ?? null,
+    grossRevenueCents: params.grossRevenueCents,
+    deductionsCents: params.deductionsCents,
+    netRevenueCents,
+    directCostsCents: params.directCostsCents,
+    grossProfitCents,
+    grossMarginPercent,
+    operationalExpensesCents: params.operationalExpensesCents,
+    operatingResultCents,
+    operatingMarginPercent,
+    financialResultCents: params.financialResultCents,
+    netProfitCents,
+    netMarginPercent,
+    revenueByCostCenter: params.revenueByCostCenter ?? {},
+    expensesByCategory: params.expensesByCategory ?? {}
+  };
+}
+
+export const DECK26_INITIAL_DELIVERY_ZONES: DeliveryZone[] = [
+  { id: 'zone-centro', name: 'Centro Comercial', feeCents: 500, minimumOrderCents: 2000, estimatedMinutes: 30, active: true },
+  { id: 'zone-vila-militar', name: 'Vila Militar / Rodovia', feeCents: 700, minimumOrderCents: 2500, estimatedMinutes: 40, active: true },
+  { id: 'zone-aeroporto', name: 'Distrito Aeroporto', feeCents: 1000, minimumOrderCents: 3000, estimatedMinutes: 50, active: true },
+  { id: 'zone-caninde', name: 'Bairro Canindé', feeCents: 800, minimumOrderCents: 2500, estimatedMinutes: 45, active: true },
+  { id: 'zone-palmeiras', name: 'Jardim das Palmeiras', feeCents: 900, minimumOrderCents: 3000, estimatedMinutes: 45, active: true }
+];
+
+export const DECK26_INITIAL_COST_CENTERS: CostCenter[] = [
+  { id: 'REST', code: 'REST', name: 'Restaurante Deck 26', description: 'Operação salão restaurante principal', active: true },
+  { id: 'BAR', code: 'BAR', name: 'Bar & Choperia', description: 'Bebidas, drinks e chopes', active: true },
+  { id: 'DELIV', code: 'DELIV', name: 'Delivery Próprio', description: 'Entregas em domicílio e retiradas', active: true },
+  { id: 'HOTEL', code: 'HOTEL', name: 'Hotel Auto Posto Milla', description: 'Hospedagem, diárias e frigobar', active: true },
+  { id: 'ADMIN', code: 'ADMIN', name: 'Administração & Sede', description: 'Despesas estruturais e corporativas', active: true }
+];
+
+export const DECK26_INITIAL_FINANCIAL_CATEGORIES: FinancialCategory[] = [
+  { id: 'cat-rec-rest', code: '1.01', name: 'Receita Restaurante', type: 'REVENUE', active: true },
+  { id: 'cat-rec-bar', code: '1.02', name: 'Receita Bar & Bebidas', type: 'REVENUE', active: true },
+  { id: 'cat-rec-deliv', code: '1.03', name: 'Receita Delivery', type: 'REVENUE', active: true },
+  { id: 'cat-rec-taxa-entrega', code: '1.04', name: 'Taxas de Entrega Delivery', type: 'REVENUE', active: true },
+  { id: 'cat-rec-hotel-diarias', code: '1.05', name: 'Receita Hotel - Diárias', type: 'REVENUE', active: true },
+  { id: 'cat-rec-hotel-frigobar', code: '1.06', name: 'Receita Hotel - Frigobar & Serviços', type: 'REVENUE', active: true },
+  { id: 'cat-ded-descontos', code: '2.01', name: 'Descontos Concedidos', type: 'DEDUCTION', active: true },
+  { id: 'cat-ded-cancelamentos', code: '2.02', name: 'Cancelamentos e Estornos', type: 'DEDUCTION', active: true },
+  { id: 'cat-custo-cmv-alim', code: '3.01', name: 'CMV Alimentos e Insumos Cozinha', type: 'COST_DIRECT', active: true },
+  { id: 'cat-custo-cmv-beb', code: '3.02', name: 'CMV Bebidas e Drinks', type: 'COST_DIRECT', active: true },
+  { id: 'cat-custo-entregas', code: '3.03', name: 'Custo Repasse Entregadores', type: 'COST_DIRECT', active: true },
+  { id: 'cat-custo-hotel-lav', code: '3.04', name: 'Custo Enxoval e Lavanderia Hotel', type: 'COST_DIRECT', active: true },
+  { id: 'cat-desp-folha', code: '4.01', name: 'Folha de Pagamento e Salários', type: 'EXPENSE_OP', active: true },
+  { id: 'cat-desp-energia-agua', code: '4.02', name: 'Energia Elétrica e Água', type: 'EXPENSE_OP', active: true },
+  { id: 'cat-desp-manutencao', code: '4.03', name: 'Manutenção Predial e Equipamentos', type: 'EXPENSE_OP', active: true },
+  { id: 'cat-desp-marketing', code: '4.04', name: 'Marketing e Divulgação Local', type: 'EXPENSE_OP', active: true },
+  { id: 'cat-desp-limpeza', code: '4.05', name: 'Material de Limpeza e Higiene', type: 'EXPENSE_OP', active: true },
+  { id: 'cat-fin-taxas-cartao', code: '5.01', name: 'Taxas de Cartão e Meios de Pagamento', type: 'FINANCIAL_RESULT', active: true },
+  { id: 'cat-fin-juros-tarifas', code: '5.02', name: 'Tarifas Bancárias e Rendimentos', type: 'FINANCIAL_RESULT', active: true }
+];
+
+export const DECK26_INITIAL_FINANCIAL_ACCOUNTS: FinancialAccount[] = [
+  {
+    id: 'acc-caixa-geral',
+    name: 'Caixa Físico Principal (PDV)',
+    type: 'CASH_DRAWER',
+    currentBalanceCents: 50000,
+    initialBalanceCents: 50000,
+    active: true,
+    createdAt: '2026-11-04T00:00:00.000Z',
+    updatedAt: '2026-11-04T00:00:00.000Z'
+  },
+  {
+    id: 'acc-banco-brasil',
+    name: 'Banco do Brasil C/C Operacional',
+    type: 'BANK_ACCOUNT',
+    bankName: 'Banco do Brasil',
+    accountNumber: '12345-6',
+    currentBalanceCents: 1500000,
+    initialBalanceCents: 1500000,
+    active: true,
+    createdAt: '2026-11-04T00:00:00.000Z',
+    updatedAt: '2026-11-04T00:00:00.000Z'
+  },
+  {
+    id: 'acc-conta-pix',
+    name: 'Conta PIX PJ Instantânea',
+    type: 'PIX_KEY',
+    pixKey: 'financeiro@deck26.com.br',
+    currentBalanceCents: 350000,
+    initialBalanceCents: 350000,
+    active: true,
+    createdAt: '2026-11-04T00:00:00.000Z',
+    updatedAt: '2026-11-04T00:00:00.000Z'
+  },
+  {
+    id: 'acc-carteira-motoboys',
+    name: 'Carteira Transitória de Entregadores',
+    type: 'COURIER_WALLET',
+    currentBalanceCents: 0,
+    initialBalanceCents: 0,
+    active: true,
+    createdAt: '2026-11-04T00:00:00.000Z',
+    updatedAt: '2026-11-04T00:00:00.000Z'
+  },
+  {
+    id: 'acc-cofre-sede',
+    name: 'Cofre Geral da Tesouraria',
+    type: 'SAFE_DEPOSIT',
+    currentBalanceCents: 200000,
+    initialBalanceCents: 200000,
+    active: true,
+    createdAt: '2026-11-04T00:00:00.000Z',
+    updatedAt: '2026-11-04T00:00:00.000Z'
+  }
+];

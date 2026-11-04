@@ -7,7 +7,7 @@
 **Operação local • Pedidos em tempo real • Controle financeiro • Arquitetura offline-first**
 
 [![CI](https://github.com/Duailibe32/deck26-system/actions/workflows/ci.yml/badge.svg)](https://github.com/Duailibe32/deck26-system/actions/workflows/ci.yml)
-![Status](https://img.shields.io/badge/status-etapa%205%20conclu%C3%ADda-F72585)
+![Status](https://img.shields.io/badge/status-etapa%206%20conclu%C3%ADda-F72585)
 ![Acesso](https://img.shields.io/badge/reposit%C3%B3rio-privado-7209B7)
 ![Node](https://img.shields.io/badge/Node.js-22%2B-339933?logo=nodedotjs&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?logo=typescript&logoColor=white)
@@ -20,12 +20,12 @@
 
 ## ✨ Visão geral
 
-O **DECK 26** é uma plataforma de gestão integrada desenvolvida para a operação comercial do **Deck 26 / Hotel Auto Posto Milla**, reunindo restaurante, bar, atendimento de mesas, cozinha, estoque, caixa e o sistema hoteleiro completo (**PMS - Property Management System**).
+O **DECK 26** é uma plataforma de gestão integrada desenvolvida para a operação comercial do **Deck 26 / Hotel Auto Posto Milla**, reunindo restaurante, bar, atendimento de mesas, cozinha, estoque, caixa, delivery próprio, gestão financeira integrada (tesouraria, fluxo de caixa e DRE gerencial) e o sistema hoteleiro completo (**PMS - Property Management System**).
 
 A arquitetura é **offline-first**: a operação principal utiliza um servidor e um banco de dados locais, permitindo continuar trabalhando com latência zero e sem dependência de internet externa. A sincronização com uma instância remota faz parte da arquitetura; atualmente, a nuvem é **simulada localmente**, sem exigência de contratação prévia de VPS.
 
 > [!IMPORTANT]
-> **Status atual:** Etapas 1 a 5 implementadas, com **71 testes automatizados aprovados** e pipeline de CI no GitHub Actions. O sistema respeita as regras de negócio reais, sem dados fictícios de demonstração no banco e com persistência independente em disco.
+> **Status atual:** Etapas 1 a 6 implementadas, com **95 testes automatizados aprovados** e pipeline de CI no GitHub Actions. O sistema respeita as regras de negócio reais, sem dados fictícios de demonstração no banco e com persistência independente em disco.
 
 ### 🎯 Cenário operacional planejado
 
@@ -50,7 +50,9 @@ A arquitetura é **offline-first**: a operação principal utiliza um servidor e
 | **QR Code** | Identificação criptográfica segura por mesa e cálculo estrito no servidor | Implementado; testes automatizados |
 | **Impressão** | Spooler incremental ESC/POS por estação, proteção `UNKNOWN_OUTCOME` e 2ª via | Software implementado; hardware a conectar |
 | **Hotel (PMS Milla)** | Apartamentos (ocupação, limpeza, manutenção), hóspedes LGPD, reservas sem sobreposição [in, out), check-in guiado, extrato de folio, integração `ROOM_CHARGE` com restaurante sem dupla baixa de estoque, frigobar, serviços adicionais, check-out com saldo zero e métricas ADR/RevPAR | Implementado; 36 testes automatizados |
-| **Delivery e painel remoto** | Estrutura de canais comerciais e interfaces web sincronizadas | Expansão planejada (Etapa 6) |
+| **Delivery Próprio** | Central de pedidos, regiões/bairros com taxas fixas, despacho de motoboys, prestação de contas no caixa com transferência de custódia e ciclo completo de status | Implementado; testes automatizados |
+| **Gestão Financeira & DRE** | Plano de contas gerencial, centros de custo, tesouraria multi-contas, contas a pagar/receber, compras com NF e Kardex, transferências internas, conciliação e DRE por competência | Implementado; testes automatizados |
+| **Relatórios & Exportação CSV** | Demonstrativo contábil, curva ABC, auditoria e exportação CSV blindada contra Formula Injection (`sanitizeCsvCell`) | Implementado; testes automatizados |
 | **Fiscal / pagamentos bancários** | Campos fiscais e arquitetura preparados para integração SEFAZ/TEF | Integrações reais pendentes |
 
 ### 🔄 Como os módulos se conectam
@@ -167,7 +169,7 @@ O projeto conta com **71 testes automatizados aprovados** cobrindo contratos, re
 - [x] **Etapa 4** — Mesas, comandas transacionais, garçons, KDS com SLA/SSE, divisão de contas e caixa
 - [x] **Etapa 4.5** — GitHub privado, documentação técnica completa, auditoria e CI
 - [x] **Etapa 5** — Gestão hoteleira completa (Hotel Auto Posto Milla): PMS, reservas sem sobreposição, check-in guiado, extrato de folio, integração `ROOM_CHARGE` com restaurante Deck 26, frigobar, governança e métricas ADR/RevPAR
-- [ ] **Etapa 6** — Delivery próprio, financeiro avançado (DRE operacional) e relatórios gerenciais
+- [x] **Etapa 6** — Delivery próprio, gestão financeira integrada (tesouraria, contas a pagar/receber, compras NF/Kardex, transferências, conciliação), fluxo de caixa, DRE gerencial por competência e relatórios CSV protegidos contra Formula Injection
 - [ ] **Etapa 7** — Implantação em VPS, PostgreSQL e instalador Windows definitivo
 
 ## 📚 Documentação

@@ -2,6 +2,41 @@
 
 Todas as mudanças relevantes do projeto **DECK 26** são documentadas neste arquivo.
 
+## [Etapa 6] - 2026-11-04
+### Adicionado
+- **Delivery Próprio & Central de Despacho**:
+  - Tabela de regiões e bairros (`delivery_zones`) com taxas fixas em BRL e tempo estimado sem necessidade de APIs pagas de mapas.
+  - Ciclo transacional completo de pedidos delivery (`NOVO` -> `CONFIRMADO` -> `EM_PREPARO` -> `PRONTO` -> `SAIU_PARA_ENTREGA` -> `ENTREGUE`).
+  - Recálculo seguro no backend de subtotais, taxas e valores finais sem confiar em dados enviados pelo frontend.
+  - Cadastro de motoboys (`delivery_couriers`) com taxa por entrega e trava de disponibilidade.
+  - Despacho de pedidos prontos com atribuição a entregador disponível.
+  - Prestação de contas (acerto) de motoboys com transferência de custódia para o Caixa Geral da tesouraria, pagamento de taxas de entrega e recibo de liquidação.
+  - Base de clientes de delivery (`delivery_customers`) com suporte a múltiplos endereços de entrega.
+- **Gestão Financeira Integrada & Tesouraria Multi-Contas**:
+  - Plano de contas gerencial (`financial_categories`) dividido em naturezas contábeis: Receitas, Deduções, Custos Diretos/CMV, Despesas Operacionais e Resultado Financeiro.
+  - Centros de custo (`cost_centers`): Restaurante (`REST`), Bar (`BAR`), Delivery (`DELIV`), Hotel (`HOTEL`), Administração (`ADMIN`).
+  - Gestão de contas financeiras (`financial_accounts`): Caixa Geral do PDV, Cofre da Sede, Contas Bancárias (Banco do Brasil, Bradesco) e Carteira temporária de motoboys.
+  - Contas a pagar (`accounts_payable`) com suporte a liquidação parcial/total multi-meio e débito direto na conta de tesouraria escolhida.
+  - Contas a receber (`accounts_receivable`) com baixa no caixa.
+  - Cadastro de fornecedores de insumos (`suppliers`).
+  - Registro de compras faturadas com Nota Fiscal (`purchase_invoices`): entrada de mercadorias no Kardex como Ativo Circulante e geração de obrigação no Contas a Pagar.
+  - Transferências internas entre contas financeiras (`financial_transfers`): sangrias de segurança do PDV para o cofre e depósitos bancários sem alteração de receita contábil.
+  - Conciliação manual de contas (`account_reconciliations`) com confronto de saldos contábeis e extratos reais/contagem física.
+- **DRE Gerencial por Competência & Invariantes Contábeis**:
+  - Cálculo estrito do Demonstrativo de Resultado por Competência discriminado por canais e centros de custo.
+  - Invariante 1: Transferências `ROOM_CHARGE` (consumo de restaurante transferido para conta de quarto de hotel) não duplicam faturamento no DRE.
+  - Invariante 2: A compra de estoque é debitada no Ativo Circulante; o CMV ocorre estritamente na venda ou no consumo por ficha técnica aprovada.
+  - Invariante 3: Prestação de contas de motoboys e transferências internas são movimentações de custódia de liquidez sem efeito econômico no DRE.
+  - Projeção de Fluxo de Caixa: Realizado (regime de caixa por meio de pagamento) e Previsto (projeção diária por vencimento para os próximos 30 dias).
+- **Relatórios Comerciais & Mitigação contra CSV Formula Injection**:
+  - Exportação CSV segura para DRE, Vendas por Produto, Contas a Pagar e Contas a Receber.
+  - Sanitização nativa via `sanitizeCsvCell()` com prefixo apóstrofo (`'`) para células iniciadas em `=`, `+`, `-`, `@`, `\t`, `\r` (proteção CWE-1236).
+- **Interface & Testes Automatizados**:
+  - Módulos desktop completos: `DeliveryModule.tsx`, `FinanceModule.tsx` e `ReportsModule.tsx`.
+  - Migrações SQL `0005_stage6_delivery_and_finance.sql` (SQLite 3 WAL) e `0005_stage6_cloud_delivery_and_finance.sql` (PostgreSQL 16+).
+  - 24 novos testes automatizados em `apps/local-server/src/stage6.test.ts` incluindo teste de ponta a ponta operacional integrado de 28 passos.
+  - Total de 95 testes automatizados aprovados no monorepositório com 100% de sucesso.
+
 ## [Etapa 5] - 2026-11-04
 ### Adicionado
 - Módulo Hoteleiro PMS Completo para o Hotel Auto Posto Milla integrado nativamente ao Deck 26.

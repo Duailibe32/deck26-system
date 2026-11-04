@@ -66,6 +66,37 @@
 - `GET /api/hotel/maintenance` | `POST /api/hotel/maintenance` | `PATCH /api/hotel/maintenance/:id/resolve` — Chamados de manutenção predial.
 - `GET /api/hotel/metrics` — Painel de métricas hoteleiras (ADR, RevPAR, Taxa de Ocupação, Receitas e Saldos).
 
+### Delivery Próprio & Despacho (Etapa 6)
+- `GET /api/delivery/zones` | `POST /api/delivery/zones` — Zonas e taxas de entrega por bairro.
+- `GET /api/delivery/couriers` | `POST /api/delivery/couriers` — Gestão e cadastro de entregadores/motoboys.
+- `PATCH /api/delivery/couriers/:id/status` — Atualização de status do motoboy (`DISPONIVEL`, `EM_ENTREGA`, `INDISPONIVEL`).
+- `GET /api/delivery/customers` | `POST /api/delivery/customers` — Base de clientes e múltiplos endereços de entrega.
+- `GET /api/delivery/orders` | `POST /api/delivery/orders` — Central de pedidos delivery e retirada balcão.
+- `PATCH /api/delivery/orders/:id/status` — Ciclo de vida (`CONFIRMADO`, `EM_PREPARO`, `PRONTO`).
+- `POST /api/delivery/orders/:id/dispatch` — Despacho do pedido com vinculação a motoboy disponível.
+- `POST /api/delivery/orders/:id/deliver` — Confirmação de entrega com liberação do motoboy.
+- `POST /api/delivery/orders/:id/cancel` — Cancelamento operacional de entrega.
+- `POST /api/delivery/settlements` — Prestação de contas de motoboys com transferência de custódia para a tesouraria.
+
+### Gestão Financeira Integrada, DRE e Relatórios (Etapa 6)
+- `GET /api/finance/cost-centers` — Centros de custo (`REST`, `BAR`, `DELIV`, `HOTEL`, `ADMIN`).
+- `GET /api/finance/categories` — Categorias do plano de contas gerencial (`REVENUE`, `DEDUCTION`, `COST_DIRECT`, `EXPENSE_OP`, `FINANCIAL_RESULT`).
+- `GET /api/finance/accounts` | `POST /api/finance/accounts` — Contas financeiras da tesouraria.
+- `GET /api/finance/suppliers` | `POST /api/finance/suppliers` — Fornecedores de insumos e mercadorias.
+- `GET /api/finance/receivables` | `POST /api/finance/receivables` — Contas a receber manuais e hoteleiras.
+- `POST /api/finance/receivables/:id/pay` — Baixa de título a receber com crédito em conta da tesouraria.
+- `GET /api/finance/payables` | `POST /api/finance/payables` — Contas a pagar operacionais.
+- `POST /api/finance/payables/:id/pay` — Liquidação de conta a pagar com débito em conta da tesouraria.
+- `GET /api/finance/transactions` — Extrato unificado de movimentações financeiras.
+- `POST /api/finance/transfers` — Transferências internas entre contas (sangrias, suprimentos, depósitos).
+- `POST /api/finance/purchases` — Registro de notas fiscais de compra com entrada de estoque no Kardex e geração de conta a pagar.
+- `POST /api/finance/reconcile` — Conciliação manual de contas de tesouraria.
+- `GET /api/finance/dre` — Demonstrativo de Resultado do Exercício (DRE) gerencial por competência com invariantes contábeis.
+- `GET /api/finance/cash-flow/realized` — Fluxo de caixa realizado (regime de caixa por meio de pagamento).
+- `GET /api/finance/cash-flow/projected` — Projeção diária de fluxo de caixa futuro por vencimento.
+- `GET /api/finance/dashboard` — Métricas executivas consolidadas.
+- `GET /api/finance/export/csv` — Exportação segura de relatórios em CSV sanitizados contra Formula Injection.
+
 ---
 
 ## 2. API de Nuvem / Simulador VPS (`apps/cloud-api` — Porta `4100`)

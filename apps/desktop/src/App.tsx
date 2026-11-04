@@ -42,12 +42,33 @@ import {
   UserRole,
   calculateGrossMarginPercent,
   calculateNightsCount,
+  AccountsPayable,
+  AccountsReceivable,
+  CostCenter,
+  DeliveryAddress,
+  DeliveryCourier,
+  DeliveryCustomer,
+  DeliveryOrder,
+  DeliveryOrderStatus,
+  DeliverySettlement,
+  DeliveryZone,
+  DreStatement,
+  ExecutiveDashboardMetrics,
+  FinancialAccount,
+  FinancialCategory,
+  FinancialTransaction,
+  FinancialTransfer,
+  PurchaseInvoice,
+  Supplier,
   evaluateKdsOrderSla,
   formatBrlCents,
   hasPermission,
   resolveChannelPriceCents
 } from '@deck26/contracts';
 import { Deck26Logo, MenuPriceBadge } from '@deck26/ui';
+import { DeliveryModule } from './DeliveryModule.js';
+import { FinanceModule } from './FinanceModule.js';
+import { ReportsModule } from './ReportsModule.js';
 
 interface CashierOperationalSummary {
   activeSession: CashRegisterSession | null;
@@ -105,6 +126,17 @@ interface ServerStateSnapshot {
   notifications?: OperationalNotification[];
   kdsSlaConfig?: KdsSlaConfig;
   cashierSummary?: CashierOperationalSummary;
+  deliveryZones?: DeliveryZone[];
+  deliveryCouriers?: DeliveryCourier[];
+  deliveryOrders?: DeliveryOrder[];
+  deliveryCustomers?: DeliveryCustomer[];
+  costCenters?: CostCenter[];
+  financialCategories?: FinancialCategory[];
+  financialAccounts?: FinancialAccount[];
+  suppliers?: Supplier[];
+  accountsReceivable?: AccountsReceivable[];
+  accountsPayable?: AccountsPayable[];
+  executiveMetrics?: ExecutiveDashboardMetrics;
 }
 
 interface AuthSessionInfo {
@@ -175,7 +207,18 @@ export const DesktopApp: React.FC = () => {
     hotelStays: [],
     hotelServices: [],
     hotelMetrics: undefined,
-    syncEvents: []
+    syncEvents: [],
+    deliveryZones: [],
+    deliveryCouriers: [],
+    deliveryOrders: [],
+    deliveryCustomers: [],
+    costCenters: [],
+    financialCategories: [],
+    financialAccounts: [],
+    suppliers: [],
+    accountsReceivable: [],
+    accountsPayable: [],
+    executiveMetrics: undefined
   });
 
   // Estados de PDV e Garçom (Seções 13 e 14)
@@ -3635,7 +3678,7 @@ export const DesktopApp: React.FC = () => {
         {/* =====================================================================
             MÓDULO: GESTÃO VISUAL DE MESAS, COMANDAS, PEDIDOS E QR CODES (ETAPA 4 — SEÇÕES 3 A 10)
            ===================================================================== */}
-        {(activeModule === 'mesas-comandas' || activeModule === 'pedidos') && (
+        {activeModule === 'mesas-comandas' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             {/* PAINEL OPERACIONAL DE MESAS DO SALÃO (SEÇÕES 3, 4, 8, 9, 21) */}
             <div className="d26-card">
@@ -4113,6 +4156,22 @@ export const DesktopApp: React.FC = () => {
               </table>
             </div>
           </div>
+        )}
+
+        {/* =====================================================================
+            MÓDULO: CENTRAL DE PEDIDOS & DELIVERY PRÓPRIO (ETAPA 6)
+           ===================================================================== */}
+        {activeModule === 'pedidos' && (
+          <DeliveryModule
+            localApiBase={localApiBase}
+            deliveryOrders={snapshot.deliveryOrders ?? []}
+            deliveryCouriers={snapshot.deliveryCouriers ?? []}
+            deliveryZones={snapshot.deliveryZones ?? []}
+            deliveryCustomers={snapshot.deliveryCustomers ?? []}
+            getAuthHeaders={getAuthHeaders}
+            refreshState={refreshState}
+            notify={notify}
+          />
         )}
 
         {/* =====================================================================
@@ -5940,10 +5999,39 @@ export const DesktopApp: React.FC = () => {
           </div>
         )}
 
+        {/* =====================================================================
+            MÓDULO: GESTÃO FINANCEIRA INTEGRADA & TESOURARIA (ETAPA 6)
+           ===================================================================== */}
+        {activeModule === 'financeiro' && (
+          <FinanceModule
+            localApiBase={localApiBase}
+            financialAccounts={snapshot.financialAccounts ?? []}
+            costCenters={snapshot.costCenters ?? []}
+            financialCategories={snapshot.financialCategories ?? []}
+            suppliers={snapshot.suppliers ?? []}
+            accountsPayable={snapshot.accountsPayable ?? []}
+            accountsReceivable={snapshot.accountsReceivable ?? []}
+            getAuthHeaders={getAuthHeaders}
+            refreshState={refreshState}
+            notify={notify}
+          />
+        )}
+
+        {/* =====================================================================
+            MÓDULO: RELATÓRIOS COMERCIAIS & DRE GERENCIAL (ETAPA 6)
+           ===================================================================== */}
+        {activeModule === 'relatorios' && (
+          <ReportsModule
+            localApiBase={localApiBase}
+            costCenters={snapshot.costCenters ?? []}
+            executiveMetrics={snapshot.executiveMetrics}
+            getAuthHeaders={getAuthHeaders}
+            notify={notify}
+          />
+        )}
+
         {/* DEMAIS MÓDULOS ESTRUTURADOS */}
-        {(['financeiro', 'relatorios', 'funcionarios', 'administracao'] as SystemModuleId[]).includes(
-          activeModule
-        ) && (
+        {(['funcionarios', 'administracao'] as SystemModuleId[]).includes(activeModule) && (
           <div className="d26-card">
             <h2 style={{ fontSize: '1.05rem', marginBottom: '8px' }}>
               Estrutura Base Pronta — {currentModuleDef.title}
