@@ -1,11 +1,11 @@
 .d26-shell {
   display: grid;
   grid-template-columns: 272px 1fr;
-  grid-template-rows: 62px 1fr 34px;
+  grid-template-rows: 64px 1fr 34px;
   height: 100vh;
   width: 100vw;
   overflow: hidden;
-  background: var(--d26-black-950);
+  background: var(--d26-black-900);
 }
 
 .d26-topbar {
@@ -15,7 +15,7 @@
   justify-content: space-between;
   padding: 0 20px;
   background: var(--d26-black-900);
-  border-bottom: 1px solid rgba(230, 0, 92, 0.35);
+  border-bottom: 1px solid rgba(247, 37, 133, 0.45);
 }
 
 .d26-sidebar {
@@ -32,7 +32,7 @@
   font-size: 0.68rem;
   font-weight: 800;
   letter-spacing: 0.09em;
-  color: var(--d26-gray-400);
+  color: var(--d26-purple-400);
   text-transform: uppercase;
   padding: 0 10px 6px;
 }
@@ -51,26 +51,27 @@
   font-size: 0.84rem;
   font-weight: 600;
   text-align: left;
-  font-family: inherit;
+  font-family: var(--d26-font-sans);
 }
 
 .d26-nav-item:hover {
-  background: var(--d26-black-800);
+  background: var(--d26-black-850);
   color: var(--d26-white);
+  border-color: rgba(114, 9, 183, 0.45);
 }
 
 .d26-nav-item.active {
-  background: var(--d26-pink-surface);
+  background: linear-gradient(90deg, rgba(247, 37, 133, 0.18) 0%, rgba(114, 9, 183, 0.22) 100%);
   color: var(--d26-white);
-  border-color: rgba(230, 0, 92, 0.6);
+  border-color: var(--d26-pink-500);
   box-shadow: inset 3px 0 0 var(--d26-pink-500);
 }
 
 .d26-shortcut {
   font-family: var(--d26-font-mono);
   font-size: 0.68rem;
-  color: var(--d26-gray-400);
-  background: var(--d26-black-800);
+  color: #D8B4FE;
+  background: var(--d26-purple-surface);
   padding: 2px 6px;
   border-radius: 4px;
 }
@@ -81,11 +82,12 @@
   display: flex;
   flex-direction: column;
   gap: 18px;
+  background: var(--d26-black-900);
 }
 
 .d26-statusbar {
   grid-column: 1 / -1;
-  background: var(--d26-black-900);
+  background: var(--d26-black-850);
   border-top: var(--d26-border-subtle);
   display: flex;
   align-items: center;
@@ -121,7 +123,7 @@
 }
 
 .d26-product-card {
-  background: var(--d26-black-800);
+  background: var(--d26-black-850);
   border: var(--d26-border-subtle);
   border-radius: var(--d26-radius-md);
   padding: 13px;
@@ -132,7 +134,7 @@
 }
 
 .d26-product-card:hover {
-  border-color: rgba(230, 0, 92, 0.5);
+  border-color: rgba(247, 37, 133, 0.55);
 }
 
 .d26-table {

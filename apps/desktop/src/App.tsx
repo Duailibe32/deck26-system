@@ -42,6 +42,13 @@ interface ServerStateSnapshot {
   syncEvents: SyncOutboxEvent[];
 }
 
+interface AuthSessionInfo {
+  token: string;
+  userId: string;
+  name: string;
+  role: UserRole;
+}
+
 const GROUP_LABELS: Record<string, string> = {
   OPERACIONAL: '1. Atendimento & Operação Local',
   CATALOGO_ESTOQUE: '2. Cardápio & Estoque',
@@ -64,7 +71,11 @@ export const DesktopApp: React.FC = () => {
     return 'dashboard';
   });
 
-  const [activeRole, setActiveRole] = useState<UserRole>('OWNER');
+  // Autenticação Real por PIN no Backend (Substitui seletor visual sem senha)
+  const [authSession, setAuthSession] = useState<AuthSessionInfo | null>(null);
+  const [pinInput, setPinInput] = useState<string>('2626');
+  const [showPinModal, setShowPinModal] = useState<boolean>(false);
+
   const [serverConnected, setServerConnected] = useState<boolean>(false);
   const [feedbackBanner, setFeedbackBanner] = useState<string | null>(null);
 
@@ -83,11 +94,49 @@ export const DesktopApp: React.FC = () => {
 
   // Estados de formulário reais para os módulos operacionais
   const [selectedCategoryId, setSelectedCategoryId] = useState<string>('ALL');
-  const [selectedTableNumber, setSelectedTableNumber] = useState<number>(1);
+  const [selectedTableNumber, setSelectedTableNumber] = useState<number>(5);
   const [waiterName, setWaiterName] = useState<string>('Garçom 01 (Wi-Fi)');
   const [cart, setCart] = useState<Array<{ product: CatalogProduct; quantity: number; notes: string }>>([]);
-  const [paymentTabId, setPaymentTabId] = useState<string>('');
+
+  // Pagamentos Parciais ou Totais por Comanda (em Reais ex: "50,00")
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('PIX');
+  const [partialAmountsInput, setPartialAmountsInput] = useState<Record<string, string>>({});
+
+  const activeRole: UserRole = authSession?.role ?? 'OWNER';
+
+  function getAuthHeaders(): Record<string, string> {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    if (authSession?.token) {
+      headers.Authorization = `Bearer ${authSession.token}`;
+    }
+    return headers;
+  }
+
+  async function authenticateWithPin(pinToUse: string) {
+    try {
+      const res = await fetch(`${localApiBase}/api/auth/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pin: pinToUse })
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({ error: 'PIN inválido' }));
+        notify(errData.error ?? 'PIN incorreto.');
+        return;
+      }
+      const data = await res.json();
+      setAuthSession({
+        token: data.token,
+        userId: data.user.userId,
+        name: data.user.name,
+        role: data.user.role
+      });
+      setShowPinModal(false);
+      notify(`Operador autenticado: ${data.user.name} (${data.user.role})`);
+    } catch {
+      // Se o servidor ainda estiver iniciando, aguarda silenciosamente
+    }
+  }
 
   async function refreshState() {
     try {
@@ -103,6 +152,7 @@ export const DesktopApp: React.FC = () => {
 
   useEffect(() => {
     refreshState();
+    authenticateWithPin('2626');
     const timer = setInterval(refreshState, 4000);
     return () => clearInterval(timer);
   }, [localApiBase]);
@@ -122,7 +172,7 @@ export const DesktopApp: React.FC = () => {
 
   function notify(msg: string) {
     setFeedbackBanner(msg);
-    setTimeout(() => setFeedbackBanner(null), 5000);
+    setTimeout(() => setFeedbackBanner(null), 6000);
   }
 
   function addToCart(product: CatalogProduct) {
@@ -142,7 +192,7 @@ export const DesktopApp: React.FC = () => {
     try {
       const res = await fetch(`${localApiBase}/api/orders`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders(),
         body: JSON.stringify({
           idempotencyKey,
           tableNumber: selectedTableNumber,
@@ -157,12 +207,15 @@ export const DesktopApp: React.FC = () => {
         })
       });
 
-      if (!res.ok) throw new Error('Falha ao gravar pedido no servidor local');
+      if (!res.ok) {
+        const errJson = await res.json().catch(() => ({ error: 'Falha ao gravar pedido' }));
+        throw new Error(errJson.error ?? 'Falha ao gravar pedido no servidor local');
+      }
       const created = await res.json();
       setCart([]);
       await refreshState();
       notify(
-        `Pedido #${created.order.id.slice(0, 8)} gravado na MESA ${selectedTableNumber} | ${created.printJobs.length} via(s) ESC/POS enfileirada(s) | ${created.stockMovements.length} baixa(s) de estoque.`
+        `Pedido #${created.order.id.slice(0, 8)} gravado na MESA ${selectedTableNumber} | ${created.printJobs.length} via(s) incremental(is) ESC/POS enfileirada(s) | ${created.stockMovements.length} baixa(s) de estoque.`
       );
     } catch (err) {
       notify(err instanceof Error ? err.message : 'Erro ao enviar pedido');
@@ -170,37 +223,66 @@ export const DesktopApp: React.FC = () => {
   }
 
   async function handleAdvanceOrder(orderId: string, status: OrderStatus) {
-    await fetch(`${localApiBase}/api/orders/${orderId}/status`, {
+    const res = await fetch(`${localApiBase}/api/orders/${orderId}/status`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders(),
       body: JSON.stringify({ status, originNode: 'KITCHEN_KDS' })
     });
+    if (!res.ok) {
+      const errJson = await res.json().catch(() => ({ error: 'Sem permissão' }));
+      notify(errJson.error ?? 'Erro ao avançar pedido');
+      return;
+    }
     await refreshState();
     notify(`Pedido #${orderId.slice(0, 8)} atualizado para ${status}.`);
   }
 
+  function parseReaisToCents(raw: string, fallbackCents: number): number {
+    if (!raw || !raw.trim()) return fallbackCents;
+    const normalized = raw.replace(/\./g, '').replace(',', '.').trim();
+    const num = Number(normalized);
+    if (Number.isNaN(num) || num <= 0) return fallbackCents;
+    return Math.round(num * 100);
+  }
+
   async function handleSettleTab(tab: Tab) {
-    const remaining = Math.max(0, tab.totalCents - tab.paidCents);
-    if (remaining <= 0) return;
+    const remainingCents = Math.max(0, tab.totalCents - tab.paidCents);
+    if (remainingCents <= 0) return;
+
+    const customStr = partialAmountsInput[tab.id];
+    const amountCentsToPay = parseReaisToCents(customStr ?? '', remainingCents);
+
     const res = await fetch(`${localApiBase}/api/payments`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders(),
       body: JSON.stringify({
         idempotencyKey: `pay-${tab.id}-${Date.now()}`,
         tabId: tab.id,
         method: paymentMethod,
-        amountCents: remaining,
-        receivedCashCents: remaining
+        amountCents: amountCentsToPay,
+        receivedCashCents: amountCentsToPay
       })
     });
-    if (res.ok) {
-      await refreshState();
-      notify(`Pagamento de ${formatBrlCents(remaining)} (${paymentMethod}) confirmado para ${tab.code}.`);
+
+    const data = await res.json();
+    if (!res.ok) {
+      notify(data.error ?? 'Não foi possível registrar o pagamento.');
+      return;
     }
+
+    setPartialAmountsInput((prev) => ({ ...prev, [tab.id]: '' }));
+    await refreshState();
+    const newRemaining = Math.max(0, data.tab.totalCents - data.tab.paidCents);
+    notify(
+      `Pagamento de ${formatBrlCents(amountCentsToPay)} (${paymentMethod}) confirmado para ${tab.code}. Status: ${data.tab.status} | Saldo Restante: ${formatBrlCents(newRemaining)}`
+    );
   }
 
   async function handleTriggerCloudSync() {
-    const res = await fetch(`${localApiBase}/api/sync/trigger`, { method: 'POST' });
+    const res = await fetch(`${localApiBase}/api/sync/trigger`, {
+      method: 'POST',
+      headers: getAuthHeaders()
+    });
     const data = await res.json();
     await refreshState();
     if (data.synced) {
@@ -209,7 +291,7 @@ export const DesktopApp: React.FC = () => {
       );
     } else {
       notify(
-        `Operação local garantida (Modo Offline). ${data.pendingLocalEvents} evento(s) aguardando conexão com a VPS.`
+        `Operação local garantida (Modo Offline). ${data.pendingLocalEvents ?? 0} evento(s) aguardando conexão com a VPS.`
       );
     }
   }
@@ -227,32 +309,25 @@ export const DesktopApp: React.FC = () => {
       <header className="d26-topbar">
         <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
           <Deck26Logo size={42} showHotelSubtitle />
-          <span className="d26-badge d26-badge-outline-pink">Estação Windows Principal • Tauri 2</span>
+          <span className="d26-badge d26-badge-purple">Windows 11 • Tauri 2</span>
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
           <span className={`d26-badge ${serverConnected ? 'd26-badge-success' : 'd26-badge-warning'}`}>
-            ● {serverConnected ? `Servidor Local Wi-Fi Ativo (${snapshot.lanAddresses[0]}:4000)` : 'Iniciando Servidor Local...'}
+            ● {serverConnected ? `SQLite Local Ativo (Porta 4000)` : 'Iniciando Servidor Local...'}
           </span>
 
-          <span className={`d26-badge ${snapshot.cloudSyncState.online ? 'd26-badge-success' : 'd26-badge-outline-pink'}`}>
-            ⇄ VPS Hostinger: {snapshot.cloudSyncState.online ? 'Sincronizado' : `Offline-First (${pendingOutboxCount} na Outbox)`}
+          <span className={`d26-badge ${snapshot.cloudSyncState.online ? 'd26-badge-success' : 'd26-badge-outline-purple'}`}>
+            ⇄ VPS Simulada: {snapshot.cloudSyncState.online ? 'Sincronizado' : `Offline-First (${pendingOutboxCount} na Outbox)`}
           </span>
 
-          <select
-            aria-label="Perfil de Acesso RBAC"
-            className="d26-select"
-            style={{ width: '195px', padding: '6px 10px', fontSize: '0.78rem' }}
-            value={activeRole}
-            onChange={(e) => setActiveRole(e.target.value as UserRole)}
+          <button
+            className="d26-btn d26-btn-tertiary"
+            style={{ padding: '6px 12px', fontSize: '0.78rem' }}
+            onClick={() => setShowPinModal((v) => !v)}
           >
-            <option value="OWNER">Perfil: Proprietário (Total)</option>
-            <option value="MANAGER">Perfil: Gerente</option>
-            <option value="CASHIER">Perfil: Caixa / PDV</option>
-            <option value="WAITER">Perfil: Garçom (Wi-Fi)</option>
-            <option value="KITCHEN">Perfil: Cozinha (KDS)</option>
-            <option value="RECEPTIONIST">Perfil: Recepção Hotel</option>
-          </select>
+            🔐 {authSession ? `${authSession.name} [${authSession.role}]` : 'Autenticar PIN'}
+          </button>
         </div>
       </header>
 
@@ -290,11 +365,50 @@ export const DesktopApp: React.FC = () => {
 
       {/* ÁREA DE TRABALHO PRINCIPAL */}
       <main className="d26-workspace">
+        {/* MODAL DE AUTENTICAÇÃO REAL POR PIN NO BACKEND */}
+        {showPinModal && (
+          <div
+            className="d26-card"
+            style={{
+              border: '1px solid #7209B7',
+              background: 'linear-gradient(135deg, #1A1A1A 0%, #1F112B 100%)',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              flexWrap: 'wrap',
+              gap: '14px'
+            }}
+          >
+            <div>
+              <h3 style={{ fontSize: '0.98rem' }}>🔐 Autenticação de Operador por PIN (Validado no Backend com Token HMAC)</h3>
+              <p style={{ fontSize: '0.78rem', color: 'var(--d26-gray-300)', marginTop: '3px' }}>
+                PINs de Desenvolvimento: Proprietário <code>2626</code> | Gerente <code>1010</code> | Caixa <code>2020</code> | Garçom <code>3030</code> | Cozinha <code>4040</code> | Recepção <code>5050</code>
+              </p>
+            </div>
+            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+              <input
+                type="password"
+                className="d26-input"
+                style={{ width: '130px' }}
+                placeholder="Digite o PIN"
+                value={pinInput}
+                onChange={(e) => setPinInput(e.target.value)}
+              />
+              <button className="d26-btn d26-btn-primary" onClick={() => authenticateWithPin(pinInput)}>
+                Validar PIN
+              </button>
+              <button className="d26-btn d26-btn-secondary" onClick={() => setShowPinModal(false)}>
+                Fechar
+              </button>
+            </div>
+          </div>
+        )}
+
         {feedbackBanner && (
           <div
             style={{
-              background: 'rgba(230, 0, 92, 0.18)',
-              border: '1px solid #FF1F78',
+              background: 'linear-gradient(90deg, rgba(247, 37, 133, 0.2), rgba(114, 9, 183, 0.25))',
+              border: '1px solid #F72585',
               padding: '10px 16px',
               borderRadius: '10px',
               display: 'flex',
@@ -318,13 +432,14 @@ export const DesktopApp: React.FC = () => {
             display: 'flex',
             justifyContent: 'space-between',
             alignItems: 'center',
-            borderLeft: '4px solid #E6005C'
+            borderLeft: '4px solid #F72585'
           }}
         >
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
               <h1 style={{ fontSize: '1.35rem', fontWeight: 800 }}>{currentModuleDef.title}</h1>
-              <span className="d26-badge d26-badge-pink">100% Offline-First</span>
+              <span className="d26-badge d26-badge-pink">Primary #F72585</span>
+              <span className="d26-badge d26-badge-purple">Tertiary #7209B7</span>
             </div>
             <p style={{ color: 'var(--d26-gray-300)', fontSize: '0.86rem', marginTop: '4px' }}>
               {currentModuleDef.description}
@@ -335,7 +450,7 @@ export const DesktopApp: React.FC = () => {
               ↻ Atualizar Estado Local
             </button>
             <button className="d26-btn d26-btn-primary" onClick={handleTriggerCloudSync}>
-              ⇄ Sincronizar com VPS Agora
+              ⇄ Sincronizar com VPS Simulada
             </button>
           </div>
         </div>
@@ -347,24 +462,24 @@ export const DesktopApp: React.FC = () => {
               <div className="d26-card">
                 <span style={{ color: 'var(--d26-gray-400)', fontSize: '0.78rem' }}>COMANDAS / MESAS ABERTAS</span>
                 <div className="d26-kpi-value">{openTabs.length}</div>
-                <span style={{ fontSize: '0.76rem', color: '#34D399' }}>Entidade Tab separada de Order</span>
+                <span style={{ fontSize: '0.76rem', color: '#34D399' }}>Suporte a Pagamento Parcial Ativo</span>
               </div>
               <div className="d26-card">
                 <span style={{ color: 'var(--d26-gray-400)', fontSize: '0.78rem' }}>FILA NA COZINHA / CHAPA (KDS)</span>
                 <div className="d26-kpi-value">{activeKitchenOrders.length}</div>
-                <span style={{ fontSize: '0.76rem', color: '#FF5C9E' }}>Tempo real via Wi-Fi Local</span>
+                <span style={{ fontSize: '0.76rem', color: '#FFAFCC' }}>Impressão Incremental por Pedido</span>
               </div>
               <div className="d26-card">
                 <span style={{ color: 'var(--d26-gray-400)', fontSize: '0.78rem' }}>FATURAMENTO RECEBIDO (TURNO)</span>
                 <div className="d26-kpi-value">
                   {formatBrlCents(snapshot.payments.reduce((acc, p) => acc + p.amountCents, 0))}
                 </div>
-                <span style={{ fontSize: '0.76rem', color: 'var(--d26-gray-300)' }}>
-                  {snapshot.payments.length} pagamento(s) liquidado(s)
+                <span style={{ fontSize: '0.76rem', color: '#D8B4FE' }}>
+                  {snapshot.payments.length} pagamento(s) confirmado(s)
                 </span>
               </div>
               <div className="d26-card">
-                <span style={{ color: 'var(--d26-gray-400)', fontSize: '0.78rem' }}>ITENS NO CATÁLOGO OFICIAL DECK 26</span>
+                <span style={{ color: 'var(--d26-gray-400)', fontSize: '0.78rem' }}>PRODUTOS NO CATÁLOGO OFICIAL</span>
                 <div className="d26-kpi-value">{snapshot.catalog.products.length}</div>
                 <span style={{ fontSize: '0.76rem', color: 'var(--d26-gray-300)' }}>
                   {snapshot.catalog.categories.length} categorias compartilhadas
@@ -375,45 +490,45 @@ export const DesktopApp: React.FC = () => {
             <div className="d26-split-2">
               <div className="d26-card">
                 <h2 style={{ fontSize: '1rem', marginBottom: '12px' }}>
-                  Topologia Operacional Local (Dimensionamento 1 PC + 5 Garçons + 1 Cozinha)
+                  Ambiente Local de Desenvolvimento (Windows 11 — Persistência Dual SQLite)
                 </h2>
                 <table className="d26-table">
                   <thead>
                     <tr>
-                      <th>Nó / Dispositivo</th>
-                      <th>Canal de Rede</th>
-                      <th>Dependência de Internet</th>
+                      <th>Serviço</th>
+                      <th>Porta</th>
+                      <th>Persistência</th>
                       <th>Status</th>
                     </tr>
                   </thead>
                   <tbody>
                     <tr>
-                      <td><strong>1. Computador Windows (PDV/Caixa/Hotel)</strong></td>
-                      <td>Localhost / Loopback (`127.0.0.1:4000`)</td>
-                      <td>Zero (SQLite WAL Local)</td>
-                      <td><span className="d26-badge d26-badge-success">Operacional</span></td>
+                      <td><strong>1. Servidor Operacional Local</strong></td>
+                      <td><code>127.0.0.1:4000</code></td>
+                      <td><code>data/deck26-local.sqlite</code></td>
+                      <td><span className="d26-badge d26-badge-success">Ativo</span></td>
                     </tr>
                     <tr>
-                      <td><strong>2. 5 Celulares de Garçons (PWA LAN)</strong></td>
-                      <td>Wi-Fi Local (`{snapshot.lanAddresses[0]}:5173/?terminal=garcom`)</td>
-                      <td>Zero (Idempotência por Pedido)</td>
-                      <td><span className="d26-badge d26-badge-success">Pronto na LAN</span></td>
+                      <td><strong>2. Interface Windows (PDV / Caixa / Mesas)</strong></td>
+                      <td><code>localhost:5173</code></td>
+                      <td>Consome API Local</td>
+                      <td><span className="d26-badge d26-badge-pink">Ativo</span></td>
                     </tr>
                     <tr>
-                      <td><strong>3. 1 Dispositivo Cozinha KDS</strong></td>
-                      <td>Wi-Fi Local (`{snapshot.lanAddresses[0]}:5173/?terminal=cozinha`)</td>
-                      <td>Zero (Fila Local por Praça)</td>
-                      <td><span className="d26-badge d26-badge-success">Pronto na LAN</span></td>
-                    </tr>
-                    <tr>
-                      <td><strong>4. VPS Hostinger (QR Code / Delivery / Dono)</strong></td>
-                      <td>HTTPS / Outbox Bidirecional</td>
-                      <td>Sincroniza quando houver link</td>
+                      <td><strong>3. Servidor de Nuvem Simulado (VPS)</strong></td>
+                      <td><code>127.0.0.1:4100</code></td>
+                      <td><code>data/deck26-cloud-vps.sqlite</code></td>
                       <td>
-                        <span className="d26-badge d26-badge-outline-pink">
-                          {pendingOutboxCount} evento(s) pendente(s)
+                        <span className="d26-badge d26-badge-purple">
+                          {pendingOutboxCount} na Outbox
                         </span>
                       </td>
+                    </tr>
+                    <tr>
+                      <td><strong>4. Site Público (Cardápio QR / Delivery)</strong></td>
+                      <td><code>localhost:5174</code></td>
+                      <td>Consome VPS Simulada</td>
+                      <td><span className="d26-badge d26-badge-outline-pink">Pronto</span></td>
                     </tr>
                   </tbody>
                 </table>
@@ -425,17 +540,17 @@ export const DesktopApp: React.FC = () => {
                   <button className="d26-btn d26-btn-primary" onClick={() => setActiveModule('caixa-pdv')}>
                     Abrir Caixa & PDV (F2)
                   </button>
-                  <button className="d26-btn d26-btn-secondary" onClick={() => setActiveModule('mesas-comandas')}>
+                  <button className="d26-btn d26-btn-tertiary" onClick={() => setActiveModule('mesas-comandas')}>
                     Mesas e Comandas (F3)
                   </button>
                   <button className="d26-btn d26-btn-secondary" onClick={() => setActiveModule('garcons')}>
-                    Terminal Garçons Wi-Fi (F5)
+                    Terminal Garçons (F5)
                   </button>
                   <button className="d26-btn d26-btn-secondary" onClick={() => setActiveModule('cozinha')}>
                     KDS Cozinha & Chapa (F6)
                   </button>
-                  <button className="d26-btn d26-btn-secondary" onClick={() => setActiveModule('hotel-reservas')}>
-                    Hotel Milla & Quartos (F8)
+                  <button className="d26-btn d26-btn-secondary" onClick={() => setActiveModule('impressoras')}>
+                    Fila Impressão Incremental
                   </button>
                   <button className="d26-btn d26-btn-secondary" onClick={() => setActiveModule('sincronizacao')}>
                     Outbox & Sync VPS (F12)
@@ -463,7 +578,7 @@ export const DesktopApp: React.FC = () => {
                   {snapshot.catalog.categories.map((cat) => (
                     <button
                       key={cat.id}
-                      className={`d26-btn ${selectedCategoryId === cat.id ? 'd26-btn-primary' : 'd26-btn-secondary'}`}
+                      className={`d26-btn ${selectedCategoryId === cat.id ? 'd26-btn-tertiary' : 'd26-btn-secondary'}`}
                       style={{ padding: '5px 10px', fontSize: '0.76rem' }}
                       onClick={() => setSelectedCategoryId(cat.id)}
                     >
@@ -488,8 +603,8 @@ export const DesktopApp: React.FC = () => {
                         </p>
                       </div>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '6px' }}>
-                        <span style={{ fontSize: '0.68rem', color: 'var(--d26-gray-400)' }}>
-                          Praça: {product.prepStation === 'KITCHEN_HOT' ? 'Cozinha Quente' : 'Chapa / Tapioca'}
+                        <span className="d26-badge d26-badge-outline-purple" style={{ fontSize: '0.65rem' }}>
+                          {product.prepStation}
                         </span>
                         <button
                           className="d26-btn d26-btn-primary"
@@ -504,11 +619,11 @@ export const DesktopApp: React.FC = () => {
               </div>
             </div>
 
-            {/* COLUNA DIREITA: DISPARO DE PEDIDO SEPARADO DE COMANDA E PAGAMENTO */}
+            {/* COLUNA DIREITA: DISPARO DE PEDIDO INCREMENTAL E PAGAMENTO PARCIAL */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
               <div className="d26-card">
                 <h2 style={{ fontSize: '1.05rem', marginBottom: '12px' }}>
-                  Novo Pedido Local ({activeModule === 'garcons' ? 'Terminal Garçom Wi-Fi' : 'Caixa / PDV Windows'})
+                  Novo Pedido Incremental ({activeModule === 'garcons' ? 'Terminal Garçom' : 'Caixa / PDV Windows'})
                 </h2>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '12px' }}>
                   <div>
@@ -529,11 +644,11 @@ export const DesktopApp: React.FC = () => {
                       value={waiterName}
                       onChange={(e) => setWaiterName(e.target.value)}
                     >
-                      <option value="Garçom 01 (Celular Wi-Fi)">Garçom 01 (Celular Wi-Fi)</option>
-                      <option value="Garçom 02 (Celular Wi-Fi)">Garçom 02 (Celular Wi-Fi)</option>
-                      <option value="Garçom 03 (Celular Wi-Fi)">Garçom 03 (Celular Wi-Fi)</option>
-                      <option value="Garçom 04 (Celular Wi-Fi)">Garçom 04 (Celular Wi-Fi)</option>
-                      <option value="Garçom 05 (Celular Wi-Fi)">Garçom 05 (Celular Wi-Fi)</option>
+                      <option value="Garçom 01 (Wi-Fi)">Garçom 01 (Wi-Fi)</option>
+                      <option value="Garçom 02 (Wi-Fi)">Garçom 02 (Wi-Fi)</option>
+                      <option value="Garçom 03 (Wi-Fi)">Garçom 03 (Wi-Fi)</option>
+                      <option value="Garçom 04 (Wi-Fi)">Garçom 04 (Wi-Fi)</option>
+                      <option value="Garçom 05 (Wi-Fi)">Garçom 05 (Wi-Fi)</option>
                       <option value="Operador Caixa Windows">Operador Caixa Windows</option>
                     </select>
                   </div>
@@ -578,7 +693,7 @@ export const DesktopApp: React.FC = () => {
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderTop: 'var(--d26-border-subtle)', paddingTop: '12px' }}>
                   <div>
                     <span style={{ fontSize: '0.75rem', color: 'var(--d26-gray-400)' }}>Total deste Pedido:</span>
-                    <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#FF1F78' }}>
+                    <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#F72585' }}>
                       {formatBrlCents(cart.reduce((acc, c) => acc + c.product.priceCents * c.quantity, 0))}
                     </div>
                   </div>
@@ -587,57 +702,90 @@ export const DesktopApp: React.FC = () => {
                     disabled={cart.length === 0}
                     onClick={() => submitOrder(activeModule === 'garcons' ? 'WAITER_MOBILE' : 'WINDOWS_PDV')}
                   >
-                    Disparar Pedido p/ Cozinha & Comanda
+                    Disparar Pedido Incremental
                   </button>
                 </div>
               </div>
 
-              {/* LIQUIDAÇÃO DE COMANDAS ABERTAS NO CAIXA */}
+              {/* LIQUIDAÇÃO PARCIAL OU TOTAL DE COMANDAS ABERTAS NO CAIXA */}
               <div className="d26-card">
-                <h3 style={{ fontSize: '0.96rem', marginBottom: '10px' }}>
-                  Liquidação de Comandas Abertas (Entidade Payment Separada)
+                <h3 style={{ fontSize: '0.96rem', marginBottom: '6px' }}>
+                  Recebimento Parcial ou Total de Comandas (Caixa)
                 </h3>
-                <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
+                <p style={{ fontSize: '0.76rem', color: 'var(--d26-gray-400)', marginBottom: '10px' }}>
+                  Informe o valor parcial que o cliente deseja pagar agora (ex: <code>50,00</code> via PIX e depois <code>80,00</code> em Dinheiro) ou deixe em branco para quitar o saldo restante.
+                </p>
+
+                <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
                   <select
                     className="d26-select"
                     value={paymentMethod}
                     onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod)}
                   >
-                    <option value="PIX">PIX</option>
-                    <option value="CASH">Dinheiro em Espécie</option>
-                    <option value="DEBIT_CARD">Cartão de Débito</option>
-                    <option value="CREDIT_CARD">Cartão de Crédito</option>
-                    <option value="ROOM_CHARGE">Transferir p/ Quarto Hotel Milla</option>
+                    <option value="PIX">Método: PIX</option>
+                    <option value="CASH">Método: Dinheiro em Espécie</option>
+                    <option value="DEBIT_CARD">Método: Cartão de Débito</option>
+                    <option value="CREDIT_CARD">Método: Cartão de Crédito</option>
+                    <option value="ROOM_CHARGE">Método: Transferir p/ Quarto Hotel Milla</option>
                   </select>
                 </div>
+
                 {openTabs.length === 0 ? (
-                  <p style={{ fontSize: '0.82rem', color: 'var(--d26-gray-400)' }}>Nenhuma comanda pendente de pagamento.</p>
+                  <p style={{ fontSize: '0.82rem', color: 'var(--d26-gray-400)' }}>Nenhuma comanda aberta no momento.</p>
                 ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    {openTabs.map((t) => (
-                      <div
-                        key={t.id}
-                        style={{
-                          display: 'flex',
-                          justifyContent: 'space-between',
-                          alignItems: 'center',
-                          padding: '10px',
-                          background: 'var(--d26-black-900)',
-                          borderRadius: '8px'
-                        }}
-                      >
-                        <div>
-                          <strong>{t.code}</strong> ({t.status})
-                          <div style={{ fontSize: '0.76rem', color: 'var(--d26-gray-300)' }}>
-                            Subtotal: {formatBrlCents(t.subtotalCents)} + 10% ({formatBrlCents(t.serviceFeeCents)}) ={' '}
-                            <strong style={{ color: '#FF5C9E' }}>{formatBrlCents(t.totalCents)}</strong>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    {openTabs.map((t) => {
+                      const remaining = Math.max(0, t.totalCents - t.paidCents);
+                      return (
+                        <div
+                          key={t.id}
+                          style={{
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '8px',
+                            padding: '12px',
+                            background: 'var(--d26-black-900)',
+                            borderRadius: '10px',
+                            border: '1px solid rgba(114, 9, 183, 0.45)'
+                          }}
+                        >
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div>
+                              <strong>{t.code}</strong>{' '}
+                              <span className="d26-badge d26-badge-outline-purple">{t.status}</span>
+                            </div>
+                            <span style={{ fontSize: '0.8rem', color: '#34D399' }}>
+                              Já Pago: {formatBrlCents(t.paidCents)}
+                            </span>
+                          </div>
+
+                          <div style={{ fontSize: '0.78rem', color: 'var(--d26-gray-300)' }}>
+                            Subtotal: {formatBrlCents(t.subtotalCents)} | Taxa 10%: {formatBrlCents(t.serviceFeeCents)} |{' '}
+                            Total: <strong>{formatBrlCents(t.totalCents)}</strong> |{' '}
+                            <strong style={{ color: '#F72585' }}>Falta Pagar: {formatBrlCents(remaining)}</strong>
+                          </div>
+
+                          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                            <input
+                              type="text"
+                              className="d26-input"
+                              placeholder={`Valor em R$ (ex: ${(remaining / 100).toFixed(2).replace('.', ',')})`}
+                              value={partialAmountsInput[t.id] ?? ''}
+                              onChange={(e) =>
+                                setPartialAmountsInput((prev) => ({ ...prev, [t.id]: e.target.value }))
+                              }
+                            />
+                            <button
+                              className="d26-btn d26-btn-primary"
+                              style={{ whiteSpace: 'nowrap' }}
+                              onClick={() => handleSettleTab(t)}
+                            >
+                              Confirmar Recebimento
+                            </button>
                           </div>
                         </div>
-                        <button className="d26-btn d26-btn-primary" onClick={() => handleSettleTab(t)}>
-                          Receber {formatBrlCents(t.totalCents - t.paidCents)}
-                        </button>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -662,7 +810,7 @@ export const DesktopApp: React.FC = () => {
                         <span className="d26-badge d26-badge-pink">
                           {ord.tableNumber ? `MESA ${ord.tableNumber}` : ord.channel}
                         </span>
-                        <span className="d26-badge d26-badge-outline-pink">{ord.status}</span>
+                        <span className="d26-badge d26-badge-purple">{ord.status}</span>
                       </div>
                       <div style={{ fontSize: '0.75rem', color: 'var(--d26-gray-400)', marginBottom: '8px' }}>
                         Pedido #{ord.id.slice(0, 8)} • Origem: {ord.originNode}
@@ -688,7 +836,7 @@ export const DesktopApp: React.FC = () => {
                       )}
                       {ord.status === 'IN_PREPARATION' && (
                         <button
-                          className="d26-btn d26-btn-primary"
+                          className="d26-btn d26-btn-tertiary"
                           style={{ flex: 1 }}
                           onClick={() => handleAdvanceOrder(ord.id, 'READY')}
                         >
@@ -716,27 +864,31 @@ export const DesktopApp: React.FC = () => {
         {(activeModule === 'mesas-comandas' || activeModule === 'pedidos') && (
           <div className="d26-split-2">
             <div className="d26-card">
-              <h2 style={{ fontSize: '1rem', marginBottom: '12px' }}>Comandas Registradas (Entidade Tab)</h2>
+              <h2 style={{ fontSize: '1rem', marginBottom: '12px' }}>Comandas Acumuladas (Entidade Tab)</h2>
               <table className="d26-table">
                 <thead>
                   <tr>
                     <th>Código</th>
-                    <th>Tipo</th>
                     <th>Status</th>
                     <th>Subtotal</th>
                     <th>Taxa 10%</th>
                     <th>Total</th>
+                    <th>Pago</th>
+                    <th>Restante</th>
                   </tr>
                 </thead>
                 <tbody>
                   {snapshot.tabs.map((t) => (
                     <tr key={t.id}>
                       <td><strong>{t.code}</strong></td>
-                      <td>{t.type}</td>
-                      <td><span className="d26-badge d26-badge-outline-pink">{t.status}</span></td>
+                      <td><span className="d26-badge d26-badge-outline-purple">{t.status}</span></td>
                       <td>{formatBrlCents(t.subtotalCents)}</td>
                       <td>{formatBrlCents(t.serviceFeeCents)}</td>
                       <td><strong>{formatBrlCents(t.totalCents)}</strong></td>
+                      <td style={{ color: '#34D399' }}>{formatBrlCents(t.paidCents)}</td>
+                      <td style={{ color: '#F72585', fontWeight: 700 }}>
+                        {formatBrlCents(Math.max(0, t.totalCents - t.paidCents))}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -744,13 +896,13 @@ export const DesktopApp: React.FC = () => {
             </div>
 
             <div className="d26-card">
-              <h2 style={{ fontSize: '1rem', marginBottom: '12px' }}>Pedidos Disparados (Entidade Order)</h2>
+              <h2 style={{ fontSize: '1rem', marginBottom: '12px' }}>Pedidos Incrementais (Entidade Order)</h2>
               <table className="d26-table">
                 <thead>
                   <tr>
                     <th>Pedido</th>
-                    <th>Origem</th>
-                    <th>Itens</th>
+                    <th>Mesa</th>
+                    <th>Itens deste Pedido</th>
                     <th>Status</th>
                     <th>Valor</th>
                   </tr>
@@ -759,7 +911,7 @@ export const DesktopApp: React.FC = () => {
                   {snapshot.orders.map((o) => (
                     <tr key={o.id}>
                       <td>#{o.id.slice(0, 8)}</td>
-                      <td>{o.originNode}</td>
+                      <td>{o.tableNumber ? `Mesa ${o.tableNumber}` : o.channel}</td>
                       <td>{o.items.map((i) => `${i.quantity}x ${i.productName}`).join(', ')}</td>
                       <td>{o.status}</td>
                       <td>{formatBrlCents(o.totalOrderCents)}</td>
@@ -785,7 +937,7 @@ export const DesktopApp: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {snapshot.stock.balances.slice(0, 15).map((b) => (
+                  {snapshot.stock.balances.slice(0, 20).map((b) => (
                     <tr key={b.productId}>
                       <td>{b.sku}</td>
                       <td>{b.productName}</td>
@@ -850,7 +1002,7 @@ export const DesktopApp: React.FC = () => {
                       Categoria: {room.category} • Diária: {formatBrlCents(room.dailyRateCents)}
                     </div>
                     {room.currentGuestName && (
-                      <div style={{ marginTop: '8px', fontSize: '0.84rem', color: '#FF5C9E' }}>
+                      <div style={{ marginTop: '8px', fontSize: '0.84rem', color: '#FFAFCC' }}>
                         Hóspede: <strong>{room.currentGuestName}</strong>
                       </div>
                     )}
@@ -861,7 +1013,7 @@ export const DesktopApp: React.FC = () => {
                       onClick={async () => {
                         await fetch(`${localApiBase}/api/hotel/checkin`, {
                           method: 'POST',
-                          headers: { 'Content-Type': 'application/json' },
+                          headers: getAuthHeaders(),
                           body: JSON.stringify({ roomNumber: room.number, guestName: `Hóspede Apto ${room.number}` })
                         });
                         await refreshState();
@@ -881,7 +1033,7 @@ export const DesktopApp: React.FC = () => {
         {activeModule === 'impressoras' && (
           <div className="d26-card">
             <h2 style={{ fontSize: '1.05rem', marginBottom: '12px' }}>
-              Spooler de Impressão Térmica ESC/POS (Entidade PrintJob Separada por Praça)
+              Spooler de Impressão Incremental ESC/POS (Separado por Destino: Cozinha, Chapa, Bar e Caixa)
             </h2>
             {snapshot.printJobs.length === 0 ? (
               <p style={{ color: 'var(--d26-gray-400)' }}>Nenhum trabalho de impressão na fila no momento.</p>
@@ -890,20 +1042,20 @@ export const DesktopApp: React.FC = () => {
                 {snapshot.printJobs.map((job) => (
                   <div key={job.id} className="d26-product-card">
                     <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                      <span className="d26-badge d26-badge-outline-pink">{job.targetPrinter}</span>
+                      <span className="d26-badge d26-badge-purple">{job.targetPrinter}</span>
                       <span className={`d26-badge ${job.status === 'PRINTED' ? 'd26-badge-success' : 'd26-badge-warning'}`}>
                         {job.status}
                       </span>
                     </div>
                     <pre
                       style={{
-                        background: '#050507',
+                        background: '#09090B',
                         padding: '10px',
                         borderRadius: '6px',
                         fontSize: '0.72rem',
                         fontFamily: 'var(--d26-font-mono)',
                         overflowX: 'auto',
-                        color: '#E4E4E9'
+                        color: '#E5E5EA'
                       }}
                     >
                       {job.payloadText}
@@ -912,7 +1064,10 @@ export const DesktopApp: React.FC = () => {
                       <button
                         className="d26-btn d26-btn-primary"
                         onClick={async () => {
-                          await fetch(`${localApiBase}/api/print-jobs/${job.id}/mark-printed`, { method: 'POST' });
+                          await fetch(`${localApiBase}/api/print-jobs/${job.id}/mark-printed`, {
+                            method: 'POST',
+                            headers: getAuthHeaders()
+                          });
                           await refreshState();
                         }}
                       >
@@ -935,7 +1090,7 @@ export const DesktopApp: React.FC = () => {
                   Outbox de Eventos Persistentes (Idempotência + SHA-256 + HLC)
                 </h2>
                 <p style={{ fontSize: '0.8rem', color: 'var(--d26-gray-400)' }}>
-                  Todos os eventos gravados no SQLite local permanecem seguros mesmo sem internet externa e sincronizam em lote com a VPS Hostinger.
+                  Todos os eventos gravados no SQLite local permanecem seguros durante falhas de conexão e sincronizam em lote com o Simulador da VPS.
                 </p>
               </div>
               <button className="d26-btn d26-btn-primary" onClick={handleTriggerCloudSync}>
@@ -1000,7 +1155,7 @@ export const DesktopApp: React.FC = () => {
           </div>
         )}
 
-        {/* DEMAIS MÓDULOS ESTRUTURADOS NESTA ETAPA INICIAL */}
+        {/* DEMAIS MÓDULOS ESTRUTURADOS */}
         {(['financeiro', 'relatorios', 'funcionarios', 'administracao'] as SystemModuleId[]).includes(activeModule) && (
           <div className="d26-card">
             <h2 style={{ fontSize: '1.05rem', marginBottom: '8px' }}>
@@ -1008,8 +1163,7 @@ export const DesktopApp: React.FC = () => {
             </h2>
             <p style={{ fontSize: '0.86rem', color: 'var(--d26-gray-300)' }}>
               A navegação, permissões RBAC (`{currentModuleDef.requiredPermission}`), contratos compartilhados em{' '}
-              <code>@deck26/contracts</code> e tabelas de banco de dados deste módulo já estão configurados e prontos
-              para o detalhamento funcional nas próximas etapas aprovadas.
+              <code>@deck26/contracts</code> e tabelas de banco de dados deste módulo já estão configurados e prontos.
             </p>
           </div>
         )}
@@ -1018,11 +1172,10 @@ export const DesktopApp: React.FC = () => {
       {/* RODAPÉ TÉCNICO DO PROGRAMA WINDOWS */}
       <footer className="d26-statusbar">
         <div>
-          <strong>DECK 26</strong> • Hotel Auto Posto Milla • Arquitetura Tauri 2 + Fastify + SQLite WAL (Baixo Consumo de RAM)
+          <strong>DECK 26</strong> • Paleta Oficial: Rosa <code>#F72585</code> | Preto <code>#111111</code> | Roxo <code>#7209B7</code> | Neutro <code>#1A1A1A</code> • Plus Jakarta Sans
         </div>
         <div>
-          Garçons na Wi-Fi: <code>http://{snapshot.lanAddresses[0]}:5173/?terminal=garcom</code> | Cozinha KDS:{' '}
-          <code>http://{snapshot.lanAddresses[0]}:5173/?terminal=cozinha</code>
+          Segurança Ativa: Loopback Local <code>127.0.0.1</code> + Autenticação por PIN HMAC
         </div>
       </footer>
     </div>

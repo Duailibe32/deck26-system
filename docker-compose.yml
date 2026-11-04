@@ -1,0 +1,32 @@
+# ============================================================================
+# DECK 26 — DOCKER COMPOSE PARA SIMULAÇÃO DE POSTGRESQL DA VPS (OPCIONAL)
+#
+# Como o computador de desenvolvimento atual utiliza persistência em disco via
+# node:sqlite nativo (data/deck26-cloud-vps.sqlite), o Docker NÃO é obrigatório
+# para rodar localmente. Este arquivo já deixa a infraestrutura pronta caso o
+# Docker Desktop seja instalado ou quando o sistema for implantado na Hostinger VPS.
+# ============================================================================
+
+services:
+  deck26-postgres-vps:
+    image: postgres:16-alpine
+    container_name: deck26-postgres-vps
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-deck26_cloud}
+      POSTGRES_USER: ${POSTGRES_USER:-deck26_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD no arquivo .env local}
+    ports:
+      # Exposto estritamente para 127.0.0.1 (nunca exposto para a internet pública)
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - deck26_pgdata:/var/lib/postgresql/data
+      - ./packages/contracts/migrations/cloud/0001_initial_cloud_schema.sql:/docker-entrypoint-initdb.d/0001_initial_cloud_schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-deck26_user} -d $${POSTGRES_DB:-deck26_cloud}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  deck26_pgdata:

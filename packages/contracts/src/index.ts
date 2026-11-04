@@ -105,6 +105,23 @@ export function hasPermission(role: UserRole, permission: Permission): boolean {
   return ROLE_PERMISSIONS[role]?.includes(permission) ?? false;
 }
 
+export interface StaffAccountSeed {
+  id: string;
+  name: string;
+  role: UserRole;
+  pin: string; // PIN operacional de 4 dígitos para autenticação local rápida + geração de token HMAC
+}
+
+export const DECK26_INITIAL_STAFF: StaffAccountSeed[] = [
+  { id: 'usr-owner-01', name: 'Proprietário Deck 26', role: 'OWNER', pin: '2626' },
+  { id: 'usr-manager-01', name: 'Gerente Geral Milla', role: 'MANAGER', pin: '1010' },
+  { id: 'usr-cashier-01', name: 'Operador Caixa PDV', role: 'CASHIER', pin: '2020' },
+  { id: 'usr-waiter-01', name: 'Garçom 01 (Wi-Fi)', role: 'WAITER', pin: '3030' },
+  { id: 'usr-kitchen-01', name: 'Chef Cozinha KDS', role: 'KITCHEN', pin: '4040' },
+  { id: 'usr-reception-01', name: 'Recepção Hotel Milla', role: 'RECEPTIONIST', pin: '5050' },
+  { id: 'usr-stock-01', name: 'Estoquista Deck 26', role: 'STOCK_CLERK', pin: '6060' }
+];
+
 // ============================================================================
 // 3. MÓDULOS OFICIAIS DO SISTEMA (16 MÓDULOS)
 // ============================================================================
@@ -686,7 +703,9 @@ export const DECK26_INITIAL_CATEGORIES: CatalogCategory[] = [
   { id: 'cat-qualquer-hora', slug: 'para-qualquer-hora', name: 'Para Qualquer Hora', sortOrder: 1, active: true },
   { id: 'cat-cuscuz', slug: 'cuscuz-recheado', name: 'Cuscuz Recheado', sortOrder: 2, active: true },
   { id: 'cat-tapioca', slug: 'tapioca-recheada', name: 'Tapioca Recheada', sortOrder: 3, active: true },
-  { id: 'cat-executivos', slug: 'pratos-executivos', name: 'Pratos Executivos / 1 Pessoa', sortOrder: 4, active: true }
+  { id: 'cat-executivos', slug: 'pratos-executivos', name: 'Pratos Executivos / 1 Pessoa', sortOrder: 4, active: true },
+  { id: 'cat-especiais', slug: 'especiais-churrasco', name: 'Especiais & Churrasco', sortOrder: 5, active: true },
+  { id: 'cat-bebidas', slug: 'bebidas', name: 'Bebidas & Refrigerantes', sortOrder: 6, active: true }
 ];
 
 const BASE_MANTEIGA_REQUEIJAO: ModifierGroup = {
@@ -1209,6 +1228,52 @@ export const DECK26_INITIAL_PRODUCTS: CatalogProduct[] = [
     priceCents: 3000, // R$ 30,00
     availableChannels: ALL_CHANNELS,
     prepStation: 'KITCHEN_HOT',
+    trackStock: true,
+    modifierGroups: [],
+    active: true,
+    updatedAt: '2026-11-03T00:00:00.000Z'
+  },
+
+  // --- ESPECIAIS & CHURRASCO ---
+  {
+    id: 'prd-esp-picanha',
+    sku: 'D26-ESP-001',
+    categoryId: 'cat-especiais',
+    name: 'Picanha na Chapa (Completa)',
+    description: 'Picanha selecionada grelhada com baião, farofa, macaxeira e vinagrete',
+    priceCents: 12000, // R$ 120,00
+    availableChannels: ALL_CHANNELS,
+    prepStation: 'KITCHEN_HOT',
+    trackStock: true,
+    modifierGroups: [],
+    active: true,
+    updatedAt: '2026-11-03T00:00:00.000Z'
+  },
+  {
+    id: 'prd-esp-feijoada',
+    sku: 'D26-ESP-002',
+    categoryId: 'cat-especiais',
+    name: 'Feijoada Completa Deck 26',
+    description: 'Feijoada tradicional servida com arroz branco, couve, farofa, torresmo e laranja',
+    priceCents: 8000, // R$ 80,00
+    availableChannels: ALL_CHANNELS,
+    prepStation: 'KITCHEN_HOT',
+    trackStock: true,
+    modifierGroups: [],
+    active: true,
+    updatedAt: '2026-11-03T00:00:00.000Z'
+  },
+
+  // --- BEBIDAS & REFRIGERANTES ---
+  {
+    id: 'prd-beb-refrigerante-lata',
+    sku: 'D26-BEB-001',
+    categoryId: 'cat-bebidas',
+    name: 'Refrigerante Lata 350ml',
+    description: 'Coca-Cola, Coca Zero ou Guaraná Antarctica gelado',
+    priceCents: 700, // R$ 7,00
+    availableChannels: ALL_CHANNELS,
+    prepStation: 'BAR_DRINKS',
     trackStock: true,
     modifierGroups: [],
     active: true,

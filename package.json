@@ -12,6 +12,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "npm run typecheck --workspaces --if-present",
+    "dev:all": "node scripts/dev-all.mjs",
     "dev:local-server": "npm --workspace=@deck26/local-server run dev",
     "dev:desktop": "npm --workspace=@deck26/desktop run dev",
     "dev:web": "npm --workspace=@deck26/web run dev",

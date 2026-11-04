@@ -24,6 +24,7 @@ import {
   CatalogProduct,
   DECK26_INITIAL_CATEGORIES,
   DECK26_INITIAL_PRODUCTS,
+  DECK26_INITIAL_STAFF,
   HotelRoom,
   Order,
   OrderItem,
@@ -38,6 +39,7 @@ import {
   SyncOutboxEvent,
   Tab,
   TabType,
+  UserRole,
   buildEscPosProductionTicket,
   calculateTabTotals
 } from '@deck26/contracts';
@@ -165,6 +167,109 @@ export class LocalOperationalStore {
         ) VALUES (1, '', 'HOTEL AUTO POSTO MILLA LTDA', 'DECK 26 - HOTEL AUTO POSTO MILLA', '', 'MA', 'HOMOLOGATION', 'DISABLED_NOT_CONFIGURED', 0, ?)
       `)
       .run(now);
+
+    // 6. Semeia Colaboradores Iniciais com Hash SHA-256 do PIN para Autenticação Real no Backend
+    const insertUser = this.db.prepare(`
+      INSERT OR IGNORE INTO users (id, name, role, pin_hash, active, created_at)
+      VALUES (?, ?, ?, ?, 1, ?)
+    `);
+    for (const staff of DECK26_INITIAL_STAFF) {
+      const pinHash = crypto.createHash('sha256').update(`deck26-pin:${staff.pin}`).digest('hex');
+      insertUser.run(staff.id, staff.name, staff.role, pinHash, now);
+    }
+  }
+
+  public close(): void {
+    this.db.close();
+  }
+
+  public authenticateByPin(pin: string): { id: string; name: string; role: UserRole } | null {
+    const pinHash = crypto.createHash('sha256').update(`deck26-pin:${pin.trim()}`).digest('hex');
+    const row = this.db
+      .prepare('SELECT id, name, role FROM users WHERE pin_hash = ? AND active = 1 LIMIT 1')
+      .get(pinHash) as { id: string; name: string; role: UserRole } | undefined;
+
+    return row ?? null;
+  }
+
+  public listStaffProfiles(): Array<{ id: string; name: string; role: UserRole }> {
+    const rows = this.db
+      .prepare('SELECT id, name, role FROM users WHERE active = 1 ORDER BY name ASC')
+      .all() as Array<{ id: string; name: string; role: UserRole }>;
+    return rows;
+  }
+
+  public createCatalogProduct(input: {
+    id?: string;
+    sku: string;
+    categoryId: string;
+    name: string;
+    description?: string;
+    priceCents: number;
+    prepStation: CatalogProduct['prepStation'];
+    initialStock?: number;
+    availableChannels?: SalesChannel[];
+  }): CatalogProduct {
+    const now = new Date().toISOString();
+    const product: CatalogProduct = {
+      id: input.id ?? `prd-${crypto.randomUUID().slice(0, 8)}`,
+      sku: input.sku.trim().toUpperCase(),
+      categoryId: input.categoryId,
+      name: input.name.trim(),
+      description: input.description ?? '',
+      priceCents: input.priceCents,
+      availableChannels: input.availableChannels ?? ['DINE_IN', 'COUNTER_PDV', 'QR_TABLE', 'DELIVERY', 'HOTEL_ROOM'],
+      prepStation: input.prepStation,
+      trackStock: true,
+      modifierGroups: [],
+      active: true,
+      updatedAt: now
+    };
+
+    this.db
+      .prepare(`
+        INSERT INTO catalog_products (
+          id, sku, category_id, name, description, price_cents,
+          available_channels_json, prep_station, track_stock, modifier_groups_json, active, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, '[]', 1, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          name = excluded.name,
+          description = excluded.description,
+          price_cents = excluded.price_cents,
+          prep_station = excluded.prep_station,
+          updated_at = excluded.updated_at
+      `)
+      .run(
+        product.id,
+        product.sku,
+        product.categoryId,
+        product.name,
+        product.description,
+        product.priceCents,
+        JSON.stringify(product.availableChannels),
+        product.prepStation,
+        product.updatedAt
+      );
+
+    this.db
+      .prepare(`
+        INSERT INTO stock_balances (product_id, current_quantity, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(product_id) DO UPDATE SET current_quantity = excluded.current_quantity, updated_at = excluded.updated_at
+      `)
+      .run(product.id, input.initialStock ?? 50, now);
+
+    this.appendOutboxEvent({
+      idempotencyKey: `catalog-product-${product.id}-${now}`,
+      originNode: 'WINDOWS_PDV',
+      entityType: 'CATALOG_PRODUCT',
+      entityId: product.id,
+      operation: 'UPSERT',
+      entityVersion: 1,
+      payload: product
+    });
+
+    return product;
   }
 
   private appendOutboxEvent(params: {
@@ -742,6 +847,17 @@ export class LocalOperationalStore {
     const tab = this.getTabById(input.tabId);
     if (!tab) {
       throw new Error(`Comanda ${input.tabId} não encontrada para pagamento.`);
+    }
+
+    if (tab.status === 'CLOSED' || tab.status === 'CANCELLED') {
+      throw new Error(`Comanda ${tab.code} já está encerrada (${tab.status}). Não é permitido novo pagamento.`);
+    }
+
+    const remainingBefore = Math.max(0, tab.totalCents - tab.paidCents);
+    if (remainingBefore > 0 && input.amountCents > remainingBefore) {
+      throw new Error(
+        `Valor do pagamento (${input.amountCents} centavos) excede o saldo pendente da comanda (${remainingBefore} centavos).`
+      );
     }
 
     const activeSession = this.db

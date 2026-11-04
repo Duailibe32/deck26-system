@@ -98,8 +98,8 @@ export const WebPortalApp: React.FC = () => {
       {/* HEADER INSTITUCIONAL E DE NAVEGAÇÃO DO SITE (HOSTINGER VPS) */}
       <header
         style={{
-          background: 'linear-gradient(90deg, #09090D 0%, #1A0510 50%, #09090D 100%)',
-          borderBottom: '2px solid #E6005C',
+          background: 'linear-gradient(90deg, #111111 0%, #1F082B 50%, #111111 100%)',
+          borderBottom: '2px solid #F72585',
           padding: '16px 24px',
           display: 'flex',
           justifyContent: 'space-between',
@@ -124,13 +124,13 @@ export const WebPortalApp: React.FC = () => {
             🛵 Delivery Deck 26
           </button>
           <button
-            className={`d26-btn ${activeView === 'HOTEL_RESERVAS' ? 'd26-btn-primary' : 'd26-btn-secondary'}`}
+            className={`d26-btn ${activeView === 'HOTEL_RESERVAS' ? 'd26-btn-tertiary' : 'd26-btn-secondary'}`}
             onClick={() => setActiveView('HOTEL_RESERVAS')}
           >
             🏨 Hotel Auto Posto Milla
           </button>
           <button
-            className={`d26-btn ${activeView === 'OWNER_REMOTE' ? 'd26-btn-primary' : 'd26-btn-secondary'}`}
+            className={`d26-btn ${activeView === 'OWNER_REMOTE' ? 'd26-btn-tertiary' : 'd26-btn-secondary'}`}
             onClick={() => setActiveView('OWNER_REMOTE')}
           >
             🔐 Portal Remoto do Proprietário
@@ -141,16 +141,16 @@ export const WebPortalApp: React.FC = () => {
       {/* BANNER VISUAL INSPIRADO NO CARDÁPIO DIGITAL OFICIAL ANEXADO */}
       <section
         style={{
-          background: 'radial-gradient(circle at top right, rgba(230, 0, 92, 0.28), transparent 60%), #101016',
+          background: 'radial-gradient(circle at top right, rgba(247, 37, 133, 0.25), rgba(114, 9, 183, 0.2) 45%, transparent 75%), #111111',
           padding: '28px 24px',
           borderBottom: 'var(--d26-border-subtle)'
         }}
       >
         <div style={{ maxWidth: '1220px', margin: '0 auto', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
           <div>
-            <span className="d26-badge d26-badge-pink">HOTEL AUTO POSTO MILLA • HOTEL & CONVENIÊNCIA</span>
+            <span className="d26-badge d26-badge-purple">HOTEL AUTO POSTO MILLA • HOTEL & CONVENIÊNCIA</span>
             <h1 style={{ fontSize: '2rem', fontWeight: 900, marginTop: '8px', letterSpacing: '-0.02em' }}>
-              DECK <span style={{ color: '#FF1F78' }}>26</span> — CARDÁPIO DIGITAL & GESTÃO CLOUD
+              DECK <span style={{ color: '#F72585' }}>26</span> — CARDÁPIO DIGITAL & GESTÃO CLOUD
             </h1>
             <p style={{ color: 'var(--d26-gray-300)', maxWidth: '680px', marginTop: '4px', fontSize: '0.92rem' }}>
               Refeições, Pratos Executivos, Tapiocas Recheadas, Cuscuz Recheado, Petiscos e Bebidas. Catálogo lógico único sincronizado em tempo real com o PDV e Cozinha local.
@@ -211,11 +211,11 @@ export const WebPortalApp: React.FC = () => {
                       <h2
                         style={{
                           fontSize: '1.15rem',
-                          fontWeight: 900,
-                          color: '#FF1F78',
+                          fontWeight: 800,
+                          color: '#F72585',
                           textTransform: 'uppercase',
                           letterSpacing: '0.04em',
-                          borderBottom: '1px solid rgba(230, 0, 92, 0.35)',
+                          borderBottom: '1px solid rgba(114, 9, 183, 0.45)',
                           paddingBottom: '8px',
                           marginBottom: '12px'
                         }}

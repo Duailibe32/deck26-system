@@ -33,8 +33,8 @@ describe('@deck26/contracts — Contratos Compartilhados, Navegação e Cardápi
   });
 
   it('valida o catálogo oficial extraído das artes do Deck 26 com preços exatos em centavos', () => {
-    expect(DECK26_INITIAL_CATEGORIES).toHaveLength(4);
-    expect(DECK26_INITIAL_PRODUCTS.length).toBeGreaterThanOrEqual(30);
+    expect(DECK26_INITIAL_CATEGORIES).toHaveLength(6);
+    expect(DECK26_INITIAL_PRODUCTS.length).toBeGreaterThanOrEqual(34);
 
     const caldoMacaxeira = DECK26_INITIAL_PRODUCTS.find((p) => p.id === 'prd-caldo-macaxeira');
     expect(caldoMacaxeira?.priceCents).toBe(1000); // R$ 10,00
@@ -42,8 +42,11 @@ describe('@deck26/contracts — Contratos Compartilhados, Navegação e Cardápi
     const salmao = DECK26_INITIAL_PRODUCTS.find((p) => p.id === 'prd-exec-salmao');
     expect(salmao?.priceCents).toBe(5900); // R$ 59,00
 
-    const parmegiana = DECK26_INITIAL_PRODUCTS.find((p) => p.id === 'prd-exec-parmegiana-classica');
-    expect(parmegiana?.priceCents).toBe(5500); // R$ 55,00
+    const picanha = DECK26_INITIAL_PRODUCTS.find((p) => p.id === 'prd-esp-picanha');
+    expect(picanha?.priceCents).toBe(12000); // R$ 120,00
+
+    const feijoada = DECK26_INITIAL_PRODUCTS.find((p) => p.id === 'prd-esp-feijoada');
+    expect(feijoada?.priceCents).toBe(8000); // R$ 80,00
   });
 
   it('aplica controle de acesso RBAC rigoroso por perfil operacional', () => {

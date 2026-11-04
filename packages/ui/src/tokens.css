@@ -1,35 +1,49 @@
 /**
- * DECK 26 — DESIGN SYSTEM OFICIAL
- * Identidade Visual extraída da logomarca oficial "DECK 26" e do Cardápio Digital (Hotel Auto Posto Milla).
- * Paleta: Rosa Vibrante (#E6005C / #FF1675), Preto Profundo (#09090B / #121216), Branco Puro (#FFFFFF) e Cinzas Neutros.
+ * DECK 26 — DESIGN SYSTEM OFICIAL (ETAPA 2 ATUALIZADA)
+ * Paleta Oficial:
+ * - Primary (Rosa):   #F72585
+ * - Secondary (Preto):#111111
+ * - Tertiary (Roxo):  #7209B7
+ * - Neutral (Escuro): #1A1A1A
+ * - Fonte Oficial:    Plus Jakarta Sans
  */
 
-:root {
-  /* Paleta Principal — Rosa Vibrante Deck 26 */
-  --d26-pink-600: #C8004E;
-  --d26-pink-500: #E6005C;
-  --d26-pink-400: #FF1F78;
-  --d26-pink-300: #FF5C9E;
-  --d26-pink-glow: rgba(230, 0, 92, 0.22);
-  --d26-pink-surface: rgba(230, 0, 92, 0.10);
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
 
-  /* Superfícies Escuras Premium (Baixo cansaço visual para PDV/Cozinha/Salão) */
-  --d26-black-950: #070709;
-  --d26-black-900: #0C0C10;
-  --d26-black-850: #121218;
-  --d26-black-800: #181820;
-  --d26-black-750: #20202B;
+:root {
+  /* Paleta Principal — Primary Rosa (#F72585) */
+  --d26-pink-600: #C81A68;
+  --d26-pink-500: #F72585;
+  --d26-pink-400: #FF4D9E;
+  --d26-pink-300: #FFAFCC;
+  --d26-pink-glow: rgba(247, 37, 133, 0.25);
+  --d26-pink-surface: rgba(247, 37, 133, 0.12);
+
+  /* Paleta Terciária — Tertiary Roxo (#7209B7) */
+  --d26-purple-700: #560BAD;
+  --d26-purple-600: #7209B7;
+  --d26-purple-500: #8B2FC9;
+  --d26-purple-400: #B57EDC;
+  --d26-purple-glow: rgba(114, 9, 183, 0.28);
+  --d26-purple-surface: rgba(114, 9, 183, 0.16);
+
+  /* Superfícies Escuras — Secondary (#111111) & Neutral (#1A1A1A) */
+  --d26-black-950: #0B0B0D;
+  --d26-black-900: #111111;
+  --d26-black-850: #1A1A1A;
+  --d26-black-800: #222226;
+  --d26-black-750: #2C2C32;
 
   /* Branco e Cinzas de Alto Contraste */
   --d26-white: #FFFFFF;
-  --d26-gray-100: #F4F4F6;
-  --d26-gray-200: #E4E4E9;
-  --d26-gray-300: #CBCBD4;
-  --d26-gray-400: #9E9EA9;
-  --d26-gray-500: #6E6E7A;
-  --d26-gray-600: #454552;
-  --d26-gray-700: #2C2C37;
-  --d26-gray-800: #1F1F29;
+  --d26-gray-100: #F5F5F7;
+  --d26-gray-200: #E5E5EA;
+  --d26-gray-300: #C7C7CC;
+  --d26-gray-400: #9898A0;
+  --d26-gray-500: #6E6E77;
+  --d26-gray-600: #484850;
+  --d26-gray-700: #303036;
+  --d26-gray-800: #1F1F24;
 
   /* Cores Semânticas Operacionais */
   --d26-success: #10B981;
@@ -38,12 +52,12 @@
   --d26-warning-bg: rgba(245, 158, 11, 0.14);
   --d26-danger: #EF4444;
   --d26-danger-bg: rgba(239, 68, 68, 0.15);
-  --d26-info: #3B82F6;
-  --d26-info-bg: rgba(59, 130, 246, 0.14);
+  --d26-info: #7209B7;
+  --d26-info-bg: rgba(114, 9, 183, 0.18);
 
-  /* Tipografia e Geometria */
-  --d26-font-sans: 'Inter', 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  --d26-font-display: 'Oswald', 'Impact', 'Inter', sans-serif;
+  /* Tipografia Oficial: Plus Jakarta Sans */
+  --d26-font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --d26-font-display: 'Plus Jakarta Sans', 'Oswald', sans-serif;
   --d26-font-mono: 'JetBrains Mono', 'Cascadia Code', Consolas, monospace;
 
   --d26-radius-sm: 6px;
@@ -52,8 +66,9 @@
   --d26-radius-pill: 9999px;
 
   --d26-border-subtle: 1px solid rgba(255, 255, 255, 0.08);
-  --d26-border-pink: 1px solid rgba(230, 0, 92, 0.55);
-  --d26-shadow-card: 0 8px 24px rgba(0, 0, 0, 0.42);
+  --d26-border-pink: 1px solid rgba(247, 37, 133, 0.55);
+  --d26-border-purple: 1px solid rgba(114, 9, 183, 0.6);
+  --d26-shadow-card: 0 8px 24px rgba(0, 0, 0, 0.45);
 }
 
 * {
@@ -63,7 +78,7 @@
 }
 
 body {
-  background-color: var(--d26-black-950);
+  background-color: var(--d26-black-900);
   color: var(--d26-white);
   font-family: var(--d26-font-sans);
   -webkit-font-smoothing: antialiased;
@@ -88,10 +103,22 @@ body {
   color: var(--d26-white);
 }
 
+.d26-badge-purple {
+  background: var(--d26-purple-600);
+  color: var(--d26-white);
+  box-shadow: 0 2px 10px var(--d26-purple-glow);
+}
+
 .d26-badge-outline-pink {
   background: var(--d26-pink-surface);
-  color: var(--d26-pink-400);
-  border: 1px solid rgba(230, 0, 92, 0.45);
+  color: var(--d26-pink-300);
+  border: 1px solid rgba(247, 37, 133, 0.48);
+}
+
+.d26-badge-outline-purple {
+  background: var(--d26-purple-surface);
+  color: #D8B4FE;
+  border: 1px solid rgba(114, 9, 183, 0.55);
 }
 
 .d26-badge-success {
@@ -138,7 +165,7 @@ body {
   cursor: pointer;
   border: 1px solid transparent;
   transition: background-color 0.15s ease, border-color 0.15s ease, transform 0.08s ease;
-  font-family: inherit;
+  font-family: var(--d26-font-sans);
 }
 
 .d26-btn:active {
@@ -160,6 +187,16 @@ body {
   background: var(--d26-pink-400);
 }
 
+.d26-btn-tertiary {
+  background: var(--d26-purple-600);
+  color: var(--d26-white);
+  box-shadow: 0 4px 14px var(--d26-purple-glow);
+}
+
+.d26-btn-tertiary:hover:not(:disabled) {
+  background: var(--d26-purple-500);
+}
+
 .d26-btn-secondary {
   background: var(--d26-black-800);
   color: var(--d26-gray-100);
@@ -168,7 +205,17 @@ body {
 
 .d26-btn-secondary:hover:not(:disabled) {
   background: var(--d26-black-750);
-  border-color: var(--d26-gray-500);
+  border-color: var(--d26-purple-400);
+}
+
+.d26-btn-outlined {
+  background: transparent;
+  color: var(--d26-pink-300);
+  border-color: rgba(247, 37, 133, 0.55);
+}
+
+.d26-btn-outlined:hover:not(:disabled) {
+  background: var(--d26-pink-surface);
 }
 
 .d26-card {
@@ -187,11 +234,11 @@ body {
   border-radius: var(--d26-radius-md);
   padding: 9px 12px;
   font-size: 0.88rem;
-  font-family: inherit;
+  font-family: var(--d26-font-sans);
 }
 
 .d26-input:focus, .d26-select:focus {
   outline: none;
-  border-color: var(--d26-pink-400);
+  border-color: var(--d26-pink-500);
   box-shadow: 0 0 0 2px var(--d26-pink-glow);
 }

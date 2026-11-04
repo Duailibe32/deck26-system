@@ -2,14 +2,16 @@ import React from 'react';
 import { formatBrlCents } from '@deck26/contracts';
 
 export const DECK26_COLORS = {
-  pinkPrimary: '#E6005C',
-  pinkBright: '#FF1F78',
-  pinkDark: '#C8004E',
-  blackDeep: '#070709',
-  blackSurface: '#121218',
-  blackElevated: '#181820',
+  pinkPrimary: '#F72585',
+  pinkBright: '#FF4D9E',
+  pinkSoft: '#FFAFCC',
+  purpleTertiary: '#7209B7',
+  purpleBright: '#8B2FC9',
+  blackSecondary: '#111111',
+  neutralSurface: '#1A1A1A',
+  blackElevated: '#222226',
   white: '#FFFFFF',
-  grayMuted: '#9E9EA9'
+  grayMuted: '#9898A0'
 } as const;
 
 export interface Deck26LogoProps {
@@ -19,7 +21,7 @@ export interface Deck26LogoProps {
 }
 
 /**
- * Emblema Vetorial Oficial DECK 26 fiel à logomarca anexada:
+ * Emblema Vetorial Oficial DECK 26 fiel à logomarca original anexada:
  * Tipografia condensada de alto impacto "DeCK" com barra sob o 'e' minúsculo
  * e numeral "2" sobre "6" alinhados verticalmente no eixo central.
  */
@@ -44,15 +46,14 @@ export const Deck26Logo: React.FC<Deck26LogoProps> = ({
           cx="60"
           cy="60"
           r="57"
-          fill={isPinkRing ? '#FFFFFF' : '#060608'}
-          stroke="#E6005C"
-          strokeWidth={isPinkRing ? '6' : '3'}
+          fill={isPinkRing ? '#FFFFFF' : '#111111'}
+          stroke="#F72585"
+          strokeWidth={isPinkRing ? '6' : '3.5'}
         />
-        {/* Letras D e C K com o 'e' sublinhado no topo e 2 / 6 empilhados abaixo */}
         <text
           x="18"
           y="58"
-          fill={isPinkRing ? '#E6005C' : '#FFFFFF'}
+          fill={isPinkRing ? '#F72585' : '#FFFFFF'}
           fontFamily="Impact, Oswald, 'Arial Black', sans-serif"
           fontWeight="900"
           fontSize="44"
@@ -63,26 +64,25 @@ export const Deck26Logo: React.FC<Deck26LogoProps> = ({
         <text
           x="44"
           y="49"
-          fill={isPinkRing ? '#E6005C' : '#FFFFFF'}
+          fill={isPinkRing ? '#F72585' : '#FFFFFF'}
           fontFamily="Impact, Oswald, 'Arial Black', sans-serif"
           fontWeight="900"
           fontSize="35"
         >
           e
         </text>
-        {/* Barra horizontal característica abaixo do 'e' */}
         <rect
           x="44"
           y="54"
           width="19"
           height="4.2"
           rx="1.5"
-          fill="#E6005C"
+          fill="#F72585"
         />
         <text
           x="65"
           y="58"
-          fill={isPinkRing ? '#E6005C' : '#FFFFFF'}
+          fill={isPinkRing ? '#F72585' : '#FFFFFF'}
           fontFamily="Impact, Oswald, 'Arial Black', sans-serif"
           fontWeight="900"
           fontSize="44"
@@ -90,11 +90,10 @@ export const Deck26Logo: React.FC<Deck26LogoProps> = ({
         >
           CK
         </text>
-        {/* Numeral 2 e 6 empilhados verticalmente no centro inferior */}
         <text
           x="53.5"
           y="81"
-          fill={isPinkRing ? '#E6005C' : '#FFFFFF'}
+          fill={isPinkRing ? '#7209B7' : '#FFFFFF'}
           fontFamily="Impact, Oswald, 'Arial Black', sans-serif"
           fontWeight="900"
           fontSize="24"
@@ -105,7 +104,7 @@ export const Deck26Logo: React.FC<Deck26LogoProps> = ({
         <text
           x="53.5"
           y="104"
-          fill="#E6005C"
+          fill="#F72585"
           fontFamily="Impact, Oswald, 'Arial Black', sans-serif"
           fontWeight="900"
           fontSize="24"
@@ -119,13 +118,14 @@ export const Deck26Logo: React.FC<Deck26LogoProps> = ({
         <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.15 }}>
           <span
             style={{
-              fontWeight: 900,
+              fontWeight: 800,
               fontSize: '1.15rem',
-              letterSpacing: '0.04em',
-              color: '#FFFFFF'
+              letterSpacing: '0.03em',
+              color: '#FFFFFF',
+              fontFamily: "'Plus Jakarta Sans', sans-serif"
             }}
           >
-            DECK <span style={{ color: '#FF1F78' }}>26</span>
+            DECK <span style={{ color: '#F72585' }}>26</span>
           </span>
           {showHotelSubtitle && (
             <span
@@ -133,7 +133,7 @@ export const Deck26Logo: React.FC<Deck26LogoProps> = ({
                 fontSize: '0.68rem',
                 fontWeight: 600,
                 letterSpacing: '0.08em',
-                color: '#9E9EA9',
+                color: '#B57EDC',
                 textTransform: 'uppercase'
               }}
             >
@@ -150,9 +150,6 @@ export interface MenuPriceBadgeProps {
   cents: number;
 }
 
-/**
- * Tag de preço retangular em rosa vibrante idêntica à do cardápio oficial anexado (`R$ 10,00`, `R$ 42,00`).
- */
 export const MenuPriceBadge: React.FC<MenuPriceBadgeProps> = ({ cents }) => {
   return <span className="d26-price-tag">{formatBrlCents(cents)}</span>;
 };

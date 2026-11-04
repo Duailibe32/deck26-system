@@ -1,17 +1,21 @@
 /**
- * DECK 26 — Servidor de Nuvem (Hostinger VPS — Node.js + Fastify + PostgreSQL / SQLite Fallback)
+ * DECK 26 — Servidor de Nuvem (Hostinger VPS / Simulador Local Persistente)
  *
- * Responsabilidades na VPS:
- * 1. Receber lotes de eventos persistentes do Servidor Operacional Local (`/api/sync/batch`),
- *    garantindo idempotência por `idempotencyKey`, validação de checksum SHA-256 e resolução determinística de conflitos.
- * 2. Servir o Catálogo Digital Público e registrar pedidos de clientes via QR Code na Mesa e Delivery,
- *    inserindo-os no Ledger de Sincronização para que desçam imediatamente ao computador Windows local e Cozinha (KDS).
- * 3. Fornecer visão consolidada para o Proprietário acessar remotamente de qualquer lugar.
+ * Responsabilidades:
+ * 1. Persistir o Ledger de Sincronização em arquivo independente (`data/deck26-cloud-vps.sqlite`)
+ *    para que o reinício do servidor nunca apague os eventos sincronizados, mantendo compatibilidade
+ *    com a migração `0001_initial_cloud_schema.sql` de PostgreSQL para futura implantação na Hostinger VPS.
+ * 2. Garantir idempotência estrita por `idempotencyKey`, validação de checksum SHA-256 e resolução determinística de conflitos.
+ * 3. Servir o Catálogo Digital Público e registrar pedidos de clientes via QR Code na Mesa e Delivery.
  */
 
 import Fastify, { FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
+import { createRequire } from 'node:module';
+import type { DatabaseSync as DatabaseSyncType } from 'node:sqlite';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import {
   DECK26_INITIAL_CATEGORIES,
   DECK26_INITIAL_PRODUCTS,
@@ -22,42 +26,107 @@ import {
 } from '@deck26/contracts';
 import { z } from 'zod';
 
+const require = createRequire(import.meta.url);
+const { DatabaseSync } = require('node:sqlite') as { DatabaseSync: typeof DatabaseSyncType };
+
 export interface CloudLedgerRecord {
   cursorSeq: number;
   event: SyncOutboxEvent;
 }
 
-export async function buildCloudApiServer(): Promise<{
+export async function buildCloudApiServer(options?: {
+  dbPath?: string;
+}): Promise<{
   app: FastifyInstance;
   getLedger: () => CloudLedgerRecord[];
+  closeDb: () => void;
 }> {
   const app = Fastify({ logger: false });
   await app.register(cors, { origin: true });
 
-  // Ledger idempotente com cursor sequencial monotônico (espelha a tabela sync_event_ledger do PostgreSQL)
-  const ledgerByIdempotencyKey = new Map<string, CloudLedgerRecord>();
-  const ledgerList: CloudLedgerRecord[] = [];
-  const entityVersionMap = new Map<string, { version: number; origin: string; updatedAt: string }>();
-  let cursorCounter = 0;
+  const dbPath =
+    options?.dbPath ??
+    process.env.DECK26_CLOUD_DB_PATH ??
+    path.resolve(process.cwd(), 'data', 'deck26-cloud-vps.sqlite');
+
+  if (dbPath !== ':memory:') {
+    const dir = path.dirname(dbPath);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+  }
+
+  const db = new DatabaseSync(dbPath);
+  db.exec(`
+    PRAGMA journal_mode = WAL;
+    PRAGMA synchronous = NORMAL;
+
+    CREATE TABLE IF NOT EXISTS sync_event_ledger (
+      cursor_seq INTEGER PRIMARY KEY AUTOINCREMENT,
+      event_id TEXT NOT NULL UNIQUE,
+      idempotency_key TEXT NOT NULL UNIQUE,
+      origin_node TEXT NOT NULL,
+      entity_type TEXT NOT NULL,
+      entity_id TEXT NOT NULL,
+      operation TEXT NOT NULL,
+      entity_version INTEGER NOT NULL,
+      hlc_timestamp TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      checksum_sha256 TEXT NOT NULL,
+      received_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS entity_version_tracker (
+      entity_key TEXT PRIMARY KEY,
+      version INTEGER NOT NULL,
+      origin_node TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+  `);
+
+  function mapLedgerRow(row: Record<string, unknown>): CloudLedgerRecord {
+    return {
+      cursorSeq: Number(row.cursor_seq),
+      event: {
+        id: String(row.event_id),
+        idempotencyKey: String(row.idempotency_key),
+        originNode: row.origin_node as SyncOutboxEvent['originNode'],
+        entityType: row.entity_type as SyncOutboxEvent['entityType'],
+        entityId: String(row.entity_id),
+        operation: row.operation as SyncOutboxEvent['operation'],
+        entityVersion: Number(row.entity_version),
+        hlcTimestamp: String(row.hlc_timestamp),
+        payloadJson: String(row.payload_json),
+        checksumSha256: String(row.checksum_sha256),
+        status: 'ACKED',
+        retryCount: 0,
+        createdAt: String(row.hlc_timestamp),
+        syncedAt: String(row.received_at)
+      }
+    };
+  }
 
   function appendToCloudLedger(event: SyncOutboxEvent): {
     record: CloudLedgerRecord;
     duplicate: boolean;
     conflict: SyncBatchPushResponse['conflicts'][number] | null;
   } {
-    const existing = ledgerByIdempotencyKey.get(event.idempotencyKey);
-    if (existing) {
-      return { record: existing, duplicate: true, conflict: null };
+    const existingRow = db
+      .prepare('SELECT * FROM sync_event_ledger WHERE idempotency_key = ?')
+      .get(event.idempotencyKey) as Record<string, unknown> | undefined;
+
+    if (existingRow) {
+      return { record: mapLedgerRow(existingRow), duplicate: true, conflict: null };
     }
 
     const entityKey = `${event.entityType}:${event.entityId}`;
-    const currentMeta = entityVersionMap.get(entityKey);
+    const currentMeta = db
+      .prepare('SELECT version, origin_node, updated_at FROM entity_version_tracker WHERE entity_key = ?')
+      .get(entityKey) as { version: number; origin_node: string; updated_at: string } | undefined;
+
     let conflict: SyncBatchPushResponse['conflicts'][number] | null = null;
 
     if (currentMeta && event.entityVersion < currentMeta.version) {
-      // Regra determinística de conflito:
-      // Operações físicas de salão (TAB, ORDER, PAYMENT) priorizam o Servidor Local (LOCAL_WINS_OPERATIONAL).
-      // Alterações de cadastro de catálogo priorizam a Retaguarda Cloud (CLOUD_WINS_CATALOG).
       const strategy =
         event.entityType === 'CATALOG_PRODUCT' ? 'CLOUD_WINS_CATALOG' : 'LOCAL_WINS_OPERATIONAL';
 
@@ -70,44 +139,78 @@ export async function buildCloudApiServer(): Promise<{
       };
     }
 
-    entityVersionMap.set(entityKey, {
-      version: Math.max(currentMeta?.version ?? 0, event.entityVersion),
-      origin: event.originNode,
-      updatedAt: event.hlcTimestamp
-    });
+    const nextVersion = Math.max(currentMeta?.version ?? 0, event.entityVersion);
+    db.prepare(`
+      INSERT INTO entity_version_tracker (entity_key, version, origin_node, updated_at)
+      VALUES (?, ?, ?, ?)
+      ON CONFLICT(entity_key) DO UPDATE SET
+        version = excluded.version,
+        origin_node = excluded.origin_node,
+        updated_at = excluded.updated_at
+    `).run(entityKey, nextVersion, event.originNode, event.hlcTimestamp);
 
-    cursorCounter += 1;
-    const record: CloudLedgerRecord = {
-      cursorSeq: cursorCounter,
-      event: {
-        ...event,
-        status: 'ACKED',
-        syncedAt: new Date().toISOString()
-      }
-    };
+    const receivedAt = new Date().toISOString();
+    db.prepare(`
+      INSERT INTO sync_event_ledger (
+        event_id, idempotency_key, origin_node, entity_type, entity_id,
+        operation, entity_version, hlc_timestamp, payload_json, checksum_sha256, received_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      event.id,
+      event.idempotencyKey,
+      event.originNode,
+      event.entityType,
+      event.entityId,
+      event.operation,
+      event.entityVersion,
+      event.hlcTimestamp,
+      event.payloadJson,
+      event.checksumSha256,
+      receivedAt
+    );
 
-    ledgerByIdempotencyKey.set(event.idempotencyKey, record);
-    ledgerList.push(record);
-    return { record, duplicate: false, conflict };
+    const insertedRow = db
+      .prepare('SELECT * FROM sync_event_ledger WHERE idempotency_key = ?')
+      .get(event.idempotencyKey) as Record<string, unknown>;
+
+    return { record: mapLedgerRow(insertedRow), duplicate: false, conflict };
   }
 
-  app.get('/api/health', async () => ({
-    service: 'deck26-cloud-api-vps',
-    host: 'Hostinger VPS Ready',
-    databaseEngine: process.env.DATABASE_URL ? 'PostgreSQL (DATABASE_URL configured)' : 'Embedded Ledger + PostgreSQL Migration Ready',
-    totalSyncedEvents: ledgerList.length,
-    currentCursor: cursorCounter,
-    timestamp: new Date().toISOString()
-  }));
+  function getAllLedgerRecords(): CloudLedgerRecord[] {
+    const rows = db
+      .prepare('SELECT * FROM sync_event_ledger ORDER BY cursor_seq ASC')
+      .all() as Array<Record<string, unknown>>;
+    return rows.map((r) => mapLedgerRow(r));
+  }
 
-  // Catálogo Público para QR Code na Mesa, Delivery e Portal do Proprietário
+  function getCurrentMaxCursor(): number {
+    const row = db
+      .prepare('SELECT COALESCE(MAX(cursor_seq), 0) as max_cursor FROM sync_event_ledger')
+      .get() as { max_cursor: number };
+    return Number(row.max_cursor);
+  }
+
+  app.get('/api/health', async () => {
+    const total = getAllLedgerRecords().length;
+    const currentCursor = getCurrentMaxCursor();
+    return {
+      service: 'deck26-cloud-api-vps',
+      host: 'Hostinger VPS Simulator (Persistent Disk Mode)',
+      databaseEngine: process.env.DATABASE_URL
+        ? 'PostgreSQL (DATABASE_URL configured)'
+        : `Persistent Disk SQLite (${path.basename(dbPath)}) + PostgreSQL Migration Ready`,
+      totalSyncedEvents: total,
+      currentCursor,
+      timestamp: new Date().toISOString()
+    };
+  });
+
   app.get('/api/public/catalog', async () => ({
     establishment: 'DECK 26 — Hotel Auto Posto Milla',
     categories: DECK26_INITIAL_CATEGORIES,
     products: DECK26_INITIAL_PRODUCTS
   }));
 
-  // Endpoint de Sincronização Bidirecional chamado pelo Servidor Local Windows
   app.post('/api/sync/batch', async (req, reply) => {
     const parsed = SyncBatchPushRequestSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -131,14 +234,12 @@ export async function buildCloudApiServer(): Promise<{
       }
     }
 
-    // Eventos originados na VPS (ex: Pedidos QR Code, Delivery ou edições do Proprietário) que o servidor local ainda não puxou
-    const remoteEventsToPull = ledgerList
-      .filter(
-        (item) =>
-          item.cursorSeq > lastPulledRemoteCursor &&
-          item.event.originNode !== parsed.data.sourceOrigin
-      )
-      .map((item) => item.event);
+    const remoteRows = db
+      .prepare('SELECT * FROM sync_event_ledger WHERE cursor_seq > ? AND origin_node != ? ORDER BY cursor_seq ASC')
+      .all(lastPulledRemoteCursor, parsed.data.sourceOrigin) as Array<Record<string, unknown>>;
+
+    const remoteEventsToPull = remoteRows.map((r) => mapLedgerRow(r).event);
+    const currentCursor = getCurrentMaxCursor();
 
     const responsePayload: SyncBatchPushResponse = {
       processedAt: new Date().toISOString(),
@@ -146,13 +247,12 @@ export async function buildCloudApiServer(): Promise<{
       duplicateEventIds,
       conflicts,
       remoteEventsToPull,
-      newRemoteCursor: cursorCounter
+      newRemoteCursor: currentCursor
     };
 
     return reply.status(200).send(responsePayload);
   });
 
-  // Criação de Pedido Digital na VPS (QR Code na Mesa ou Delivery) que desce para o Servidor Local
   const CreateCloudOrderSchema = z.object({
     idempotencyKey: z.string().min(8),
     channel: SalesChannelSchema.default('QR_TABLE'),
@@ -242,17 +342,19 @@ export async function buildCloudApiServer(): Promise<{
     });
   });
 
-  // Visão Remota do Proprietário na VPS
   app.get('/api/owner/overview', async () => {
+    const all = getAllLedgerRecords();
+    const currentCursor = getCurrentMaxCursor();
     return {
-      totalEventsInCloud: ledgerList.length,
-      currentCursor: cursorCounter,
-      recentEvents: ledgerList.slice(-30).reverse()
+      totalEventsInCloud: all.length,
+      currentCursor,
+      recentEvents: all.slice(-30).reverse()
     };
   });
 
   return {
     app,
-    getLedger: () => ledgerList
+    getLedger: () => getAllLedgerRecords(),
+    closeDb: () => db.close()
   };
 }
