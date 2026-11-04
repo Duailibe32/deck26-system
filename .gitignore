@@ -4,6 +4,7 @@ node_modules/
 # Arquivos Gerados / Builds
 dist/
 build/
+target/
 .turbo/
 apps/desktop/src-tauri/target/
 
@@ -18,17 +19,28 @@ data/
 
 # Variáveis de Ambiente, Credenciais e Certificados Fiscais
 .env
+.env.local
+.env.production
+.env.*.local
 .env.*
 !.env.example
 *.pfx
 *.p12
 *.pem
 *.key
+*.crt
+*.cer
 
-# Logs e Temporários
+# Logs, Temporários e Backups
 logs/
 *.log
 npm-debug.log*
+*.tmp
+*.bak
+*.backup
+*.swp
+.DS_Store
+Thumbs.db
 
 # Projeto Legado Isolado (Preservado sem misturar ao repositório Deck 26)
 _legacy_dessence/

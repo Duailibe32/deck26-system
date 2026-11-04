@@ -1,0 +1,39 @@
+name: DECK 26 CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Typecheck, Testes e Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout do código
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js 22 (com suporte nativo a node:sqlite)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.13.0'
+          cache: 'npm'
+
+      - name: Instalar dependências de forma reproduzível
+        run: npm ci
+
+      - name: Verificar tipos TypeScript (Typecheck)
+        run: npm run typecheck
+
+      - name: Executar suíte de testes automatizados (Vitest)
+        run: npm test
+
+      - name: Compilar pacotes de produção (Build)
+        run: npm run build

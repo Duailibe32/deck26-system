@@ -326,13 +326,17 @@ export class LocalOperationalStore {
     }
 
     // 7. Semeia Identificadores Não-Previsíveis de QR Code para as Mesas 01 a 20
+    const qrSeedKey =
+      process.env.DECK26_QR_SEED_SECRET?.trim() ||
+      process.env.DECK26_AUTH_SECRET?.trim() ||
+      'deck26-qr-table-seed-dev';
     const insertQrTable = this.db.prepare(`
       INSERT OR IGNORE INTO dining_tables_qr (table_number, qr_token, label, requires_operator_approval, active, created_at)
       VALUES (?, ?, ?, 0, 1, ?)
     `);
     for (let t = 1; t <= 20; t++) {
       const deterministicSecret = crypto
-        .createHmac('sha256', 'deck26-qr-table-seed-key')
+        .createHmac('sha256', qrSeedKey)
         .update(`MESA-${t}`)
         .digest('hex')
         .slice(0, 24);

@@ -46,20 +46,31 @@ export interface AuthenticatedSession {
   issuedAt: number;
 }
 
-const TOKEN_SECRET = process.env.DECK26_AUTH_SECRET ?? 'deck26-local-hmac-dev-key-change-in-prod';
+const EPHEMERAL_DEV_SECRET = crypto.randomBytes(32).toString('hex');
+
+function resolveTokenSecret(): string {
+  const configured = process.env.DECK26_AUTH_SECRET?.trim();
+  if (configured) return configured;
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('DECK26_AUTH_SECRET deve ser configurado obrigatoriamente em produção.');
+  }
+  return EPHEMERAL_DEV_SECRET;
+}
 
 export function signSessionToken(session: AuthenticatedSession): string {
+  const secret = resolveTokenSecret();
   const payloadB64 = Buffer.from(JSON.stringify(session), 'utf-8').toString('base64url');
-  const sig = crypto.createHmac('sha256', TOKEN_SECRET).update(payloadB64).digest('base64url');
+  const sig = crypto.createHmac('sha256', secret).update(payloadB64).digest('base64url');
   return `${payloadB64}.${sig}`;
 }
 
 export function verifySessionToken(token: string | undefined): AuthenticatedSession | null {
   if (!token) return null;
+  const secret = resolveTokenSecret();
   const clean = token.replace(/^Bearer\s+/i, '').trim();
   const [payloadB64, sig] = clean.split('.');
   if (!payloadB64 || !sig) return null;
-  const expectedSig = crypto.createHmac('sha256', TOKEN_SECRET).update(payloadB64).digest('base64url');
+  const expectedSig = crypto.createHmac('sha256', secret).update(payloadB64).digest('base64url');
   if (sig !== expectedSig) return null;
   try {
     return JSON.parse(Buffer.from(payloadB64, 'base64url').toString('utf-8')) as AuthenticatedSession;
