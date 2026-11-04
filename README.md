@@ -7,7 +7,7 @@
 **Operação local • Pedidos em tempo real • Controle financeiro • Arquitetura offline-first**
 
 [![CI](https://github.com/Duailibe32/deck26-system/actions/workflows/ci.yml/badge.svg)](https://github.com/Duailibe32/deck26-system/actions/workflows/ci.yml)
-![Status](https://img.shields.io/badge/status-em%20desenvolvimento-F72585)
+![Status](https://img.shields.io/badge/status-etapa%205%20conclu%C3%ADda-F72585)
 ![Acesso](https://img.shields.io/badge/reposit%C3%B3rio-privado-7209B7)
 ![Node](https://img.shields.io/badge/Node.js-22%2B-339933?logo=nodedotjs&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?logo=typescript&logoColor=white)
@@ -20,143 +20,113 @@
 
 ## ✨ Visão geral
 
-O **DECK 26** é uma plataforma de gestão integrada desenvolvida para a operação do **Deck 26 / Hotel Auto Posto Milla**, reunindo restaurante, bar, atendimento de mesas, cozinha, estoque, caixa e uma base para a futura gestão hoteleira.
+O **DECK 26** é uma plataforma de gestão integrada desenvolvida para a operação comercial do **Deck 26 / Hotel Auto Posto Milla**, reunindo restaurante, bar, atendimento de mesas, cozinha, estoque, caixa e o sistema hoteleiro completo (**PMS - Property Management System**).
 
-A arquitetura é **offline-first**: a operação principal utiliza um servidor e um banco de dados locais, permitindo continuar trabalhando durante indisponibilidades da internet externa. A sincronização com uma instância remota faz parte da arquitetura; atualmente, a nuvem é **simulada localmente**, sem implantação em VPS de produção.
+A arquitetura é **offline-first**: a operação principal utiliza um servidor e um banco de dados locais, permitindo continuar trabalhando com latência zero e sem dependência de internet externa. A sincronização com uma instância remota faz parte da arquitetura; atualmente, a nuvem é **simulada localmente**, sem exigência de contratação prévia de VPS.
 
 > [!IMPORTANT]
-> **Status atual:** etapas 1 a 4.5 implementadas segundo o histórico do projeto, com testes automatizados e CI configurados. Ainda são necessários testes operacionais com dispositivos reais, impressoras e integrações externas antes do uso em produção.
+> **Status atual:** Etapas 1 a 5 implementadas, com **71 testes automatizados aprovados** e pipeline de CI no GitHub Actions. O sistema respeita as regras de negócio reais, sem dados fictícios de demonstração no banco e com persistência independente em disco.
 
 ### 🎯 Cenário operacional planejado
 
 | Terminal | Finalidade |
 | --- | --- |
-| 🖥️ **Windows / recepção** | Caixa, PDV, mesas, comandas, estoque e administração |
-| 📱 **Até 5 celulares** | Atendimento de garçons pela rede local |
-| 👨‍🍳 **KDS da cozinha** | Acompanhamento de pedidos e estações de preparo |
-| 📲 **QR Code nas mesas** | Cardápio e pedidos vinculados à mesa |
-| ☁️ **Nuvem futura** | Sincronização e serviços remotos após implantação |
+| 🖥️ **Windows / recepção** | Caixa PDV, mesas, comandas, estoque, governança, reservas e PMS hoteleiro |
+| 📱 **Até 5 celulares** | Atendimento de garçons pela rede local Wi-Fi |
+| 👨‍🍳 **KDS da cozinha** | Acompanhamento de pedidos e estações de preparo (Cozinha Quente/Fria, Chapa, Bar) |
+| 📲 **QR Code nas mesas** | Cardápio digital e pedidos vinculados à mesa com assinatura HMAC |
+| ☁️ **Nuvem futura** | Sincronização bidirecional e portal remoto após implantação na VPS |
 
 ## 🚀 Funcionalidades
 
 | Área | Recursos desenvolvidos | Estado |
 | --- | --- | --- |
-| **Produtos e cardápio** | Cadastro, categorias, preços por canal, adicionais e histórico de preços | Implementado; testes automatizados |
-| **Estoque** | Kardex, entradas, baixas, fichas técnicas e estornos auditáveis | Implementado; testes automatizados |
-| **Mesas e comandas** | Abertura, transferência, junção, divisão e fechamento | Implementado; testes automatizados |
-| **Garçons** | Terminal mobile, lançamento de pedidos e avisos de preparo | Implementado; testes automatizados |
-| **Cozinha / KDS** | Filas por estação, status, SLA e eventos em tempo real via SSE | Implementado; testes automatizados |
-| **Caixa / PDV** | Pagamentos parciais, divisão de conta, troco, descontos, sangrias e fechamento de turno | Implementado; testes automatizados |
-| **QR Code** | Identificação segura de mesa e validação de preços no servidor | Implementado; testes automatizados |
-| **Impressão** | Fila incremental ESC/POS, controle de falhas e segunda via | Software implementado; hardware não homologado |
-| **Hotel** | Estrutura inicial de quartos e conta de hospedagem | Parcial; expansão na Etapa 5 |
-| **Delivery e painel remoto** | Estrutura de canais e interfaces web | Expansão planejada |
-| **Fiscal / pagamentos bancários** | Campos e preparação para integração | Integrações reais pendentes |
+| **Produtos e cardápio** | Cadastro inteligente, categorias, preços por canal, adicionais e controle de margem bruta | Implementado; testes automatizados |
+| **Estoque Kardex** | Razão contábil, entradas de compra, baixas automáticas, fichas técnicas e estornos auditáveis | Implementado; testes automatizados |
+| **Mesas e comandas** | Estado físico vs financeiro, transferência, junção, separação e prevenção de duplicidade | Implementado; testes automatizados |
+| **Garçons** | Terminal mobile, lançamento de pedidos, canal dedicado e notificações instantâneas | Implementado; testes automatizados |
+| **Cozinha / KDS** | Filas por estação, SLA configurável, SSE em tempo real e cancelamento por estágio | Implementado; testes automatizados |
+| **Caixa / PDV** | Pagamentos parciais/mistos, divisão de conta, troco em espécie, sangrias e turno de caixa | Implementado; testes automatizados |
+| **QR Code** | Identificação criptográfica segura por mesa e cálculo estrito no servidor | Implementado; testes automatizados |
+| **Impressão** | Spooler incremental ESC/POS por estação, proteção `UNKNOWN_OUTCOME` e 2ª via | Software implementado; hardware a conectar |
+| **Hotel (PMS Milla)** | Apartamentos (ocupação, limpeza, manutenção), hóspedes LGPD, reservas sem sobreposição [in, out), check-in guiado, extrato de folio, integração `ROOM_CHARGE` com restaurante sem dupla baixa de estoque, frigobar, serviços adicionais, check-out com saldo zero e métricas ADR/RevPAR | Implementado; 36 testes automatizados |
+| **Delivery e painel remoto** | Estrutura de canais comerciais e interfaces web sincronizadas | Expansão planejada (Etapa 6) |
+| **Fiscal / pagamentos bancários** | Campos fiscais e arquitetura preparados para integração SEFAZ/TEF | Integrações reais pendentes |
 
 ### 🔄 Como os módulos se conectam
 
 ```mermaid
 flowchart TD
     A[Garçom / Caixa / QR Code] --> B[Servidor operacional local]
-    B --> C[(SQLite local)]
+    B --> C[(SQLite local - WAL)]
     B --> D[Mesas e comandas]
     D --> E[KDS: cozinha e bar]
     D --> F[Estoque e fichas técnicas]
     D --> G[Caixa e pagamentos]
-    B --> H[Fila de sincronização]
-    H -.-> I[API de nuvem simulada localmente]
+    B --> H[PMS Hotel Auto Posto Milla]
+    H --> I[Folio: Diárias, Frigobar, Serviços]
+    D -.->|ROOM_CHARGE| I
+    B --> J[Fila de sincronização Outbox]
+    J -.-> K[API de nuvem simulada localmente]
 ```
 
-Os pedidos são associados às comandas, encaminhados às estações de preparo e registrados para atualização de estoque e fechamento financeiro. A lógica de impressão incremental evita recriar automaticamente tickets de pedidos anteriores.
+Os consumos do bar e restaurante podem ser transferidos diretamente para o apartamento do hóspede (`ROOM_CHARGE`). A mesa é liberada no restaurante sem duplicar baixas no estoque de insumos e sem inflar o caixa diário.
 
 ## 🧱 Arquitetura
 
-O projeto é um **monorepositório npm Workspaces** com quatro aplicações e dois pacotes compartilhados.
+O projeto é um **monorepositório npm Workspaces** com quatro aplicações e dois pacotes compartilhados:
 
 ```text
 deck26-system/
 ├── apps/
-│   ├── desktop/          # React / Tauri 2; PDV, garçom e KDS
-│   ├── local-server/     # Fastify, SQLite WAL, autenticação e SSE
-│   ├── cloud-api/        # Simulador local da API remota
-│   └── web/              # Cardápio e interfaces web
+│   ├── desktop/          # React 19 / Tauri 2; PDV, garçom, KDS e PMS Hotel
+│   ├── local-server/     # Fastify, SQLite nativo WAL, RBAC, SSE e PMS engine
+│   ├── cloud-api/        # Simulador local da API remota da VPS (SQLite / PostgreSQL)
+│   └── web/              # Cardápio Digital QR Code e interfaces web públicas
 ├── packages/
-│   ├── contracts/        # Zod, regras, tipos e migrações SQL
-│   └── ui/               # Design system e componentes
-├── docs/                 # Guias técnicos e operacionais
-├── scripts/              # Scripts de desenvolvimento
-├── .github/workflows/    # Integração contínua
-├── .env.example          # Exemplo sem segredos
-└── package.json          # Scripts e workspaces
+│   ├── contracts/        # Zod, matriz de permissões, regras e migrações SQL
+│   └── ui/               # Design system oficial (Rosa/Preto/Roxo) e componentes
+├── docs/                 # Documentação técnica detalhada de cada subsistema
+├── scripts/              # Orquestrador local de desenvolvimento (dev-all.mjs)
+├── .github/workflows/    # Pipeline de Integração Contínua (CI)
+└── INICIAR-DECK26-DEV.bat# Inicializador do ambiente local Windows 11
 ```
-
-### Tecnologias
-
-| Camada | Stack |
-| --- | --- |
-| Interface | React 19, TypeScript 5.7, Vite 6 |
-| Desktop | Tauri 2 e WebView2 |
-| API local | Node.js 22+, Fastify 5, SSE |
-| Dados locais | SQLite nativo (`node:sqlite`) com WAL |
-| API remota simulada | Fastify e SQLite independente |
-| Banco futuro de produção | PostgreSQL 16 (planejado) |
-| Contratos | Zod, RBAC e valores monetários em centavos inteiros |
-| Qualidade | Vitest e GitHub Actions |
-
-**Identidade visual:** rosa `#F72585`, preto `#111111`, roxo `#7209B7`, neutro `#1A1A1A` e fonte **Plus Jakarta Sans**.
 
 ## 💻 Começando no Windows
 
 ### Pré-requisitos
-
 - Windows 11 (64 bits)
-- Node.js **22.5+** com suporte a `node:sqlite` (preferencialmente versão compatível com o CI)
+- Node.js **22.5+** com suporte a `node:sqlite` nativo
 - npm 10+
 - Git
-- Acesso autorizado ao repositório privado
 
-### 1. Obter o projeto
+### 1. Obter o projeto e instalar dependências
 
 ```powershell
 git clone https://github.com/Duailibe32/deck26-system.git
 cd deck26-system
+npm install
 ```
 
-### 2. Instalar dependências
+### 2. Executar localmente
 
+Execute o inicializador automático:
 ```powershell
-npm ci
+.\INICIAR-DECK26-DEV.bat
 ```
-
-### 3. Configurar o ambiente (quando necessário)
-
-```powershell
-Copy-Item .env.example .env
-```
-
-Consulte os comentários de `.env.example` e o guia [`docs/LOCAL_SETUP.md`](docs/LOCAL_SETUP.md). **Nunca envie o arquivo `.env` ao GitHub.**
-
-### 4. Iniciar os serviços
-
-No Windows, execute o arquivo `INICIAR-DECK26-DEV.bat` ou use:
-
+Ou inicie todos os serviços via npm:
 ```powershell
 npm run dev:all
 ```
 
-### Endereços em desenvolvimento
-
-| Serviço | Endereço no próprio computador |
+| Serviço | Endereço no navegador local |
 | --- | --- |
-| Painel principal / PDV | `http://localhost:5173` |
-| Terminal do garçom | `http://localhost:5173/?terminal=garcom` |
+| Painel principal / PDV / PMS Hotel | `http://localhost:5173` |
+| Terminal mobile do garçom | `http://localhost:5173/?terminal=garcom` |
 | Cozinha / KDS | `http://localhost:5173/?terminal=cozinha` |
-| Cardápio web | `http://localhost:5174` |
-| API local | `http://127.0.0.1:4000/api/health` |
-| API de nuvem simulada | `http://127.0.0.1:4100/api/health` |
-
-> [!NOTE]
-> `localhost` funciona apenas no próprio dispositivo. Para acesso por celulares, é necessário configurar explicitamente a rede local, o endereço IP, as permissões e a segurança. O servidor local escuta em `127.0.0.1` por padrão; consulte a documentação antes de habilitar acesso LAN.
+| Cardápio web e delivery | `http://localhost:5174` |
+| API operacional local | `http://127.0.0.1:4000/api/health` |
+| API da nuvem simulada | `http://127.0.0.1:4100/api/health` |
 
 ## 🧪 Testes e integração contínua
 
@@ -168,45 +138,37 @@ npm test
 npm run build
 ```
 
-O relatório da Etapa 4.5 registrou **35 testes aprovados** e uma execução bem-sucedida do pipeline GitHub Actions no commit `8f240e1`.
+O projeto conta com **71 testes automatizados aprovados** cobrindo contratos, regras de domínio, API do servidor, cenários do KDS, caixa, outbox e o ciclo completo de 20 passos do PMS hoteleiro:
 
 - [Ver workflow de CI](.github/workflows/ci.yml)
 - [Acompanhar execuções do GitHub Actions](https://github.com/Duailibe32/deck26-system/actions)
-- [Execução de referência informada](https://github.com/Duailibe32/deck26-system/actions/runs/41785656827)
-
-O badge no topo mostra o estado mais recente do workflow; ele não substitui a homologação operacional.
 
 ## 🔐 Segurança e limites atuais
 
-- **Autorização:** permissões por perfil (RBAC) validadas no backend.
+- **Autorização:** permissões tipadas por perfil (RBAC) com namespaces `tabs:*`, `cash:*`, `kds:*`, `hotel:*`.
 - **Segredos:** variáveis de ambiente privadas fora do versionamento; segredo de autenticação obrigatório em produção.
-- **Integridade:** operações financeiras e de estoque com regras transacionais e idempotência.
-- **Rede:** servidor local isolado por padrão; exposição LAN requer configuração consciente.
-- **Privacidade:** bancos SQLite, backups e certificados não devem integrar o repositório.
-
-> [!WARNING]
-> **Não utilizar os PINs de demonstração em produção.** Antes da implantação, configurar credenciais individuais, persistência segura dos segredos, backups, recuperação de falhas e testes com a rede e os dispositivos definitivos.
+- **Integridade:** operações financeiras e de estoque com regras transacionais estritas e idempotência.
+- **Rede:** servidor local isolado em `127.0.0.1` por padrão; exposição LAN requer configuração consciente.
+- **Privacidade:** bancos SQLite locais, backups e certificados digitais são protegidos pelo `.gitignore`.
 
 ### Dependências ainda não homologadas
 
-1. **Fiscal:** emissão de NFC-e/NF-e permanece desabilitada até configuração e validação fiscal apropriadas.
-2. **Pagamentos eletrônicos:** registros manuais não comprovam liquidação bancária; integrações PIX/TEF reais estão pendentes.
-3. **Impressoras térmicas:** geração e fila ESC/POS existem, mas o envio físico USB/Ethernet depende de hardware e testes.
-4. **VPS:** a API remota continua simulada localmente; não há implantação PostgreSQL em produção.
-5. **Instalador Windows:** o aplicativo nativo definitivo ainda exige validação de build, instalação e operação no equipamento-alvo.
+1. **Fiscal:** emissão de NFC-e/NF-e permanece desabilitada até configuração do Certificado A1 real e CSC.
+2. **Pagamentos eletrônicos:** registros manuais operam em modo declarado até a homologação com adquirente/TEF/PIX bancário.
+3. **Impressoras térmicas:** geração e fila ESC/POS prontas no banco; envio físico USB/Ethernet aguarda hardware real.
+4. **VPS:** a API remota continua simulada localmente com persistência independente; PostgreSQL será ativado no deploy de produção.
+5. **Instalador Windows:** o aplicativo nativo definitivo Tauri 2 será empacotado após a validação completa dos fluxos.
 
 ## 🗺️ Roadmap
 
 - [x] **Etapa 1** — Estrutura do monorepositório e arquitetura inicial
-- [x] **Etapa 2** — Persistência local, autenticação inicial, pagamentos e impressão incremental
-- [x] **Etapa 3** — Catálogo, estoque, fichas técnicas e QR Code
-- [x] **Etapa 4** — Mesas, comandas, garçons, KDS e caixa
-- [x] **Etapa 4.5** — GitHub privado, documentação, auditoria e CI
-- [ ] **Etapa 5** — Gestão hoteleira: reservas, check-in, check-out, diárias, frigobar e contas de hóspedes
-- [ ] **Etapa 6** — Delivery, finanças avançadas e relatórios gerenciais
+- [x] **Etapa 2** — Persistência local dual SQLite, autenticação inicial, pagamentos parciais e impressão incremental
+- [x] **Etapa 3** — Catálogo integrado aos 6 canais, estoque Kardex com reversão, fichas técnicas e QR Code seguro
+- [x] **Etapa 4** — Mesas, comandas transacionais, garçons, KDS com SLA/SSE, divisão de contas e caixa
+- [x] **Etapa 4.5** — GitHub privado, documentação técnica completa, auditoria e CI
+- [x] **Etapa 5** — Gestão hoteleira completa (Hotel Auto Posto Milla): PMS, reservas sem sobreposição, check-in guiado, extrato de folio, integração `ROOM_CHARGE` com restaurante Deck 26, frigobar, governança e métricas ADR/RevPAR
+- [ ] **Etapa 6** — Delivery próprio, financeiro avançado (DRE operacional) e relatórios gerenciais
 - [ ] **Etapa 7** — Implantação em VPS, PostgreSQL e instalador Windows definitivo
-
-O roadmap registra marcos de desenvolvimento, **não certificações de prontidão para produção**.
 
 ## 📚 Documentação
 
@@ -215,28 +177,12 @@ O roadmap registra marcos de desenvolvimento, **não certificações de prontid�
 | [Arquitetura](docs/ARCHITECTURE.md) | Componentes, fluxos e serviços |
 | [Instalação local](docs/LOCAL_SETUP.md) | Configuração no Windows e rede |
 | [Banco de dados](docs/DATABASE.md) | SQLite, migrações e plano PostgreSQL |
-| [API](docs/API.md) | Endpoints REST e SSE |
-| [Segurança](docs/SECURITY.md) | Autenticação, RBAC e proteção de dados |
-| [Testes](docs/TESTING.md) | Execução e cenários automatizados |
+| [API](docs/API.md) | Endpoints REST, SSE e PMS Hoteleiro |
+| [Segurança](docs/SECURITY.md) | Autenticação, RBAC e proteção de dados LGPD |
+| [Testes](docs/TESTING.md) | Execução e 71 cenários automatizados |
 | [Implantação](docs/DEPLOYMENT_PLAN.md) | Planejamento da VPS e do Windows definitivo |
 | [Roadmap](docs/ROADMAP.md) | Etapas e prioridades |
 | [Histórico de mudanças](docs/CHANGELOG.md) | Evolução técnica |
-
-## 🔄 Atualizando o repositório
-
-Após revisar as alterações e confirmar que não existem dados privados entre os arquivos modificados:
-
-```powershell
-npm run typecheck
-npm test
-npm run build
-git status
-git add README.md
-git commit -m "docs: aprimora README do DECK 26"
-git push origin main
-```
-
-Para outras atualizações, substitua `README.md` pelos arquivos que realmente deseja versionar. Evite adicionar indiscriminadamente dados locais.
 
 ---
 

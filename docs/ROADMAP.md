@@ -12,13 +12,13 @@
   - Gestão visual de mesas (estado físico × financeiro), proteção transacional de concorrência, transferência e junção/separação de mesas, transferência de itens entre comandas, divisão de contas, descontos, taxa de serviço, KDS com SLA e SSE em tempo real, cancelamento por estágio, recuperação de impressão térmica e turno de caixa completo.
 - **Etapa 4.5 — Publicação Profissional no GitHub Privado e Documentação Técnica**:
   - Auditoria completa de segurança, documentação técnica (`README.md` + `docs/*`), pipeline CI GitHub Actions e backup em repositório privado `deck26-system`.
+- **Etapa 5 — Gestão Hoteleira Completa (Hotel Auto Posto Milla)**:
+  - Sistema PMS completo: cadastro de apartamentos com triplo status independente (Ocupação, Governança e Manutenção), fichas de hóspedes LGPD, reservas multi-diárias com proteção de sobreposição `[in, out)`, check-in guiado com abertura de Folio e lançamento da 1ª diária, extrato de conta auditável, transferência de consumo do restaurante Deck 26 via `ROOM_CHARGE` sem dupla baixa de estoque e sem faturamento antecipado no caixa, frigobar por quarto, serviços adicionais, check-out com exigência de saldo zerado, painel de camareiras, chamados de manutenção e métricas hoteleiras ADR, RevPAR e Ocupação %.
 
 ---
 
 ## Próximas Etapas Planejadas
 
-- **Etapa 5 — Gestão Hoteleira Completa (Hotel Auto Posto Milla)**:
-  - Reservas por período, check-in/check-out completo, lançamento de diárias, frigobar, governança/limpeza de quartos e transferência detalhada de comandas do restaurante para a conta do hóspede.
 - **Etapa 6 — Delivery Próprio, Financeiro e Relatórios Gerenciais**:
   - Gestão de entregas, taxas por bairro/região, contas a pagar/receber, fluxo de caixa consolidado, DRE operacional e curva ABC de produtos.
 - **Etapa 7 — Homologação de Hardware, Fiscal SEFAZ e Deploy em Produção**:

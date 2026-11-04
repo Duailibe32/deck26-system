@@ -60,3 +60,47 @@ No DECK 26, cada conceito operacional e financeiro possui sua própria tabela e 
 | API de Nuvem (Simulador VPS) | `@deck26/cloud-api` | `4100` | Recepção de sincronização (`push`/`pull`) e API pública |
 | Aplicativo Desktop / Terminais | `@deck26/desktop` | `5173` | Interface do Caixa Windows, Terminal do Garçom e KDS |
 | Site Web / Cardápio QR | `@deck26/web` | `5174` | Cardápio Digital QR Code, Delivery e Painel do Proprietário |
+
+---
+
+## 4. Arquitetura do Módulo Hoteleiro PMS (Hotel Auto Posto Milla)
+
+A Etapa 5 introduziu a gestão completa de PMS hoteleiro com integração nativa às operações de bar e restaurante do Deck 26:
+
+### 4.1 Separação Estrita dos Três Eixos de Status do Quarto
+Diferente de sistemas legados que misturam disponibilidade com limpeza, o DECK 26 gerencia 3 máquinas de estado independentes para cada apartamento:
+1. **Ocupação (`occupancyStatus`)**: `LIVRE` | `RESERVADO` | `OCUPADO` | `BLOQUEADO`.
+2. **Governança (`housekeepingStatus`)**: `LIMPO` | `SUJO` | `EM_LIMPEZA` | `INSPECAO_PENDENTE`.
+3. **Manutenção (`maintenanceStatus`)**: `DISPONIVEL` | `EM_MANUTENCAO` | `INTERDITADO`.
+
+Essa separação impede que um quarto marcado como `SUJO` seja erroneamente liberado para venda, ou que um quarto `EM_MANUTENCAO` seja reservado por engano.
+
+### 4.2 Modelo de Conta do Hóspede (Hotel Folio Ledger)
+- Toda estadia ativa (`HotelStay`) cria uma comanda correspondente do tipo `HOTEL_FOLIO` (`APTO-XXX`).
+- Todos os débitos e créditos são registrados em `hotel_folio_entries` como um razão contábil estrito em centavos inteiros (`amountCents`).
+- Débitos (> 0): diárias de hospedagem (`ROOM_RATE`), pedidos transferidos do restaurante (`RESTAURANT_ORDER`), pedidos de bar (`BAR_ORDER`), consumos de frigobar (`MINIBAR`), serviços adicionais (`SERVICE`).
+- Créditos (<= 0): pagamentos efetuados (`PAYMENT`), adiantamentos/sinal de reserva (`ADVANCE_PAYMENT`), descontos autorizados (`DISCOUNT`), estornos (`REFUND`).
+- **Saldo Devedor Calculado**: `balanceCents = debitsCents - creditsCents`.
+
+### 4.3 Integração Transacional Restaurante -> Hotel (`ROOM_CHARGE`)
+- Hóspedes podem consumir no salão do Deck 26 (mesas ou balcão) e solicitar a transferência da despesa para o quarto.
+- O endpoint `/api/hotel/transfer-tab-to-folio` valida se o quarto está `OCUPADO` e possui estadia ativa (`ACTIVE`).
+- A comanda da mesa é encerrada com pagamento no método `ROOM_CHARGE`.
+- A despesa é lançada no Folio do hóspede (`entryType = 'RESTAURANT_ORDER'`).
+- **Garantias de Integridade**:
+  1. O estoque de insumos **não** sofre dupla baixa (a baixa já ocorreu na confirmação do pedido no restaurante).
+  2. Os cupons de produção **não** são reenviados para as impressoras da cozinha/bar.
+  3. O caixa diário do restaurante **não** é inflado com numerário inexistente (a receita será recebida no check-out do hotel).
+
+### 4.4 Proteção de Sobreposição de Reservas
+- A verificação de disponibilidade considera entrada inclusiva e saída exclusiva: `[inA, outA)` e `[inB, outB)`.
+- Duas reservas ou estadias colidem se e somente se: `inA < outB && outA > inB`.
+- Permite que um hóspede faça check-in no mesmo dia em que outro hóspede faz check-out (`checkInB == checkOutA`).
+
+### 4.5 Regra de Ouro do Check-Out
+- O encerramento da estadia exige saldo devedor quitado (`balanceCents == 0`).
+- Se houver pendência financeira, o check-out é bloqueado (`HTTP 400`), exigindo quitação prévia via PIX, Dinheiro ou Cartões, ou autorização expressa documentada no log de auditoria (`allowOverrideWithAudit = true`).
+- No encerramento:
+  - Estadia é marcada como `CHECKED_OUT`.
+  - Quarto passa para ocupação `LIVRE`.
+  - Quarto passa para governança `SUJO` (obrigando passagem pela equipe de limpeza).

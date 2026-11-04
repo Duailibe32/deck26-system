@@ -45,10 +45,26 @@
 - `POST /api/payments/:id/refund` — Estorno autorizado de pagamento (`REFUNDED`).
 - `POST /api/cash-sessions/open` | `POST /api/cash-sessions/movements` | `POST /api/cash-sessions/close` — Ciclo completo de turno de caixa, sangria e suprimento.
 
-### Impressão Térmica, Hotel e Sincronização
+### Impressão Térmica e Sincronização
 - `POST /api/print-jobs/:id/mark-printed` | `PATCH /api/print-jobs/:id/status` | `POST /api/print-jobs/:id/reprint`
-- `POST /api/hotel/checkin` — Check-in rápido de apartamento com abertura de comanda `HOTEL_FOLIO`.
 - `POST /api/sync/trigger` — Dispara ciclo imediato de sincronização Push/Pull com a API de nuvem.
+
+### Módulo Hoteleiro PMS (Hotel Auto Posto Milla — Etapa 5)
+- `GET /api/hotel/rooms` | `POST /api/hotel/rooms` | `PUT /api/hotel/rooms/:id` | `DELETE /api/hotel/rooms/:id` — CRUD de apartamentos (desativação lógica protegida se houver estadias).
+- `GET /api/hotel/guests` | `POST /api/hotel/guests` | `PUT /api/hotel/guests/:id` — Fichas de hóspedes LGPD com busca por documento/nome.
+- `GET /api/hotel/reservations` | `POST /api/hotel/reservations` — Reservas com proteção contra sobreposição de intervalo `[in, out)`.
+- `POST /api/hotel/reservations/:id/cancel` | `POST /api/hotel/reservations/:id/reschedule` — Cancelamento e reagendamento de reservas.
+- `GET /api/hotel/availability` — Consulta de disponibilidade por quarto e período de datas.
+- `GET /api/hotel/stays` | `GET /api/hotel/stays/:id` — Consulta de estadias hoteleiras ativas e históricas.
+- `POST /api/hotel/checkin` — Check-in guiado (walk-in ou de reserva), abre comanda Folio e lança 1ª diária.
+- `POST /api/hotel/checkout` — Check-out estrito (exige saldo zero; opcional override auditado).
+- `GET /api/hotel/stays/:id/folio` — Extrato completo auditável de débitos e créditos com totalizadores.
+- `POST /api/hotel/transfer-tab-to-folio` — Transferência de comanda de restaurante Deck 26 para quarto (`ROOM_CHARGE`).
+- `GET /api/hotel/minibar/items` | `POST /api/hotel/minibar/consume` | `POST /api/hotel/minibar/restock` — Gestão e consumo de frigobar.
+- `GET /api/hotel/services` | `POST /api/hotel/services/order` — Serviços de hotelaria (lavanderia, cama extra, café extra).
+- `PATCH /api/hotel/housekeeping/status` | `GET /api/hotel/housekeeping/logs` — Atualização de governança e histórico.
+- `GET /api/hotel/maintenance` | `POST /api/hotel/maintenance` | `PATCH /api/hotel/maintenance/:id/resolve` — Chamados de manutenção predial.
+- `GET /api/hotel/metrics` — Painel de métricas hoteleiras (ADR, RevPAR, Taxa de Ocupação, Receitas e Saldos).
 
 ---
 

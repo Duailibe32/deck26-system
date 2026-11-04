@@ -2,6 +2,24 @@
 
 Todas as mudanças relevantes do projeto **DECK 26** são documentadas neste arquivo.
 
+## [Etapa 5] - 2026-11-04
+### Adicionado
+- Módulo Hoteleiro PMS Completo para o Hotel Auto Posto Milla integrado nativamente ao Deck 26.
+- Gestão de apartamentos com triplo status ortogonal e independente: Ocupação (`LIVRE`, `RESERVADO`, `OCUPADO`, `BLOQUEADO`), Governança (`LIMPO`, `SUJO`, `EM_LIMPEZA`, `INSPECAO_PENDENTE`) e Manutenção (`DISPONIVEL`, `EM_MANUTENCAO`, `INTERDITADO`).
+- Desativação lógica obrigatória de apartamentos quando houver histórico de estadias passadas, preservando a integridade das auditorias.
+- Cadastro e busca de hóspedes com LGPD, CPF/Passaporte, telefone e placa do veículo para o estacionamento do Auto Posto Milla.
+- Motor de reservas com cálculo exato de diárias em centavos inteiros (`calculateNightsCount`) e validação estrita contra sobreposição de intervalo de datas `[in, out)`.
+- Check-in guiado (walk-in e com reserva), geração de comanda Folio (`APTO-XXX`), lançamento da 1ª diária e suporte a early check-in.
+- Razão contábil do quarto (Hotel Folio Ledger) com lançamentos cronológicos de débitos e créditos.
+- Integração transacional Deck 26 Restaurante -> Folio Quarto via método de pagamento `ROOM_CHARGE`, liberando a mesa no salão sem duplicar baixas de insumos no estoque e sem inflar o caixa do restaurante.
+- Frigobar por apartamento com débito automático no folio e baixa de estoque do almoxarifado.
+- Serviços adicionais de hotelaria (lavanderia expressa, cama extra, café da manhã adicional, estacionamento).
+- Check-out obrigatório com saldo zerado, bloqueio contra saídas com débito em aberto e opção de liberação especial documentada no log de auditoria.
+- Painel operacional de camareiras/governança com avanço de estados e chamados de manutenção predial com interdição.
+- Painel de métricas hoteleiras em tempo real: ADR (Diária Média), RevPAR, Taxa de Ocupação %, Receitas Recebidas e Saldos Pendentes.
+- Migrações SQL `0004_stage5_hotel_pms.sql` (local SQLite) e `0004_stage5_cloud_hotel_pms.sql` (PostgreSQL 16+ na nuvem).
+- 36 novos testes automatizados em `apps/local-server/src/hotel.test.ts`, totalizando 71 testes aprovados em 100%.
+
 ## [Etapa 4.5] - 2026-11-04
 ### Adicionado
 - Documentação técnica completa em português (`README.md` e pasta `docs/`).

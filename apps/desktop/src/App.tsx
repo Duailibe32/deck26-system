@@ -9,7 +9,15 @@ import {
   DECK26_INITIAL_PRODUCTS,
   DiningTableQr,
   DiscountType,
+  HotelDashboardMetrics,
+  HotelFolioEntry,
+  HotelGuest,
+  HotelMinibarItem,
+  HotelReservation,
   HotelRoom,
+  HotelRoomCategory,
+  HotelService,
+  HotelStay,
   KdsSlaConfig,
   OperationalNotification,
   Order,
@@ -20,6 +28,9 @@ import {
   PrepStation,
   PrintJob,
   ProductRecipe,
+  RoomHousekeepingStatus,
+  RoomMaintenanceStatus,
+  RoomOccupancyStatus,
   SYSTEM_MODULES,
   SalesChannel,
   StockMovement,
@@ -30,6 +41,7 @@ import {
   TablePhysicalStatus,
   UserRole,
   calculateGrossMarginPercent,
+  calculateNightsCount,
   evaluateKdsOrderSla,
   formatBrlCents,
   hasPermission,
@@ -84,6 +96,11 @@ interface ServerStateSnapshot {
     recentMovements: StockMovement[];
   };
   hotelRooms: HotelRoom[];
+  hotelGuests?: HotelGuest[];
+  hotelReservations?: HotelReservation[];
+  hotelStays?: HotelStay[];
+  hotelServices?: HotelService[];
+  hotelMetrics?: HotelDashboardMetrics;
   syncEvents: SyncOutboxEvent[];
   notifications?: OperationalNotification[];
   kdsSlaConfig?: KdsSlaConfig;
@@ -153,6 +170,11 @@ export const DesktopApp: React.FC = () => {
     printJobs: [],
     stock: { balances: [], recentMovements: [] },
     hotelRooms: [],
+    hotelGuests: [],
+    hotelReservations: [],
+    hotelStays: [],
+    hotelServices: [],
+    hotelMetrics: undefined,
     syncEvents: []
   });
 
@@ -244,6 +266,68 @@ export const DesktopApp: React.FC = () => {
   const [cashShiftMovementReais, setCashShiftMovementReais] = useState<string>('50,00');
   const [cashShiftMovementReason, setCashShiftMovementReason] = useState<string>('Sangria para cofre');
   const [cashShiftCountedReais, setCashShiftCountedReais] = useState<string>('');
+
+  // Estados da Etapa 5: PMS Hotel Auto Posto Milla
+  const [hotelSubTab, setHotelSubTab] = useState<'MAPA' | 'RESERVAS' | 'HOSPEDES' | 'CHECKIN_CHECKOUT' | 'FOLIO' | 'RESTAURANTE' | 'FRIGOBAR_SERVICOS' | 'GOVERNANCA'>('MAPA');
+  const [hotelRoomFilter, setHotelRoomFilter] = useState<'ALL' | 'LIVRE' | 'OCUPADO' | 'RESERVADO' | 'BLOQUEADO' | 'SUJO'>('ALL');
+  const [selectedFolioStayId, setSelectedFolioStayId] = useState<string>('');
+  const [folioData, setFolioData] = useState<{
+    stay: HotelStay;
+    folioTab: Tab;
+    entries: HotelFolioEntry[];
+    totals: { debitsCents: number; creditsCents: number; balanceCents: number };
+  } | null>(null);
+  const [folioLoading, setFolioLoading] = useState<boolean>(false);
+  const [folioPayReais, setFolioPayReais] = useState<string>('');
+  const [folioPayMethod, setFolioPayMethod] = useState<PaymentMethod>('PIX');
+
+  // Hóspedes
+  const [guestSearchQuery, setGuestSearchQuery] = useState<string>('');
+  const [showNewGuestModal, setShowNewGuestModal] = useState<boolean>(false);
+  const [guestName, setGuestName] = useState<string>('');
+  const [guestDoc, setGuestDoc] = useState<string>('');
+  const [guestPhone, setGuestPhone] = useState<string>('');
+  const [guestEmail, setGuestEmail] = useState<string>('');
+  const [guestCity, setGuestCity] = useState<string>('');
+  const [guestState, setGuestState] = useState<string>('MA');
+  const [guestPlate, setGuestPlate] = useState<string>('');
+
+  // Reservas
+  const [showNewResModal, setShowNewResModal] = useState<boolean>(false);
+  const [resGuestId, setResGuestId] = useState<string>('');
+  const [resRoomNumber, setResRoomNumber] = useState<string>('101');
+  const [resCheckInDate, setResCheckInDate] = useState<string>(() => new Date().toISOString().slice(0, 10));
+  const [resCheckOutDate, setResCheckOutDate] = useState<string>(() => new Date(Date.now() + 86400000).toISOString().slice(0, 10));
+  const [resGuestsCount, setResGuestsCount] = useState<number>(1);
+  const [resDailyReais, setResDailyReais] = useState<string>('180,00');
+  const [resDepositReais, setResDepositReais] = useState<string>('0,00');
+  const [resDepositPaid, setResDepositPaid] = useState<boolean>(false);
+  const [resNotes, setResNotes] = useState<string>('');
+
+  // Check-In Guiado
+  const [showCheckInModal, setShowCheckInModal] = useState<boolean>(false);
+  const [checkInRoomNumber, setCheckInRoomNumber] = useState<string>('101');
+  const [checkInGuestId, setCheckInGuestId] = useState<string>('');
+  const [checkInScheduledOut, setCheckInScheduledOut] = useState<string>(() => new Date(Date.now() + 86400000).toISOString().slice(0, 16));
+  const [checkInEarlyReais, setCheckInEarlyReais] = useState<string>('0,00');
+  const [checkInNotes, setCheckInNotes] = useState<string>('');
+
+  // Transferência Restaurante -> Folio
+  const [transferTabId, setTransferTabId] = useState<string>('');
+  const [transferRoomNumber, setTransferRoomNumber] = useState<string>('');
+
+  // Frigobar & Serviços
+  const [minibarRoomNumber, setMinibarRoomNumber] = useState<string>('101');
+  const [minibarProductId, setMinibarProductId] = useState<string>('prd-beb-refrigerante-lata');
+  const [minibarQty, setMinibarQty] = useState<number>(1);
+  const [serviceRoomNumber, setServiceRoomNumber] = useState<string>('101');
+  const [selectedServiceId, setSelectedServiceId] = useState<string>('srv-lavanderia-expressa');
+
+  // Governança & Manutenção
+  const [maintRoomNumber, setMaintRoomNumber] = useState<string>('101');
+  const [maintDescription, setMaintDescription] = useState<string>('');
+  const [maintSeverity, setMaintSeverity] = useState<'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'>('MEDIUM');
+  const [maintBlockRoom, setMaintBlockRoom] = useState<boolean>(true);
 
   const activeRole: UserRole = authSession?.role ?? 'OWNER';
 
@@ -1141,6 +1225,303 @@ export const DesktopApp: React.FC = () => {
       notify(
         `Operação local garantida (Modo Offline). ${data.pendingLocalEvents ?? 0} evento(s) aguardando conexão com a VPS.`
       );
+    }
+  }
+
+  // =========================================================================
+  // Operações do Módulo Hoteleiro (Etapa 5 — Hotel Auto Posto Milla PMS)
+  // =========================================================================
+  async function loadFolio(stayId: string) {
+    if (!stayId) {
+      setFolioData(null);
+      return;
+    }
+    setFolioLoading(true);
+    try {
+      const res = await fetch(`${localApiBase}/api/hotel/stays/${stayId}/folio`, {
+        headers: getAuthHeaders()
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setFolioData(data);
+      }
+    } catch (err) {
+      console.error('Erro ao carregar folio', err);
+    } finally {
+      setFolioLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (selectedFolioStayId) {
+      loadFolio(selectedFolioStayId);
+    } else {
+      setFolioData(null);
+    }
+  }, [selectedFolioStayId]);
+
+  async function handleCreateGuest() {
+    if (!guestName.trim()) {
+      notify('Nome do hóspede é obrigatório.');
+      return;
+    }
+    try {
+      const res = await fetch(`${localApiBase}/api/hotel/guests`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          fullName: guestName.trim(),
+          documentNumber: guestDoc.trim() || '000.000.000-00',
+          documentType: 'CPF',
+          phone: guestPhone.trim() || undefined,
+          email: guestEmail.trim() || undefined,
+          address: {
+            city: guestCity.trim() || undefined,
+            state: guestState.trim() || undefined
+          },
+          notes: guestPlate.trim() ? `Placa: ${guestPlate.trim()}` : undefined
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? 'Erro ao cadastrar hóspede');
+      setShowNewGuestModal(false);
+      setGuestName('');
+      setGuestDoc('');
+      setGuestPhone('');
+      setGuestEmail('');
+      setGuestPlate('');
+      await refreshState();
+      notify(`Hóspede ${data.guest.fullName} cadastrado com sucesso.`);
+    } catch (err) {
+      notify(err instanceof Error ? err.message : 'Erro ao cadastrar hóspede');
+    }
+  }
+
+  async function handleCreateReservation() {
+    if (!resGuestId) {
+      notify('Selecione um hóspede para a reserva.');
+      return;
+    }
+    try {
+      const dailyCents = parseReaisToCents(resDailyReais, 18000);
+      const depositCents = parseReaisToCents(resDepositReais, 0);
+      const res = await fetch(`${localApiBase}/api/hotel/reservations`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          guestId: resGuestId,
+          roomNumber: resRoomNumber,
+          checkInDate: resCheckInDate,
+          checkOutDate: resCheckOutDate,
+          guestsCount: resGuestsCount,
+          dailyRateCents: dailyCents,
+          depositCents: depositCents > 0 ? depositCents : undefined,
+          depositPaid: resDepositPaid,
+          sourceChannel: 'BALCAO_DIRETO',
+          notes: resNotes.trim() || undefined
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? 'Erro ao criar reserva');
+      setShowNewResModal(false);
+      setResNotes('');
+      await refreshState();
+      notify(`Reserva #${data.reservation.locatorCode} confirmada para o Apto ${resRoomNumber}.`);
+    } catch (err) {
+      notify(err instanceof Error ? err.message : 'Erro ao criar reserva');
+    }
+  }
+
+  async function handleCheckInStay() {
+    if (!checkInGuestId) {
+      notify('Selecione o hóspede para realizar o check-in.');
+      return;
+    }
+    try {
+      const earlyCents = parseReaisToCents(checkInEarlyReais, 0);
+      const res = await fetch(`${localApiBase}/api/hotel/checkin`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          roomNumber: checkInRoomNumber,
+          guestId: checkInGuestId,
+          checkOutScheduledAt: checkInScheduledOut ? new Date(checkInScheduledOut).toISOString() : new Date(Date.now() + 86400000).toISOString(),
+          earlyCheckinCents: earlyCents > 0 ? earlyCents : undefined,
+          notes: checkInNotes.trim() || undefined
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? 'Erro ao realizar check-in');
+      setShowCheckInModal(false);
+      setCheckInNotes('');
+      await refreshState();
+      notify(`Check-in realizado com sucesso no Apto ${checkInRoomNumber}. Folio aberto.`);
+    } catch (err) {
+      notify(err instanceof Error ? err.message : 'Erro ao realizar check-in');
+    }
+  }
+
+  async function handleTransferTabToFolio() {
+    if (!transferTabId || !transferRoomNumber) {
+      notify('Selecione a comanda da mesa e o apartamento de destino.');
+      return;
+    }
+    try {
+      const res = await fetch(`${localApiBase}/api/hotel/transfer-tab-to-folio`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          restaurantTabId: transferTabId,
+          roomNumber: transferRoomNumber
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? 'Erro ao transferir consumo');
+      setTransferTabId('');
+      await refreshState();
+      if (selectedFolioStayId) await loadFolio(selectedFolioStayId);
+      notify(`Consumo transferido com sucesso para o Apto ${transferRoomNumber}. Mesa liberada.`);
+    } catch (err) {
+      notify(err instanceof Error ? err.message : 'Erro ao transferir consumo');
+    }
+  }
+
+  async function handleRecordMinibar() {
+    try {
+      const res = await fetch(`${localApiBase}/api/hotel/minibar/consume`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          roomNumber: minibarRoomNumber,
+          productId: minibarProductId,
+          quantity: minibarQty
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? 'Erro ao lançar frigobar');
+      await refreshState();
+      if (selectedFolioStayId) await loadFolio(selectedFolioStayId);
+      notify(`Consumo de frigobar lançado no Apto ${minibarRoomNumber}: ${minibarQty}x (${formatBrlCents(data.folioEntry.amountCents)}).`);
+    } catch (err) {
+      notify(err instanceof Error ? err.message : 'Erro ao lançar frigobar');
+    }
+  }
+
+  async function handleOrderHotelService() {
+    try {
+      const res = await fetch(`${localApiBase}/api/hotel/services/order`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          roomNumber: serviceRoomNumber,
+          serviceId: selectedServiceId,
+          quantity: 1
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? 'Erro ao solicitar serviço');
+      await refreshState();
+      if (selectedFolioStayId) await loadFolio(selectedFolioStayId);
+      notify(`Serviço lançado na conta do Apto ${serviceRoomNumber}: ${data.serviceOrder.serviceName} (${formatBrlCents(data.folioEntry.amountCents)}).`);
+    } catch (err) {
+      notify(err instanceof Error ? err.message : 'Erro ao solicitar serviço');
+    }
+  }
+
+  async function handlePayFolio() {
+    if (!folioData) return;
+    const amountCents = parseReaisToCents(folioPayReais, folioData.totals.balanceCents);
+    if (amountCents <= 0) {
+      notify('Informe um valor válido para pagamento.');
+      return;
+    }
+    try {
+      const res = await fetch(`${localApiBase}/api/payments`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          idempotencyKey: `folio-pay-${folioData.stay.id}-${Date.now()}`,
+          tabId: folioData.folioTab.id,
+          method: folioPayMethod,
+          amountCents
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? 'Erro ao processar pagamento do folio');
+      setFolioPayReais('');
+      await refreshState();
+      await loadFolio(folioData.stay.id);
+      notify(`Pagamento de ${formatBrlCents(amountCents)} (${folioPayMethod}) registrado com sucesso no Folio.`);
+    } catch (err) {
+      notify(err instanceof Error ? err.message : 'Erro ao registrar pagamento');
+    }
+  }
+
+  async function handleCheckOutStay(stayId: string, allowOverride = false) {
+    try {
+      const res = await fetch(`${localApiBase}/api/hotel/checkout`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          stayId,
+          allowOverrideWithAudit: allowOverride
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? 'Erro ao realizar check-out');
+      await refreshState();
+      if (selectedFolioStayId === stayId) {
+        setSelectedFolioStayId('');
+        setFolioData(null);
+      }
+      notify(`Check-out concluído para o Apto ${data.room.number}. Quarto liberado e marcado como SUJO.`);
+    } catch (err) {
+      notify(err instanceof Error ? err.message : 'Erro ao realizar check-out');
+    }
+  }
+
+  async function handleUpdateHousekeeping(roomNumber: string, housekeepingStatus: RoomHousekeepingStatus) {
+    try {
+      const res = await fetch(`${localApiBase}/api/hotel/housekeeping/status`, {
+        method: 'PATCH',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          roomNumber,
+          housekeepingStatus
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? 'Erro ao atualizar governança');
+      await refreshState();
+      notify(`Apto ${roomNumber} atualizado para governança: ${housekeepingStatus}.`);
+    } catch (err) {
+      notify(err instanceof Error ? err.message : 'Erro ao atualizar governança');
+    }
+  }
+
+  async function handleCreateMaintenance() {
+    if (!maintDescription.trim()) {
+      notify('Descreva o problema de manutenção.');
+      return;
+    }
+    try {
+      const res = await fetch(`${localApiBase}/api/hotel/maintenance`, {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          roomNumber: maintRoomNumber,
+          description: maintDescription.trim(),
+          severity: maintSeverity,
+          blockRoom: maintBlockRoom
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? 'Erro ao abrir chamado de manutenção');
+      setMaintDescription('');
+      await refreshState();
+      notify(`Chamado de manutenção aberto para o Apto ${maintRoomNumber}. Quarto bloqueado.`);
+    } catch (err) {
+      notify(err instanceof Error ? err.message : 'Erro ao abrir chamado');
     }
   }
 
@@ -3920,58 +4301,1439 @@ export const DesktopApp: React.FC = () => {
         {/* =====================================================================
             MÓDULO: HOTEL AUTO POSTO MILLA & RESERVAS
            ===================================================================== */}
+        {/* =====================================================================
+            MÓDULO: HOTEL AUTO POSTO MILLA — PMS COMPLETO (ETAPA 5)
+           ===================================================================== */}
         {activeModule === 'hotel-reservas' && (
-          <div className="d26-card">
-            <h2 style={{ fontSize: '1.05rem', marginBottom: '12px' }}>
-              Mapa de Apartamentos — Hotel Auto Posto Milla (Integração Direta de Consumo com o Deck 26)
-            </h2>
-            <div className="d26-product-grid">
-              {snapshot.hotelRooms.map((room) => (
-                <div key={room.id} className="d26-product-card">
-                  <div>
-                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                      <strong style={{ fontSize: '1.05rem' }}>Apto {room.number}</strong>
-                      <span
-                        className={`d26-badge ${
-                          room.status === 'AVAILABLE' ? 'd26-badge-success' : 'd26-badge-pink'
-                        }`}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            {/* Header & Sub-navigation */}
+            <div className="d26-card">
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', marginBottom: '14px' }}>
+                <div>
+                  <h2 style={{ fontSize: '1.2rem', margin: 0, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span>🏨</span> HOTEL AUTO POSTO MILLA — PMS & GESTÃO INTEGRADA
+                  </h2>
+                  <div style={{ fontSize: '0.82rem', color: 'var(--d26-gray-400)', marginTop: '4px' }}>
+                    Gestão hoteleira completa com governança, reservas, diárias, frigobar, serviços, extrato do quarto (Folio) e integração ao restaurante Deck 26.
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                  <button className="d26-btn d26-btn-secondary" onClick={() => setShowNewGuestModal(true)}>
+                    + Novo Hóspede
+                  </button>
+                  <button className="d26-btn d26-btn-secondary" onClick={() => setShowNewResModal(true)}>
+                    + Nova Reserva
+                  </button>
+                  <button className="d26-btn d26-btn-primary" onClick={() => setShowCheckInModal(true)}>
+                    🔑 Novo Check-In
+                  </button>
+                </div>
+              </div>
+
+              {/* KPIs Hoteleiros */}
+              <div className="d26-grid-kpi" style={{ marginBottom: '14px' }}>
+                <div className="d26-product-card">
+                  <span style={{ fontSize: '0.72rem', color: 'var(--d26-gray-400)', textTransform: 'uppercase' }}>Taxa de Ocupação</span>
+                  <div className="d26-kpi-value" style={{ color: '#F72585' }}>
+                    {snapshot.hotelMetrics?.occupancyRatePercent ?? 0}%
+                  </div>
+                  <span style={{ fontSize: '0.72rem', color: 'var(--d26-gray-400)' }}>
+                    {snapshot.hotelMetrics?.occupiedRooms ?? 0} de {snapshot.hotelMetrics?.totalRooms ?? snapshot.hotelRooms.length} quartos
+                  </span>
+                </div>
+                <div className="d26-product-card">
+                  <span style={{ fontSize: '0.72rem', color: 'var(--d26-gray-400)', textTransform: 'uppercase' }}>Diária Média (ADR)</span>
+                  <div className="d26-kpi-value" style={{ color: '#7209B7' }}>
+                    {formatBrlCents(snapshot.hotelMetrics?.adrCents ?? 0)}
+                  </div>
+                  <span style={{ fontSize: '0.72rem', color: 'var(--d26-gray-400)' }}>Média por quarto ocupado</span>
+                </div>
+                <div className="d26-product-card">
+                  <span style={{ fontSize: '0.72rem', color: 'var(--d26-gray-400)', textTransform: 'uppercase' }}>RevPAR</span>
+                  <div className="d26-kpi-value" style={{ color: '#4CC9F0' }}>
+                    {formatBrlCents(snapshot.hotelMetrics?.revparCents ?? 0)}
+                  </div>
+                  <span style={{ fontSize: '0.72rem', color: 'var(--d26-gray-400)' }}>Receita por quarto disponível</span>
+                </div>
+                <div className="d26-product-card">
+                  <span style={{ fontSize: '0.72rem', color: 'var(--d26-gray-400)', textTransform: 'uppercase' }}>Governança & Reparos</span>
+                  <div style={{ marginTop: '6px', fontSize: '0.88rem' }}>
+                    <span style={{ color: '#4ADE80' }}>● {snapshot.hotelMetrics?.availableRooms ?? 0} Disponíveis</span>{' '}
+                    <span style={{ color: '#FB923C' }}>● {snapshot.hotelMetrics?.dirtyCleaningRooms ?? 0} Limpeza</span>{' '}
+                    <span style={{ color: '#F43F5E' }}>● {snapshot.hotelMetrics?.maintenanceRooms ?? 0} Manutenção</span>
+                  </div>
+                  <span style={{ fontSize: '0.72rem', color: 'var(--d26-gray-400)', marginTop: '4px', display: 'block' }}>
+                    {snapshot.hotelMetrics?.blockedRooms ?? 0} quartos bloqueados
+                  </span>
+                </div>
+                <div className="d26-product-card">
+                  <span style={{ fontSize: '0.72rem', color: 'var(--d26-gray-400)', textTransform: 'uppercase' }}>Faturamento Folios</span>
+                  <div style={{ marginTop: '6px', fontSize: '0.88rem' }}>
+                    <div style={{ color: '#4ADE80', fontWeight: 600 }}>
+                      Recebido: {formatBrlCents(snapshot.hotelMetrics?.totalPaymentsReceivedCents ?? 0)}
+                    </div>
+                    <div style={{ color: '#F72585', fontWeight: 600 }}>
+                      Pendente: {formatBrlCents(snapshot.hotelMetrics?.totalBalancePendingCents ?? 0)}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Subtabs bar */}
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', borderTop: '1px solid rgba(255, 255, 255, 0.08)', paddingTop: '12px' }}>
+                <button
+                  className={`d26-btn ${hotelSubTab === 'MAPA' ? 'd26-btn-primary' : 'd26-btn-secondary'}`}
+                  onClick={() => setHotelSubTab('MAPA')}
+                >
+                  🗺️ Mapa de Quartos
+                </button>
+                <button
+                  className={`d26-btn ${hotelSubTab === 'RESERVAS' ? 'd26-btn-primary' : 'd26-btn-secondary'}`}
+                  onClick={() => setHotelSubTab('RESERVAS')}
+                >
+                  📅 Reservas ({snapshot.hotelReservations?.length ?? 0})
+                </button>
+                <button
+                  className={`d26-btn ${hotelSubTab === 'HOSPEDES' ? 'd26-btn-primary' : 'd26-btn-secondary'}`}
+                  onClick={() => setHotelSubTab('HOSPEDES')}
+                >
+                  👤 Hóspedes ({snapshot.hotelGuests?.length ?? 0})
+                </button>
+                <button
+                  className={`d26-btn ${hotelSubTab === 'CHECKIN_CHECKOUT' ? 'd26-btn-primary' : 'd26-btn-secondary'}`}
+                  onClick={() => setHotelSubTab('CHECKIN_CHECKOUT')}
+                >
+                  🔑 Check-In & Estadias ({snapshot.hotelStays?.filter((s) => s.status === 'ACTIVE').length ?? 0})
+                </button>
+                <button
+                  className={`d26-btn ${hotelSubTab === 'FOLIO' ? 'd26-btn-primary' : 'd26-btn-secondary'}`}
+                  onClick={() => setHotelSubTab('FOLIO')}
+                >
+                  📑 Extrato do Quarto (Folio)
+                </button>
+                <button
+                  className={`d26-btn ${hotelSubTab === 'RESTAURANTE' ? 'd26-btn-primary' : 'd26-btn-secondary'}`}
+                  onClick={() => setHotelSubTab('RESTAURANTE')}
+                >
+                  🍽️ Transferir Mesa p/ Quarto
+                </button>
+                <button
+                  className={`d26-btn ${hotelSubTab === 'FRIGOBAR_SERVICOS' ? 'd26-btn-primary' : 'd26-btn-secondary'}`}
+                  onClick={() => setHotelSubTab('FRIGOBAR_SERVICOS')}
+                >
+                  🧊 Frigobar & Serviços
+                </button>
+                <button
+                  className={`d26-btn ${hotelSubTab === 'GOVERNANCA' ? 'd26-btn-primary' : 'd26-btn-secondary'}`}
+                  onClick={() => setHotelSubTab('GOVERNANCA')}
+                >
+                  🧹 Governança & Manutenção
+                </button>
+              </div>
+            </div>
+
+            {/* ================= SUBTAB 1: MAPA DE QUARTOS ================= */}
+            {hotelSubTab === 'MAPA' && (
+              <div className="d26-card">
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '10px' }}>
+                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                    <span style={{ fontSize: '0.8rem', color: 'var(--d26-gray-400)' }}>Filtrar status:</span>
+                    {(['ALL', 'LIVRE', 'OCUPADO', 'RESERVADO', 'BLOQUEADO', 'SUJO'] as const).map((st) => (
+                      <button
+                        key={st}
+                        className={`d26-btn ${hotelRoomFilter === st ? 'd26-btn-primary' : 'd26-btn-secondary'}`}
+                        style={{ fontSize: '0.76rem', padding: '4px 10px' }}
+                        onClick={() => setHotelRoomFilter(st)}
                       >
-                        {room.status}
-                      </span>
+                        {st === 'ALL' ? 'Todos' : st}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="d26-product-grid">
+                  {snapshot.hotelRooms
+                    .filter((room) => {
+                      if (hotelRoomFilter === 'ALL') return true;
+                      if (hotelRoomFilter === 'SUJO') return room.housekeepingStatus === 'SUJO';
+                      return room.occupancyStatus === hotelRoomFilter;
+                    })
+                    .map((room) => {
+                      const isOccupied = room.occupancyStatus === 'OCUPADO';
+                      const isFree = room.occupancyStatus === 'LIVRE';
+                      return (
+                        <div key={room.id} className="d26-product-card" style={{ borderLeft: `4px solid ${isOccupied ? '#F72585' : isFree ? '#4ADE80' : '#7209B7'}` }}>
+                          <div>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                              <div>
+                                <strong style={{ fontSize: '1.15rem' }}>Apto {room.number}</strong>
+                                <div style={{ fontSize: '0.74rem', color: 'var(--d26-gray-400)', marginTop: '2px' }}>
+                                  {room.floorSector} • {room.category}
+                                </div>
+                              </div>
+                              <span
+                                className={`d26-badge ${
+                                  room.occupancyStatus === 'LIVRE'
+                                    ? 'd26-badge-success'
+                                    : room.occupancyStatus === 'OCUPADO'
+                                    ? 'd26-badge-pink'
+                                    : room.occupancyStatus === 'RESERVADO'
+                                    ? 'd26-badge-purple'
+                                    : 'd26-badge-warning'
+                                }`}
+                              >
+                                {room.occupancyStatus}
+                              </span>
+                            </div>
+
+                            {/* Badges Independentes de Governança e Manutenção */}
+                            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '8px' }}>
+                              <span
+                                className={`d26-badge ${
+                                  room.housekeepingStatus === 'LIMPO'
+                                    ? 'd26-badge-success'
+                                    : room.housekeepingStatus === 'SUJO'
+                                    ? 'd26-badge-warning'
+                                    : 'd26-badge-purple'
+                                }`}
+                                style={{ fontSize: '0.68rem', padding: '2px 6px' }}
+                              >
+                                Limpeza: {room.housekeepingStatus}
+                              </span>
+                              {room.maintenanceStatus !== 'DISPONIVEL' && (
+                                <span className="d26-badge d26-badge-pink" style={{ fontSize: '0.68rem', padding: '2px 6px' }}>
+                                  {room.maintenanceStatus}
+                                </span>
+                              )}
+                            </div>
+
+                            <div style={{ fontSize: '0.8rem', color: 'var(--d26-gray-300)', marginTop: '8px' }}>
+                              Diária: <strong>{formatBrlCents(room.dailyRateCents)}</strong>
+                            </div>
+
+                            {room.currentGuestName && (
+                              <div style={{ marginTop: '8px', padding: '6px 8px', background: 'rgba(247, 37, 133, 0.12)', borderRadius: '6px', fontSize: '0.82rem' }}>
+                                <div style={{ fontSize: '0.7rem', color: '#FFAFCC', textTransform: 'uppercase' }}>Hóspede Atual</div>
+                                <strong style={{ color: '#FFFFFF' }}>{room.currentGuestName}</strong>
+                              </div>
+                            )}
+                          </div>
+
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '10px' }}>
+                            {isOccupied && (
+                              <>
+                                <button
+                                  className="d26-btn d26-btn-primary"
+                                  style={{ fontSize: '0.78rem', padding: '6px' }}
+                                  onClick={() => {
+                                    if (room.activeStayId) {
+                                      setSelectedFolioStayId(room.activeStayId);
+                                      setHotelSubTab('FOLIO');
+                                    }
+                                  }}
+                                >
+                                  📑 Ver Extrato (Folio)
+                                </button>
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+                                  <button
+                                    className="d26-btn d26-btn-secondary"
+                                    style={{ fontSize: '0.74rem', padding: '4px' }}
+                                    onClick={() => {
+                                      setTransferRoomNumber(room.number);
+                                      setHotelSubTab('RESTAURANTE');
+                                    }}
+                                  >
+                                    🍽️ Consumo
+                                  </button>
+                                  <button
+                                    className="d26-btn d26-btn-secondary"
+                                    style={{ fontSize: '0.74rem', padding: '4px' }}
+                                    onClick={() => {
+                                      setMinibarRoomNumber(room.number);
+                                      setServiceRoomNumber(room.number);
+                                      setHotelSubTab('FRIGOBAR_SERVICOS');
+                                    }}
+                                  >
+                                    🧊 Frigobar
+                                  </button>
+                                </div>
+                              </>
+                            )}
+
+                            {isFree && (
+                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+                                <button
+                                  className="d26-btn d26-btn-primary"
+                                  style={{ fontSize: '0.76rem', padding: '6px' }}
+                                  onClick={() => {
+                                    setCheckInRoomNumber(room.number);
+                                    setShowCheckInModal(true);
+                                  }}
+                                >
+                                  🔑 Check-In
+                                </button>
+                                <button
+                                  className="d26-btn d26-btn-secondary"
+                                  style={{ fontSize: '0.76rem', padding: '6px' }}
+                                  onClick={() => {
+                                    setResRoomNumber(room.number);
+                                    setShowNewResModal(true);
+                                  }}
+                                >
+                                  📅 Reservar
+                                </button>
+                              </div>
+                            )}
+
+                            {/* Governança Rápida */}
+                            <div style={{ display: 'flex', gap: '4px', marginTop: '4px' }}>
+                              {room.housekeepingStatus === 'SUJO' && (
+                                <button
+                                  className="d26-btn d26-btn-secondary"
+                                  style={{ fontSize: '0.7rem', padding: '3px 6px', flex: 1 }}
+                                  onClick={() => handleUpdateHousekeeping(room.number, 'EM_LIMPEZA')}
+                                >
+                                  Iniciar Limpeza
+                                </button>
+                              )}
+                              {room.housekeepingStatus === 'EM_LIMPEZA' && (
+                                <button
+                                  className="d26-btn d26-btn-secondary"
+                                  style={{ fontSize: '0.7rem', padding: '3px 6px', flex: 1 }}
+                                  onClick={() => handleUpdateHousekeeping(room.number, 'LIMPO')}
+                                >
+                                  Marcar Limpo
+                                </button>
+                              )}
+                              {room.housekeepingStatus === 'LIMPO' && !isOccupied && (
+                                <button
+                                  className="d26-btn d26-btn-secondary"
+                                  style={{ fontSize: '0.7rem', padding: '3px 6px', flex: 1, opacity: 0.7 }}
+                                  onClick={() => handleUpdateHousekeeping(room.number, 'SUJO')}
+                                >
+                                  Marcar Sujo
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                </div>
+              </div>
+            )}
+
+            {/* ================= SUBTAB 2: RESERVAS ================= */}
+            {hotelSubTab === 'RESERVAS' && (
+              <div className="d26-card">
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+                  <h3 style={{ fontSize: '1.05rem', margin: 0 }}>Quadro de Reservas de Hospedagem</h3>
+                  <button className="d26-btn d26-btn-primary" onClick={() => setShowNewResModal(true)}>
+                    + Nova Reserva
+                  </button>
+                </div>
+
+                {(!snapshot.hotelReservations || snapshot.hotelReservations.length === 0) ? (
+                  <p style={{ color: 'var(--d26-gray-400)', padding: '16px 0' }}>
+                    Nenhuma reserva cadastrada no momento. Clique em "+ Nova Reserva" para agendar uma estadia.
+                  </p>
+                ) : (
+                  <div style={{ overflowX: 'auto' }}>
+                    <table className="d26-table">
+                      <thead>
+                        <tr>
+                          <th>Localizador</th>
+                          <th>Hóspede</th>
+                          <th>Apto</th>
+                          <th>Período</th>
+                          <th>Hóspedes</th>
+                          <th>Diária</th>
+                          <th>Sinal</th>
+                          <th>Status</th>
+                          <th>Ações</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {snapshot.hotelReservations.map((res) => (
+                          <tr key={res.id}>
+                            <td>
+                              <strong style={{ color: '#D8B4FE', fontFamily: 'monospace' }}>#{res.reservationCode}</strong>
+                            </td>
+                            <td>
+                              <strong>{res.guestName ?? 'Hóspede'}</strong>
+                              {res.guestPhone && (
+                                <div style={{ fontSize: '0.72rem', color: 'var(--d26-gray-400)' }}>{res.guestPhone}</div>
+                              )}
+                            </td>
+                            <td>
+                              <span className="d26-badge d26-badge-purple">Apto {res.roomNumber}</span>
+                            </td>
+                            <td style={{ fontSize: '0.8rem' }}>
+                              {res.checkInDate} ➔ {res.checkOutDate}
+                              <div style={{ fontSize: '0.72rem', color: 'var(--d26-gray-400)' }}>
+                                {calculateNightsCount(res.checkInDate, res.checkOutDate)} noite(s)
+                              </div>
+                            </td>
+                            <td>{res.guestsCount} pessoa(s)</td>
+                            <td>{formatBrlCents(res.dailyRateCents)}</td>
+                            <td>
+                              {res.depositCents ? formatBrlCents(res.depositCents) : 'R$ 0,00'}
+                              {res.depositPaid && (
+                                <span className="d26-badge d26-badge-success" style={{ marginLeft: '4px', fontSize: '0.65rem' }}>
+                                  Pago
+                                </span>
+                              )}
+                            </td>
+                            <td>
+                              <span
+                                className={`d26-badge ${
+                                  res.status === 'CONFIRMADA'
+                                    ? 'd26-badge-success'
+                                    : res.status === 'CHECK_IN_REALIZADO'
+                                    ? 'd26-badge-pink'
+                                    : 'd26-badge-warning'
+                                }`}
+                              >
+                                {res.status}
+                              </span>
+                            </td>
+                            <td>
+                              {res.status === 'CONFIRMADA' && (
+                                <button
+                                  className="d26-btn d26-btn-primary"
+                                  style={{ fontSize: '0.74rem', padding: '4px 8px' }}
+                                  onClick={() => {
+                                    setCheckInRoomNumber(res.roomNumber);
+                                    setCheckInGuestId(res.guestId);
+                                    setShowCheckInModal(true);
+                                  }}
+                                >
+                                  Check-In
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ================= SUBTAB 3: HÓSPEDES LGPD ================= */}
+            {hotelSubTab === 'HOSPEDES' && (
+              <div className="d26-card">
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '10px' }}>
+                  <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flex: 1, maxWidth: '480px' }}>
+                    <input
+                      className="d26-input"
+                      placeholder="Buscar por nome, CPF ou telefone..."
+                      value={guestSearchQuery}
+                      onChange={(e) => setGuestSearchQuery(e.target.value)}
+                    />
+                  </div>
+                  <button className="d26-btn d26-btn-primary" onClick={() => setShowNewGuestModal(true)}>
+                    + Cadastrar Hóspede
+                  </button>
+                </div>
+
+                {(!snapshot.hotelGuests || snapshot.hotelGuests.length === 0) ? (
+                  <p style={{ color: 'var(--d26-gray-400)', padding: '16px 0' }}>
+                    Nenhum hóspede cadastrado. Cadastre o primeiro hóspede para iniciar reservas e estadias.
+                  </p>
+                ) : (
+                  <div style={{ overflowX: 'auto' }}>
+                    <table className="d26-table">
+                      <thead>
+                        <tr>
+                          <th>Nome Completo</th>
+                          <th>Documento (CPF)</th>
+                          <th>Telefone / WhatsApp</th>
+                          <th>E-mail</th>
+                          <th>Origem / Cidade</th>
+                          <th>Placa do Veículo</th>
+                          <th>Ações</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {snapshot.hotelGuests
+                          .filter((g) => {
+                            if (!guestSearchQuery.trim()) return true;
+                            const q = guestSearchQuery.toLowerCase();
+                            return (
+                              g.fullName.toLowerCase().includes(q) ||
+                              (g.documentNumber && g.documentNumber.includes(q)) ||
+                              (g.phone && g.phone.includes(q))
+                            );
+                          })
+                          .map((g) => (
+                            <tr key={g.id}>
+                              <td>
+                                <strong>{g.fullName}</strong>
+                              </td>
+                              <td style={{ fontFamily: 'monospace' }}>{g.documentNumber ?? '—'}</td>
+                              <td>{g.phone ?? '—'}</td>
+                              <td>{g.email ?? '—'}</td>
+                              <td>{g.address?.city ? `${g.address.city}/${g.address.state ?? 'MA'}` : '—'}</td>
+                              <td>
+                                {g.notes && g.notes.includes('Placa:') ? (
+                                  <span className="d26-badge d26-badge-purple" style={{ fontFamily: 'monospace' }}>
+                                    {g.notes}
+                                  </span>
+                                ) : (
+                                  '—'
+                                )}
+                              </td>
+                              <td>
+                                <div style={{ display: 'flex', gap: '6px' }}>
+                                  <button
+                                    className="d26-btn d26-btn-secondary"
+                                    style={{ fontSize: '0.72rem', padding: '3px 8px' }}
+                                    onClick={() => {
+                                      setResGuestId(g.id);
+                                      setShowNewResModal(true);
+                                    }}
+                                  >
+                                    Reservar
+                                  </button>
+                                  <button
+                                    className="d26-btn d26-btn-primary"
+                                    style={{ fontSize: '0.72rem', padding: '3px 8px' }}
+                                    onClick={() => {
+                                      setCheckInGuestId(g.id);
+                                      setShowCheckInModal(true);
+                                    }}
+                                  >
+                                    Check-In
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ================= SUBTAB 4: CHECK-IN & ESTADIAS ATIVAS ================= */}
+            {hotelSubTab === 'CHECKIN_CHECKOUT' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                <div className="d26-card">
+                  <h3 style={{ fontSize: '1.05rem', marginBottom: '14px' }}>Estadias Hoteleiras em Andamento</h3>
+                  {(!snapshot.hotelStays || snapshot.hotelStays.filter((s) => s.status === 'ACTIVE').length === 0) ? (
+                    <p style={{ color: 'var(--d26-gray-400)', padding: '16px 0' }}>
+                      Nenhum hóspede hospedado no momento. Utilize o formulário abaixo ou o Mapa de Quartos para realizar check-in.
+                    </p>
+                  ) : (
+                    <div style={{ overflowX: 'auto' }}>
+                      <table className="d26-table">
+                        <thead>
+                          <tr>
+                            <th>Apto</th>
+                            <th>Hóspede</th>
+                            <th>Entrada</th>
+                            <th>Saída Prevista</th>
+                            <th>Comanda Folio</th>
+                            <th>Diária</th>
+                            <th>Ações</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {snapshot.hotelStays
+                            .filter((s) => s.status === 'ACTIVE')
+                            .map((stay) => {
+                              const guest = snapshot.hotelGuests?.find((g) => g.id === stay.guestId);
+                              return (
+                                <tr key={stay.id}>
+                                  <td>
+                                    <strong style={{ fontSize: '1.05rem', color: '#F72585' }}>Apto {stay.roomNumber}</strong>
+                                  </td>
+                                  <td>
+                                    <strong>{guest?.fullName ?? 'Hóspede'}</strong>
+                                    {guest?.phone && (
+                                      <div style={{ fontSize: '0.72rem', color: 'var(--d26-gray-400)' }}>{guest.phone}</div>
+                                    )}
+                                  </td>
+                                  <td style={{ fontSize: '0.8rem' }}>{new Date(stay.checkInAt).toLocaleString('pt-BR')}</td>
+                                  <td style={{ fontSize: '0.8rem' }}>
+                                    {new Date(stay.checkOutScheduledAt).toLocaleString('pt-BR')}
+                                  </td>
+                                  <td>
+                                    <span className="d26-badge d26-badge-purple" style={{ fontFamily: 'monospace' }}>
+                                      APTO-{stay.roomNumber}
+                                    </span>
+                                  </td>
+                                  <td>{formatBrlCents(stay.dailyRateCents)}</td>
+                                  <td>
+                                    <div style={{ display: 'flex', gap: '6px' }}>
+                                      <button
+                                        className="d26-btn d26-btn-primary"
+                                        style={{ fontSize: '0.74rem', padding: '4px 8px' }}
+                                        onClick={() => {
+                                          setSelectedFolioStayId(stay.id);
+                                          setHotelSubTab('FOLIO');
+                                        }}
+                                      >
+                                        📑 Ver Folio
+                                      </button>
+                                      <button
+                                        className="d26-btn d26-btn-secondary"
+                                        style={{ fontSize: '0.74rem', padding: '4px 8px' }}
+                                        onClick={() => {
+                                          setSelectedFolioStayId(stay.id);
+                                          setHotelSubTab('FOLIO');
+                                        }}
+                                      >
+                                        🚪 Check-Out
+                                      </button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                        </tbody>
+                      </table>
                     </div>
-                    <div style={{ fontSize: '0.78rem', color: 'var(--d26-gray-400)', marginTop: '4px' }}>
-                      Categoria: {room.category} • Diária: {formatBrlCents(room.dailyRateCents)}
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* ================= SUBTAB 5: EXTRATO DO QUARTO (FOLIO) ================= */}
+            {hotelSubTab === 'FOLIO' && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                <div className="d26-card">
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '10px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                      <span style={{ fontSize: '0.86rem', color: 'var(--d26-gray-300)' }}>Selecione o Apartamento:</span>
+                      <select
+                        className="d26-select"
+                        style={{ minWidth: '220px' }}
+                        value={selectedFolioStayId}
+                        onChange={(e) => setSelectedFolioStayId(e.target.value)}
+                      >
+                        <option value="">-- Escolha uma estadia ativa --</option>
+                        {snapshot.hotelStays
+                          ?.filter((s) => s.status === 'ACTIVE')
+                          .map((stay) => {
+                            const guest = snapshot.hotelGuests?.find((g) => g.id === stay.guestId);
+                            return (
+                              <option key={stay.id} value={stay.id}>
+                                Apto {stay.roomNumber} — {guest?.fullName ?? 'Hóspede'}
+                              </option>
+                            );
+                          })}
+                      </select>
                     </div>
-                    {room.currentGuestName && (
-                      <div style={{ marginTop: '8px', fontSize: '0.84rem', color: '#FFAFCC' }}>
-                        Hóspede: <strong>{room.currentGuestName}</strong>
+
+                    {selectedFolioStayId && (
+                      <button className="d26-btn d26-btn-secondary" onClick={() => loadFolio(selectedFolioStayId)}>
+                        ↻ Atualizar Folio
+                      </button>
+                    )}
+                  </div>
+
+                  {!folioData ? (
+                    <p style={{ color: 'var(--d26-gray-400)', padding: '24px 0', textAlign: 'center' }}>
+                      Selecione um apartamento ocupado acima para visualizar o extrato detalhado de débitos e créditos.
+                    </p>
+                  ) : (
+                    <div>
+                      {/* Resumo Financeiro do Folio */}
+                      <div className="d26-grid-kpi" style={{ marginBottom: '16px' }}>
+                        <div className="d26-product-card">
+                          <span style={{ fontSize: '0.72rem', color: 'var(--d26-gray-400)', textTransform: 'uppercase' }}>Total de Débitos</span>
+                          <div className="d26-kpi-value" style={{ color: '#FFFFFF' }}>
+                            {formatBrlCents(folioData.totals.debitsCents)}
+                          </div>
+                          <span style={{ fontSize: '0.72rem', color: 'var(--d26-gray-400)' }}>Diárias, restaurante e serviços</span>
+                        </div>
+                        <div className="d26-product-card">
+                          <span style={{ fontSize: '0.72rem', color: 'var(--d26-gray-400)', textTransform: 'uppercase' }}>Total Pago / Créditos</span>
+                          <div className="d26-kpi-value" style={{ color: '#4ADE80' }}>
+                            {formatBrlCents(folioData.totals.creditsCents)}
+                          </div>
+                          <span style={{ fontSize: '0.72rem', color: 'var(--d26-gray-400)' }}>Sinal, adiantamentos e pagamentos</span>
+                        </div>
+                        <div className="d26-product-card" style={{ borderColor: folioData.totals.balanceCents > 0 ? '#F72585' : '#4ADE80' }}>
+                          <span style={{ fontSize: '0.72rem', color: 'var(--d26-gray-400)', textTransform: 'uppercase' }}>Saldo Devedor a Quitar</span>
+                          <div className="d26-kpi-value" style={{ color: folioData.totals.balanceCents > 0 ? '#F72585' : '#4ADE80' }}>
+                            {formatBrlCents(folioData.totals.balanceCents)}
+                          </div>
+                          <span style={{ fontSize: '0.72rem', color: folioData.totals.balanceCents > 0 ? '#FFAFCC' : '#86EFAC' }}>
+                            {folioData.totals.balanceCents > 0 ? 'Pendente de pagamento' : 'Conta 100% quitada'}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Lançamentos do Extrato */}
+                      <h4 style={{ fontSize: '0.95rem', marginBottom: '10px' }}>Extrato Cronológico Auditável</h4>
+                      <div style={{ overflowX: 'auto', marginBottom: '18px' }}>
+                        <table className="d26-table">
+                          <thead>
+                            <tr>
+                              <th>Data / Hora</th>
+                              <th>Tipo</th>
+                              <th>Descrição</th>
+                              <th>Operador</th>
+                              <th style={{ textAlign: 'right' }}>Valor</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {folioData.entries.map((entry) => {
+                              const isDebit = entry.amountCents > 0;
+                              return (
+                                <tr key={entry.id}>
+                                  <td style={{ fontSize: '0.78rem', color: 'var(--d26-gray-400)' }}>
+                                    {new Date(entry.createdAt).toLocaleString('pt-BR')}
+                                  </td>
+                                  <td>
+                                    <span
+                                      className={`d26-badge ${
+                                        entry.entryType === 'ROOM_RATE'
+                                          ? 'd26-badge-purple'
+                                          : entry.entryType === 'RESTAURANT_ORDER' || entry.entryType === 'BAR_ORDER'
+                                          ? 'd26-badge-pink'
+                                          : entry.entryType === 'PAYMENT' || entry.entryType === 'ADVANCE_PAYMENT'
+                                          ? 'd26-badge-success'
+                                          : 'd26-badge-warning'
+                                      }`}
+                                      style={{ fontSize: '0.68rem' }}
+                                    >
+                                      {entry.entryType}
+                                    </span>
+                                  </td>
+                                  <td>
+                                    <strong>{entry.description}</strong>
+                                    {entry.sourceReferenceId && (
+                                      <div style={{ fontSize: '0.7rem', color: 'var(--d26-gray-400)', fontFamily: 'monospace' }}>
+                                        Ref: {entry.sourceReferenceId}
+                                      </div>
+                                    )}
+                                  </td>
+                                  <td style={{ fontSize: '0.78rem' }}>{entry.operatorName}</td>
+                                  <td style={{ textAlign: 'right', fontWeight: 600, color: isDebit ? '#FFFFFF' : '#4ADE80' }}>
+                                    {isDebit ? '+' : '-'} {formatBrlCents(Math.abs(entry.amountCents))}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      {/* Pagamento & Check-out */}
+                      <div className="d26-split-2">
+                        {/* Registrar Pagamento */}
+                        <div style={{ background: 'var(--d26-black-850)', padding: '14px', borderRadius: '8px', border: 'var(--d26-border-subtle)' }}>
+                          <h4 style={{ fontSize: '0.92rem', marginBottom: '10px' }}>Registrar Pagamento na Conta</h4>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                            <div>
+                              <label style={{ fontSize: '0.76rem', color: 'var(--d26-gray-400)' }}>Valor (R$)</label>
+                              <input
+                                className="d26-input"
+                                placeholder={`Ex: ${(folioData.totals.balanceCents / 100).toFixed(2).replace('.', ',')}`}
+                                value={folioPayReais}
+                                onChange={(e) => setFolioPayReais(e.target.value)}
+                              />
+                            </div>
+                            <div>
+                              <label style={{ fontSize: '0.76rem', color: 'var(--d26-gray-400)' }}>Forma de Pagamento</label>
+                              <select
+                                className="d26-select"
+                                value={folioPayMethod}
+                                onChange={(e) => setFolioPayMethod(e.target.value as PaymentMethod)}
+                              >
+                                <option value="PIX">PIX (Chave Automática)</option>
+                                <option value="CASH">Dinheiro em Espécie</option>
+                                <option value="CREDIT_CARD">Cartão de Crédito</option>
+                                <option value="DEBIT_CARD">Cartão de Débito</option>
+                              </select>
+                            </div>
+                            <button
+                              className="d26-btn d26-btn-primary"
+                              disabled={folioData.totals.balanceCents <= 0}
+                              onClick={handlePayFolio}
+                            >
+                              Confirmar Recebimento de Pagamento
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Encerrar Estadia (Check-Out) */}
+                        <div style={{ background: 'var(--d26-black-850)', padding: '14px', borderRadius: '8px', border: 'var(--d26-border-subtle)', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+                          <div>
+                            <h4 style={{ fontSize: '0.92rem', marginBottom: '8px' }}>Encerramento de Estadia (Check-Out)</h4>
+                            <p style={{ fontSize: '0.8rem', color: 'var(--d26-gray-300)', lineHeight: '1.4' }}>
+                              Regra operacional: O check-out exige saldo devedor zerado (R$ 0,00). Ao confirmar, a comanda APTO-{folioData.stay.roomNumber} é encerrada, o quarto passa a <strong>LIVRE</strong> e a governança a <strong>SUJO</strong>.
+                            </p>
+                            {folioData.totals.balanceCents > 0 && (
+                              <div style={{ padding: '8px', background: 'rgba(247, 37, 133, 0.15)', borderRadius: '6px', fontSize: '0.78rem', color: '#FFAFCC', marginTop: '10px' }}>
+                                ⚠️ Saldo pendente de {formatBrlCents(folioData.totals.balanceCents)}. Realize o pagamento antes de encerrar.
+                              </div>
+                            )}
+                          </div>
+                          <div style={{ marginTop: '14px', display: 'flex', gap: '8px' }}>
+                            <button
+                              className="d26-btn d26-btn-primary"
+                              style={{ flex: 1 }}
+                              disabled={folioData.totals.balanceCents > 0}
+                              onClick={() => handleCheckOutStay(folioData.stay.id, false)}
+                            >
+                              🚪 Efetivar Check-Out
+                            </button>
+                            {folioData.totals.balanceCents > 0 && (
+                              <button
+                                className="d26-btn d26-btn-secondary"
+                                style={{ fontSize: '0.74rem' }}
+                                title="Check-out especial com autorização auditada no log de segurança"
+                                onClick={() => {
+                                  if (confirm('Atenção: A estadia possui saldo pendente. Deseja realizar check-out com liberação auditada de dívida?')) {
+                                    handleCheckOutStay(folioData.stay.id, true);
+                                  }
+                                }}
+                              >
+                                Forçar com Auditoria
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* ================= SUBTAB 6: TRANSFERIR MESA P/ QUARTO ================= */}
+            {hotelSubTab === 'RESTAURANTE' && (
+              <div className="d26-card">
+                <h3 style={{ fontSize: '1.05rem', marginBottom: '8px' }}>
+                  🍽️ Integração Deck 26: Transferir Consumo de Mesa para Quarto de Hotel
+                </h3>
+                <p style={{ fontSize: '0.82rem', color: 'var(--d26-gray-300)', marginBottom: '16px', lineHeight: '1.4' }}>
+                  Permite que hóspedes do Hotel Auto Posto Milla consumam no restaurante/bar e transfiram o total para a conta do apartamento (Método <strong>ROOM_CHARGE</strong>). A mesa é liberada imediatamente, sem duplicar saídas de estoque e sem faturamento antecipado no caixa do restaurante.
+                </p>
+
+                <div className="d26-split-2">
+                  <div>
+                    <h4 style={{ fontSize: '0.92rem', marginBottom: '10px' }}>1. Comandas / Mesas Abertas no Restaurante</h4>
+                    {snapshot.tabs.filter((t) => t.status === 'OPEN' && t.type !== 'HOTEL_FOLIO').length === 0 ? (
+                      <p style={{ color: 'var(--d26-gray-400)', fontSize: '0.84rem' }}>Nenhuma mesa aberta com consumo no momento.</p>
+                    ) : (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        {snapshot.tabs
+                          .filter((t) => t.status === 'OPEN' && t.type !== 'HOTEL_FOLIO')
+                          .map((tab) => {
+                            const isSelected = transferTabId === tab.id;
+                            const remainingCents = Math.max(0, tab.totalCents - tab.paidCents);
+                            return (
+                              <div
+                                key={tab.id}
+                                style={{
+                                  padding: '10px',
+                                  borderRadius: '6px',
+                                  background: isSelected ? 'rgba(247, 37, 133, 0.2)' : 'var(--d26-black-850)',
+                                  border: isSelected ? '1px solid #F72585' : 'var(--d26-border-subtle)',
+                                  cursor: 'pointer',
+                                  display: 'flex',
+                                  justifyContent: 'space-between',
+                                  alignItems: 'center'
+                                }}
+                                onClick={() => setTransferTabId(tab.id)}
+                              >
+                                <div>
+                                  <strong>{tab.code}</strong>
+                                  <div style={{ fontSize: '0.74rem', color: 'var(--d26-gray-400)' }}>
+                                    {tab.customerName ? `Cliente: ${tab.customerName} • ` : ''}Garçom: {tab.waiterName ?? '—'}
+                                  </div>
+                                </div>
+                                <div style={{ textAlign: 'right' }}>
+                                  <strong style={{ color: '#F72585' }}>{formatBrlCents(remainingCents)}</strong>
+                                  <div style={{ fontSize: '0.7rem', color: 'var(--d26-gray-400)' }}>Total pendente</div>
+                                </div>
+                              </div>
+                            );
+                          })}
                       </div>
                     )}
                   </div>
-                  {room.status === 'AVAILABLE' && (
-                    <button
-                      className="d26-btn d26-btn-primary"
-                      onClick={async () => {
-                        await fetch(`${localApiBase}/api/hotel/checkin`, {
-                          method: 'POST',
-                          headers: getAuthHeaders(),
-                          body: JSON.stringify({
-                            roomNumber: room.number,
-                            guestName: `Hóspede Apto ${room.number}`
-                          })
-                        });
-                        await refreshState();
-                        notify(
-                          `Check-in realizado no Apto ${room.number} com abertura de Comanda de Quarto (Folio).`
-                        );
-                      }}
-                    >
-                      Realizar Check-in Rápido
-                    </button>
-                  )}
+
+                  <div>
+                    <h4 style={{ fontSize: '0.92rem', marginBottom: '10px' }}>2. Selecionar Apartamento de Destino</h4>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                      <div>
+                        <label style={{ fontSize: '0.76rem', color: 'var(--d26-gray-400)' }}>Apartamento Ocupado</label>
+                        <select
+                          className="d26-select"
+                          value={transferRoomNumber}
+                          onChange={(e) => setTransferRoomNumber(e.target.value)}
+                        >
+                          <option value="">-- Escolha o apartamento --</option>
+                          {snapshot.hotelRooms
+                            .filter((r) => r.occupancyStatus === 'OCUPADO')
+                            .map((r) => (
+                              <option key={r.id} value={r.number}>
+                                Apto {r.number} ({r.currentGuestName ?? 'Hóspede'})
+                              </option>
+                            ))}
+                        </select>
+                      </div>
+
+                      <button
+                        className="d26-btn d26-btn-primary"
+                        style={{ padding: '12px' }}
+                        disabled={!transferTabId || !transferRoomNumber}
+                        onClick={handleTransferTabToFolio}
+                      >
+                        Transferir Consumo para o Apto {transferRoomNumber || '___'}
+                      </button>
+                    </div>
+                  </div>
                 </div>
-              ))}
-            </div>
+              </div>
+            )}
+
+            {/* ================= SUBTAB 7: FRIGOBAR & SERVIÇOS ================= */}
+            {hotelSubTab === 'FRIGOBAR_SERVICOS' && (
+              <div className="d26-split-2">
+                {/* Lançamento de Frigobar */}
+                <div className="d26-card">
+                  <h3 style={{ fontSize: '1.05rem', marginBottom: '8px' }}>🧊 Consumo de Frigobar</h3>
+                  <p style={{ fontSize: '0.8rem', color: 'var(--d26-gray-400)', marginBottom: '14px' }}>
+                    Lança itens consumidos do frigobar do apartamento diretamente no folio e debita o estoque.
+                  </p>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    <div>
+                      <label style={{ fontSize: '0.76rem', color: 'var(--d26-gray-400)' }}>Apartamento</label>
+                      <select
+                        className="d26-select"
+                        value={minibarRoomNumber}
+                        onChange={(e) => setMinibarRoomNumber(e.target.value)}
+                      >
+                        {snapshot.hotelRooms
+                          .filter((r) => r.occupancyStatus === 'OCUPADO')
+                          .map((r) => (
+                            <option key={r.id} value={r.number}>
+                              Apto {r.number} ({r.currentGuestName ?? 'Hóspede'})
+                            </option>
+                          ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '0.76rem', color: 'var(--d26-gray-400)' }}>Item Consumido</label>
+                      <select
+                        className="d26-select"
+                        value={minibarProductId}
+                        onChange={(e) => setMinibarProductId(e.target.value)}
+                      >
+                        {snapshot.catalog.products
+                          .filter((p) => p.categoryId.includes('bebidas') || p.categoryId.includes('qualquer-hora'))
+                          .map((p) => (
+                            <option key={p.id} value={p.id}>
+                              {p.name} — {formatBrlCents(p.priceCents)}
+                            </option>
+                          ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '0.76rem', color: 'var(--d26-gray-400)' }}>Quantidade</label>
+                      <input
+                        type="number"
+                        min="1"
+                        className="d26-input"
+                        value={minibarQty}
+                        onChange={(e) => setMinibarQty(Math.max(1, Number(e.target.value)))}
+                      />
+                    </div>
+                    <button className="d26-btn d26-btn-primary" onClick={handleRecordMinibar}>
+                      Lançar Consumo no Folio do Apto {minibarRoomNumber}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Serviços Adicionais */}
+                <div className="d26-card">
+                  <h3 style={{ fontSize: '1.05rem', marginBottom: '8px' }}>🛎️ Serviços Adicionais</h3>
+                  <p style={{ fontSize: '0.8rem', color: 'var(--d26-gray-400)', marginBottom: '14px' }}>
+                    Lança serviços de hotelaria (lavanderia, cama extra, café extra, etc.) na conta do hóspede.
+                  </p>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    <div>
+                      <label style={{ fontSize: '0.76rem', color: 'var(--d26-gray-400)' }}>Apartamento</label>
+                      <select
+                        className="d26-select"
+                        value={serviceRoomNumber}
+                        onChange={(e) => setServiceRoomNumber(e.target.value)}
+                      >
+                        {snapshot.hotelRooms
+                          .filter((r) => r.occupancyStatus === 'OCUPADO')
+                          .map((r) => (
+                            <option key={r.id} value={r.number}>
+                              Apto {r.number} ({r.currentGuestName ?? 'Hóspede'})
+                            </option>
+                          ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '0.76rem', color: 'var(--d26-gray-400)' }}>Serviço</label>
+                      <select
+                        className="d26-select"
+                        value={selectedServiceId}
+                        onChange={(e) => setSelectedServiceId(e.target.value)}
+                      >
+                        {snapshot.hotelServices?.map((s) => (
+                          <option key={s.id} value={s.id}>
+                            {s.name} — {formatBrlCents(s.defaultPriceCents)}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <button className="d26-btn d26-btn-primary" onClick={handleOrderHotelService}>
+                      Lançar Serviço na Conta do Apto {serviceRoomNumber}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ================= SUBTAB 8: GOVERNANÇA & MANUTENÇÃO ================= */}
+            {hotelSubTab === 'GOVERNANCA' && (
+              <div className="d26-split-2">
+                {/* Painel de Governança */}
+                <div className="d26-card">
+                  <h3 style={{ fontSize: '1.05rem', marginBottom: '12px' }}>🧹 Painel de Governança & Camareiras</h3>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    {snapshot.hotelRooms.map((room) => (
+                      <div
+                        key={room.id}
+                        style={{
+                          padding: '10px',
+                          background: 'var(--d26-black-850)',
+                          borderRadius: '6px',
+                          border: 'var(--d26-border-subtle)',
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center'
+                        }}
+                      >
+                        <div>
+                          <strong>Apto {room.number}</strong>
+                          <span style={{ fontSize: '0.74rem', color: 'var(--d26-gray-400)', marginLeft: '8px' }}>
+                            {room.floorSector}
+                          </span>
+                          <div style={{ marginTop: '4px' }}>
+                            <span
+                              className={`d26-badge ${
+                                room.housekeepingStatus === 'LIMPO'
+                                  ? 'd26-badge-success'
+                                  : room.housekeepingStatus === 'SUJO'
+                                  ? 'd26-badge-warning'
+                                  : 'd26-badge-purple'
+                              }`}
+                              style={{ fontSize: '0.7rem' }}
+                            >
+                              {room.housekeepingStatus}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div style={{ display: 'flex', gap: '4px' }}>
+                          <button
+                            className="d26-btn d26-btn-secondary"
+                            style={{ fontSize: '0.7rem', padding: '4px 6px' }}
+                            onClick={() => handleUpdateHousekeeping(room.number, 'EM_LIMPEZA')}
+                          >
+                            Em Limpeza
+                          </button>
+                          <button
+                            className="d26-btn d26-btn-secondary"
+                            style={{ fontSize: '0.7rem', padding: '4px 6px' }}
+                            onClick={() => handleUpdateHousekeeping(room.number, 'INSPECAO_PENDENTE')}
+                          >
+                            Inspeção
+                          </button>
+                          <button
+                            className="d26-btn d26-btn-primary"
+                            style={{ fontSize: '0.7rem', padding: '4px 6px' }}
+                            onClick={() => handleUpdateHousekeeping(room.number, 'LIMPO')}
+                          >
+                            Aprovar Limpo
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Painel de Manutenção */}
+                <div className="d26-card">
+                  <h3 style={{ fontSize: '1.05rem', marginBottom: '12px' }}>🔧 Chamado de Manutenção</h3>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    <div>
+                      <label style={{ fontSize: '0.76rem', color: 'var(--d26-gray-400)' }}>Apartamento</label>
+                      <select
+                        className="d26-select"
+                        value={maintRoomNumber}
+                        onChange={(e) => setMaintRoomNumber(e.target.value)}
+                      >
+                        {snapshot.hotelRooms.map((r) => (
+                          <option key={r.id} value={r.number}>
+                            Apto {r.number}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '0.76rem', color: 'var(--d26-gray-400)' }}>Severidade</label>
+                      <select
+                        className="d26-select"
+                        value={maintSeverity}
+                        onChange={(e) => setMaintSeverity(e.target.value as any)}
+                      >
+                        <option value="LOW">Baixa (Pequeno reparo estético)</option>
+                        <option value="MEDIUM">Média (Troca de lâmpada, ajuste)</option>
+                        <option value="HIGH">Alta (Ar condicionado, chuveiro)</option>
+                        <option value="CRITICAL">Crítica (Vazamento grave, elétrica)</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '0.76rem', color: 'var(--d26-gray-400)' }}>Descrição do Problema</label>
+                      <textarea
+                        className="d26-input"
+                        rows={3}
+                        placeholder="Ex: Ar condicionado vazando água no quarto..."
+                        value={maintDescription}
+                        onChange={(e) => setMaintDescription(e.target.value)}
+                      />
+                    </div>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.8rem', cursor: 'pointer' }}>
+                      <input
+                        type="checkbox"
+                        checked={maintBlockRoom}
+                        onChange={(e) => setMaintBlockRoom(e.target.checked)}
+                      />
+                      Bloquear apartamento para reservas/ocupação durante o reparo
+                    </label>
+                    <button className="d26-btn d26-btn-primary" onClick={handleCreateMaintenance}>
+                      Abrir Chamado de Manutenção
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ================= MODAL: NOVO HÓSPEDE (LGPD) ================= */}
+            {showNewGuestModal && (
+              <div
+                style={{
+                  position: 'fixed',
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  background: 'rgba(0,0,0,0.75)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  zIndex: 9999
+                }}
+              >
+                <div className="d26-card" style={{ width: '480px', maxWidth: '95vw' }}>
+                  <h3 style={{ fontSize: '1.1rem', marginBottom: '14px' }}>👤 Cadastrar Novo Hóspede (LGPD)</h3>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    <div>
+                      <label style={{ fontSize: '0.76rem', color: 'var(--d26-gray-400)' }}>Nome Completo *</label>
+                      <input
+                        className="d26-input"
+                        placeholder="Ex: João da Silva"
+                        value={guestName}
+                        onChange={(e) => setGuestName(e.target.value)}
+                      />
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                      <div>
+                        <label style={{ fontSize: '0.76rem', color: 'var(--d26-gray-400)' }}>CPF / Passaporte</label>
+                        <input
+                          className="d26-input"
+                          placeholder="000.000.000-00"
+                          value={guestDoc}
+                          onChange={(e) => setGuestDoc(e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: '0.76rem', color: 'var(--d26-gray-400)' }}>Telefone / WhatsApp</label>
+                        <input
+                          className="d26-input"
+                          placeholder="(98) 98888-8888"
+                          value={guestPhone}
+                          onChange={(e) => setGuestPhone(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr', gap: '10px' }}>
+                      <div>
+                        <label style={{ fontSize: '0.76rem', color: 'var(--d26-gray-400)' }}>Cidade</label>
+                        <input
+                          className="d26-input"
+                          placeholder="São Luís"
+                          value={guestCity}
+                          onChange={(e) => setGuestCity(e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: '0.76rem', color: 'var(--d26-gray-400)' }}>UF</label>
+                        <input
+                          className="d26-input"
+                          placeholder="MA"
+                          value={guestState}
+                          onChange={(e) => setGuestState(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '10px' }}>
+                      <div>
+                        <label style={{ fontSize: '0.76rem', color: 'var(--d26-gray-400)' }}>E-mail</label>
+                        <input
+                          className="d26-input"
+                          placeholder="hospede@email.com"
+                          value={guestEmail}
+                          onChange={(e) => setGuestEmail(e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: '0.76rem', color: 'var(--d26-gray-400)' }}>Placa do Veículo (Posto Milla)</label>
+                        <input
+                          className="d26-input"
+                          placeholder="ABC1D23"
+                          value={guestPlate}
+                          onChange={(e) => setGuestPlate(e.target.value)}
+                        />
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'flex', gap: '8px', marginTop: '12px', justifyContent: 'flex-end' }}>
+                      <button className="d26-btn d26-btn-secondary" onClick={() => setShowNewGuestModal(false)}>
+                        Cancelar
+                      </button>
+                      <button className="d26-btn d26-btn-primary" onClick={handleCreateGuest}>
+                        Salvar Hóspede
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ================= MODAL: NOVA RESERVA ================= */}
+            {showNewResModal && (
+              <div
+                style={{
+                  position: 'fixed',
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  background: 'rgba(0,0,0,0.75)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  zIndex: 9999
+                }}
+              >
+                <div className="d26-card" style={{ width: '480px', maxWidth: '95vw' }}>
+                  <h3 style={{ fontSize: '1.1rem', marginBottom: '14px' }}>📅 Nova Reserva de Hospedagem</h3>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    <div>
+                      <label style={{ fontSize: '0.76rem', color: 'var(--d26-gray-400)' }}>Hóspede *</label>
+                      <select
+                        className="d26-select"
+                        value={resGuestId}
+                        onChange={(e) => setResGuestId(e.target.value)}
+                      >
+                        <option value="">-- Selecione o hóspede cadastrado --</option>
+                        {snapshot.hotelGuests?.map((g) => (
+                          <option key={g.id} value={g.id}>
+                            {g.fullName} ({g.phone ?? g.documentNumber ?? 'sem contato'})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '0.76rem', color: 'var(--d26-gray-400)' }}>Apartamento *</label>
+                      <select
+                        className="d26-select"
+                        value={resRoomNumber}
+                        onChange={(e) => setResRoomNumber(e.target.value)}
+                      >
+                        {snapshot.hotelRooms.map((r) => (
+                          <option key={r.id} value={r.number}>
+                            Apto {r.number} ({r.category} • {formatBrlCents(r.dailyRateCents)})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                      <div>
+                        <label style={{ fontSize: '0.76rem', color: 'var(--d26-gray-400)' }}>Check-in (Entrada)</label>
+                        <input
+                          type="date"
+                          className="d26-input"
+                          value={resCheckInDate}
+                          onChange={(e) => setResCheckInDate(e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: '0.76rem', color: 'var(--d26-gray-400)' }}>Check-out (Saída)</label>
+                        <input
+                          type="date"
+                          className="d26-input"
+                          value={resCheckOutDate}
+                          onChange={(e) => setResCheckOutDate(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px' }}>
+                      <div>
+                        <label style={{ fontSize: '0.76rem', color: 'var(--d26-gray-400)' }}>Hóspedes</label>
+                        <input
+                          type="number"
+                          min="1"
+                          className="d26-input"
+                          value={resGuestsCount}
+                          onChange={(e) => setResGuestsCount(Math.max(1, Number(e.target.value)))}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: '0.76rem', color: 'var(--d26-gray-400)' }}>Diária (R$)</label>
+                        <input
+                          className="d26-input"
+                          value={resDailyReais}
+                          onChange={(e) => setResDailyReais(e.target.value)}
+                        />
+                      </div>
+                      <div>
+                        <label style={{ fontSize: '0.76rem', color: 'var(--d26-gray-400)' }}>Sinal (R$)</label>
+                        <input
+                          className="d26-input"
+                          value={resDepositReais}
+                          onChange={(e) => setResDepositReais(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '0.8rem', cursor: 'pointer' }}>
+                      <input
+                        type="checkbox"
+                        checked={resDepositPaid}
+                        onChange={(e) => setResDepositPaid(e.target.checked)}
+                      />
+                      Sinal / Depósito já foi pago na reserva
+                    </label>
+
+                    <div style={{ display: 'flex', gap: '8px', marginTop: '12px', justifyContent: 'flex-end' }}>
+                      <button className="d26-btn d26-btn-secondary" onClick={() => setShowNewResModal(false)}>
+                        Cancelar
+                      </button>
+                      <button className="d26-btn d26-btn-primary" onClick={handleCreateReservation}>
+                        Confirmar Reserva
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ================= MODAL: NOVO CHECK-IN ================= */}
+            {showCheckInModal && (
+              <div
+                style={{
+                  position: 'fixed',
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  background: 'rgba(0,0,0,0.75)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  zIndex: 9999
+                }}
+              >
+                <div className="d26-card" style={{ width: '480px', maxWidth: '95vw' }}>
+                  <h3 style={{ fontSize: '1.1rem', marginBottom: '14px' }}>🔑 Check-In Guiado de Estadia</h3>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    <div>
+                      <label style={{ fontSize: '0.76rem', color: 'var(--d26-gray-400)' }}>Apartamento *</label>
+                      <select
+                        className="d26-select"
+                        value={checkInRoomNumber}
+                        onChange={(e) => setCheckInRoomNumber(e.target.value)}
+                      >
+                        {snapshot.hotelRooms.map((r) => (
+                          <option key={r.id} value={r.number}>
+                            Apto {r.number} ({r.category} • {r.occupancyStatus})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '0.76rem', color: 'var(--d26-gray-400)' }}>Hóspede Titular *</label>
+                      <select
+                        className="d26-select"
+                        value={checkInGuestId}
+                        onChange={(e) => setCheckInGuestId(e.target.value)}
+                      >
+                        <option value="">-- Selecione o hóspede --</option>
+                        {snapshot.hotelGuests?.map((g) => (
+                          <option key={g.id} value={g.id}>
+                            {g.fullName} ({g.documentNumber ?? g.phone ?? 'sem doc'})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '0.76rem', color: 'var(--d26-gray-400)' }}>Previsão de Saída (Check-Out)</label>
+                      <input
+                        type="datetime-local"
+                        className="d26-input"
+                        value={checkInScheduledOut}
+                        onChange={(e) => setCheckInScheduledOut(e.target.value)}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '0.76rem', color: 'var(--d26-gray-400)' }}>Taxa de Early Check-In (R$)</label>
+                      <input
+                        className="d26-input"
+                        placeholder="0,00"
+                        value={checkInEarlyReais}
+                        onChange={(e) => setCheckInEarlyReais(e.target.value)}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '0.76rem', color: 'var(--d26-gray-400)' }}>Observações de Entrada</label>
+                      <input
+                        className="d26-input"
+                        placeholder="Ex: Hóspede solicitou andar silencioso"
+                        value={checkInNotes}
+                        onChange={(e) => setCheckInNotes(e.target.value)}
+                      />
+                    </div>
+
+                    <div style={{ display: 'flex', gap: '8px', marginTop: '12px', justifyContent: 'flex-end' }}>
+                      <button className="d26-btn d26-btn-secondary" onClick={() => setShowCheckInModal(false)}>
+                        Cancelar
+                      </button>
+                      <button className="d26-btn d26-btn-primary" onClick={handleCheckInStay}>
+                        Concluir Check-In & Abrir Folio
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 

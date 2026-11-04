@@ -34,7 +34,32 @@ import {
   DECK26_INITIAL_STAFF,
   DiningTableQr,
   DiscountType,
+  HotelCompanion,
+  HotelDashboardMetrics,
+  HotelFolioEntry,
+  HotelFolioEntryType,
+  HotelGuest,
+  HotelGuestAddress,
+  HotelGuestDocumentType,
+  HotelHousekeepingAction,
+  HotelHousekeepingLog,
+  HotelMaintenancePriority,
+  HotelMaintenanceRecord,
+  HotelMaintenanceStatus,
+  HotelMinibarConsumption,
+  HotelMinibarItem,
+  HotelMinibarMovementType,
+  HotelReservation,
+  HotelReservationSource,
+  HotelReservationStatus,
   HotelRoom,
+  HotelRoomCategory,
+  HotelRoomStatus,
+  HotelService,
+  HotelServiceCategory,
+  HotelServiceOrder,
+  HotelStay,
+  HotelStayStatus,
   KdsSlaConfig,
   ModifierGroup,
   OperationalNotification,
@@ -52,6 +77,9 @@ import {
   PrintJobStatus,
   PrintJobTarget,
   ProductRecipe,
+  RoomHousekeepingStatus,
+  RoomMaintenanceStatus,
+  RoomOccupancyStatus,
   SalesChannel,
   StockMovement,
   SyncOutboxEvent,
@@ -59,7 +87,10 @@ import {
   TabType,
   TablePhysicalStatus,
   UserRole,
+  areDateIntervalsOverlapping,
   buildEscPosProductionTicket,
+  calculateNightsCount,
+  calculateStayFolioTotals,
   calculateTabTotals,
   hasPermission,
   resolveChannelPriceCents
@@ -180,7 +211,24 @@ export class LocalOperationalStore {
         .run('0003_stage4_tables_tabs_kds_cashier', new Date().toISOString());
     }
 
-    // Garante compatibilidade de bancos criados na Etapa 2 com novos status das Etapas 3 e 4
+    const existing0004 = this.db
+      .prepare('SELECT version FROM schema_migrations WHERE version = ?')
+      .get('0004_stage5_hotel_pms') as { version?: string } | undefined;
+
+    if (!existing0004) {
+      const migration0004Path = path.resolve(
+        __dirname,
+        '../../../packages/contracts/migrations/local/0004_stage5_hotel_pms.sql'
+      );
+      const sql0004 = fs.readFileSync(migration0004Path, 'utf-8');
+      this.applySqlStatementsIdempotently(sql0004);
+
+      this.db
+        .prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)')
+        .run('0004_stage5_hotel_pms', new Date().toISOString());
+    }
+
+    // Garante compatibilidade de bancos criados na Etapa 2 com novos status das Etapas 3, 4 e 5
     this.db.exec('PRAGMA ignore_check_constraints = ON;');
   }
 
@@ -351,6 +399,21 @@ export class LocalOperationalStore {
         VALUES (1, 10, 20, ?)
       `)
       .run(now);
+
+    // 9. Semeia Serviços Hoteleiros Básicos
+    const serviceCount = (
+      this.db.prepare('SELECT COUNT(*) as total FROM hotel_services').get() as { total: number }
+    ).total;
+    if (serviceCount === 0) {
+      const insertService = this.db.prepare(`
+        INSERT INTO hotel_services (id, name, category, default_price_cents, active, created_at)
+        VALUES (?, ?, ?, ?, 1, ?)
+      `);
+      insertService.run('srv-lavanderia', 'Lavanderia por Peça', 'LAVANDERIA', 1500, now);
+      insertService.run('srv-cafe-extra', 'Café da Manhã Extra', 'CAFE_MANHA', 2500, now);
+      insertService.run('srv-cama-extra', 'Cama Extra Casal/Solteiro', 'CAMA_EXTRA', 5000, now);
+      insertService.run('srv-estacionamento-pesado', 'Pátio Veículo Pesado / Caminhão', 'ESTACIONAMENTO', 3000, now);
+    }
   }
 
   public close(): void {
@@ -4573,61 +4636,1966 @@ export class LocalOperationalStore {
     return rows.map((r) => this.mapStockMovementRow(r));
   }
 
-  public listHotelRooms(): HotelRoom[] {
-    const rows = this.db
-      .prepare('SELECT * FROM hotel_rooms ORDER BY number ASC')
-      .all() as Array<Record<string, unknown>>;
-    return rows.map((r) => ({
-      id: String(r.id),
-      number: String(r.number),
-      category: r.category as HotelRoom['category'],
-      dailyRateCents: Number(r.daily_rate_cents),
-      status: r.status as HotelRoom['status'],
-      currentGuestName: r.current_guest_name ? String(r.current_guest_name) : null,
-      activeTabId: r.active_tab_id ? String(r.active_tab_id) : null,
-      updatedAt: String(r.updated_at)
-    }));
+  public getProductCurrentStock(productId: string): number {
+    return this.getProductStockQuantity(productId);
   }
 
-  public checkInHotelRoom(input: { roomNumber: string; guestName: string }): { room: HotelRoom; folioTab: Tab } {
-    const roomRow = this.db
-      .prepare('SELECT * FROM hotel_rooms WHERE number = ?')
-      .get(input.roomNumber) as Record<string, unknown> | undefined;
+  // ============================================================================
+  // HOTELARIA (HOTEL AUTO POSTO MILLA — PMS INTEGRADO AO RESTAURANTE/BAR)
+  // ============================================================================
 
-    if (!roomRow) {
-      throw new Error(`Apartamento ${input.roomNumber} não cadastrado.`);
+  private mapHotelRoomRow(r: Record<string, unknown>): HotelRoom {
+    let amenities: string[] = ['Ar Condicionado', 'Wi-Fi', 'TV Smart', 'Frigobar'];
+    if (r.amenities_json) {
+      try {
+        amenities = JSON.parse(String(r.amenities_json));
+      } catch {
+        // Fallback para lista padrão
+      }
     }
 
-    const folioTab = this.openOrGetTab({
-      code: `APTO-${input.roomNumber}`,
-      type: 'HOTEL_FOLIO',
-      customerName: input.guestName,
-      openedByUserId: 'usr-reception'
-    });
+    return {
+      id: String(r.id),
+      number: String(r.number),
+      floorSector: r.floor_sector ? String(r.floor_sector) : 'Térreo',
+      category: (r.category || 'STANDARD_DOUBLE') as HotelRoom['category'],
+      maxGuests: r.max_guests != null ? Number(r.max_guests) : 2,
+      bedCount: r.bed_count != null ? Number(r.bed_count) : 1,
+      bedConfiguration: r.bed_configuration ? String(r.bed_configuration) : '1 Cama Casal',
+      description: String(r.description || ''),
+      amenities,
+      dailyRateCents: Number(r.daily_rate_cents),
+      status: (r.status || 'AVAILABLE') as HotelRoom['status'],
+      occupancyStatus: (r.occupancy_status || 'LIVRE') as RoomOccupancyStatus,
+      housekeepingStatus: (r.housekeeping_status || 'LIMPO') as RoomHousekeepingStatus,
+      maintenanceStatus: (r.maintenance_status || 'DISPONIVEL') as RoomMaintenanceStatus,
+      active: r.active != null ? Boolean(r.active) : true,
+      currentGuestName: r.current_guest_name ? String(r.current_guest_name) : null,
+      currentGuestId: r.current_guest_id ? String(r.current_guest_id) : null,
+      activeTabId: r.active_tab_id ? String(r.active_tab_id) : null,
+      activeStayId: r.active_stay_id ? String(r.active_stay_id) : null,
+      internalNotes: String(r.internal_notes || ''),
+      createdAt: r.created_at ? String(r.created_at) : undefined,
+      updatedAt: String(r.updated_at)
+    };
+  }
 
+  public listHotelRooms(options?: {
+    activeOnly?: boolean;
+    occupancyStatus?: RoomOccupancyStatus;
+    housekeepingStatus?: RoomHousekeepingStatus;
+  }): HotelRoom[] {
+    let sql = 'SELECT * FROM hotel_rooms WHERE 1=1';
+    const params: any[] = [];
+    if (options?.activeOnly) {
+      sql += ' AND active = 1';
+    }
+    if (options?.occupancyStatus) {
+      sql += ' AND occupancy_status = ?';
+      params.push(options.occupancyStatus);
+    }
+    if (options?.housekeepingStatus) {
+      sql += ' AND housekeeping_status = ?';
+      params.push(options.housekeepingStatus);
+    }
+    sql += ' ORDER BY number ASC';
+
+    const rows = this.db.prepare(sql).all(...params) as Array<Record<string, unknown>>;
+    return rows.map((r) => this.mapHotelRoomRow(r));
+  }
+
+  public getHotelRoomById(id: string): HotelRoom | null {
+    const row = this.db.prepare('SELECT * FROM hotel_rooms WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    return row ? this.mapHotelRoomRow(row) : null;
+  }
+
+  public getHotelRoomByNumber(roomNumber: string): HotelRoom | null {
+    const row = this.db.prepare('SELECT * FROM hotel_rooms WHERE number = ?').get(roomNumber) as Record<string, unknown> | undefined;
+    return row ? this.mapHotelRoomRow(row) : null;
+  }
+
+  public createHotelRoom(input: {
+    id?: string;
+    number: string;
+    floorSector?: string;
+    category?: HotelRoomCategory;
+    maxGuests?: number;
+    bedCount?: number;
+    bedConfiguration?: string;
+    description?: string;
+    amenities?: string[];
+    dailyRateCents: number;
+    internalNotes?: string;
+    operatorUserId: string;
+  }): HotelRoom {
+    const existing = this.getHotelRoomByNumber(input.number);
+    if (existing) {
+      throw new Error(`Apartamento ${input.number} já cadastrado no sistema.`);
+    }
+
+    const id = input.id || `room-${input.number}`;
     const now = new Date().toISOString();
-    this.db
-      .prepare(`
-        UPDATE hotel_rooms
-        SET status = 'OCCUPIED', current_guest_name = ?, active_tab_id = ?, updated_at = ?
-        WHERE number = ?
-      `)
-      .run(input.guestName, folioTab.id, now, input.roomNumber);
+    const amenities = input.amenities || ['Ar Condicionado', 'Wi-Fi', 'TV Smart', 'Frigobar'];
 
-    const updatedRooms = this.listHotelRooms();
-    const room = updatedRooms.find((r) => r.number === input.roomNumber)!;
+    this.db.prepare(`
+      INSERT INTO hotel_rooms (
+        id, number, floor_sector, category, max_guests, bed_count, bed_configuration,
+        description, amenities_json, daily_rate_cents, status, occupancy_status,
+        housekeeping_status, maintenance_status, active, internal_notes, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'AVAILABLE', 'LIVRE', 'LIMPO', 'DISPONIVEL', 1, ?, ?, ?)
+    `).run(
+      id,
+      input.number,
+      input.floorSector || 'Térreo',
+      input.category || 'STANDARD_DOUBLE',
+      input.maxGuests || 2,
+      input.bedCount || 1,
+      input.bedConfiguration || '1 Cama Casal',
+      input.description || '',
+      JSON.stringify(amenities),
+      input.dailyRateCents,
+      input.internalNotes || '',
+      now,
+      now
+    );
+
+    const created = this.getHotelRoomById(id)!;
 
     this.appendOutboxEvent({
-      idempotencyKey: `hotel-checkin-${room.number}-${folioTab.id}`,
+      idempotencyKey: `hotel-room-create-${id}`,
+      originNode: 'WINDOWS_PDV',
+      entityType: 'HOTEL_ROOM',
+      entityId: id,
+      operation: 'UPSERT',
+      entityVersion: 1,
+      payload: created
+    });
+
+    this.recordAuditLog({
+      actorUserId: input.operatorUserId,
+      action: 'HOTEL_ROOM_CREATE',
+      entityType: 'HOTEL_ROOM',
+      entityId: id,
+      metadata: { number: input.number, category: input.category, dailyRateCents: input.dailyRateCents }
+    });
+
+    return created;
+  }
+
+  public updateHotelRoom(
+    id: string,
+    updates: Partial<{
+      number: string;
+      floorSector: string;
+      category: HotelRoomCategory;
+      maxGuests: number;
+      bedCount: number;
+      bedConfiguration: string;
+      description: string;
+      amenities: string[];
+      dailyRateCents: number;
+      occupancyStatus: RoomOccupancyStatus;
+      housekeepingStatus: RoomHousekeepingStatus;
+      maintenanceStatus: RoomMaintenanceStatus;
+      internalNotes: string;
+      active: boolean;
+    }>,
+    operatorUserId: string
+  ): HotelRoom {
+    const existing = this.getHotelRoomById(id);
+    if (!existing) {
+      throw new Error(`Apartamento '${id}' não encontrado.`);
+    }
+
+    const now = new Date().toISOString();
+    const fields: string[] = ['updated_at = ?'];
+    const params: any[] = [now];
+
+    if (updates.number !== undefined) {
+      fields.push('number = ?');
+      params.push(updates.number);
+    }
+    if (updates.floorSector !== undefined) {
+      fields.push('floor_sector = ?');
+      params.push(updates.floorSector);
+    }
+    if (updates.category !== undefined) {
+      fields.push('category = ?');
+      params.push(updates.category);
+    }
+    if (updates.maxGuests !== undefined) {
+      fields.push('max_guests = ?');
+      params.push(updates.maxGuests);
+    }
+    if (updates.bedCount !== undefined) {
+      fields.push('bed_count = ?');
+      params.push(updates.bedCount);
+    }
+    if (updates.bedConfiguration !== undefined) {
+      fields.push('bed_configuration = ?');
+      params.push(updates.bedConfiguration);
+    }
+    if (updates.description !== undefined) {
+      fields.push('description = ?');
+      params.push(updates.description);
+    }
+    if (updates.amenities !== undefined) {
+      fields.push('amenities_json = ?');
+      params.push(JSON.stringify(updates.amenities));
+    }
+    if (updates.dailyRateCents !== undefined) {
+      fields.push('daily_rate_cents = ?');
+      params.push(updates.dailyRateCents);
+    }
+    if (updates.occupancyStatus !== undefined) {
+      fields.push('occupancy_status = ?');
+      params.push(updates.occupancyStatus);
+      if (updates.occupancyStatus === 'OCUPADO') {
+        fields.push("status = 'OCCUPIED'");
+      } else if (updates.occupancyStatus === 'LIVRE') {
+        fields.push("status = 'AVAILABLE'");
+      }
+    }
+    if (updates.housekeepingStatus !== undefined) {
+      fields.push('housekeeping_status = ?');
+      params.push(updates.housekeepingStatus);
+    }
+    if (updates.maintenanceStatus !== undefined) {
+      fields.push('maintenance_status = ?');
+      params.push(updates.maintenanceStatus);
+    }
+    if (updates.internalNotes !== undefined) {
+      fields.push('internal_notes = ?');
+      params.push(updates.internalNotes);
+    }
+    if (updates.active !== undefined) {
+      fields.push('active = ?');
+      params.push(updates.active ? 1 : 0);
+    }
+
+    params.push(id);
+    this.db.prepare(`UPDATE hotel_rooms SET ${fields.join(', ')} WHERE id = ?`).run(...params);
+
+    const updated = this.getHotelRoomById(id)!;
+
+    this.appendOutboxEvent({
+      idempotencyKey: `hotel-room-update-${id}-${Date.now()}`,
+      originNode: 'WINDOWS_PDV',
+      entityType: 'HOTEL_ROOM',
+      entityId: id,
+      operation: 'UPSERT',
+      entityVersion: 2,
+      payload: updated
+    });
+
+    this.recordAuditLog({
+      actorUserId: operatorUserId,
+      action: 'HOTEL_ROOM_UPDATE',
+      entityType: 'HOTEL_ROOM',
+      entityId: id,
+      metadata: updates
+    });
+
+    return updated;
+  }
+
+  public deactivateHotelRoom(id: string, operatorUserId: string): { success: boolean; room: HotelRoom } {
+    const room = this.getHotelRoomById(id);
+    if (!room) {
+      throw new Error(`Apartamento '${id}' não encontrado.`);
+    }
+
+    // Regra Obrigatória da Seção 2: Não excluir fisicamente quartos com histórico de hospedagem
+    const stayHistoryCount = (
+      this.db.prepare('SELECT COUNT(*) as total FROM hotel_stays WHERE room_id = ?').get(room.id) as { total: number }
+    ).total;
+
+    if (stayHistoryCount > 0) {
+      // Bloqueia exclusão física e aplica desativação lógica
+      const updated = this.updateHotelRoom(id, { active: false }, operatorUserId);
+      return { success: true, room: updated };
+    }
+
+    // Caso não haja histórico, pode ser desativado logicamente com segurança
+    const updated = this.updateHotelRoom(id, { active: false }, operatorUserId);
+    return { success: true, room: updated };
+  }
+
+  // ============================================================================
+  // HÓSPEDES (HOTEL_GUESTS — LGPD E AUDITORIA)
+  // ============================================================================
+
+  private mapHotelGuestRow(r: Record<string, unknown>): HotelGuest {
+    let addr: HotelGuestAddress = {
+      street: '',
+      number: '',
+      neighborhood: '',
+      city: '',
+      state: '',
+      postalCode: ''
+    };
+    if (r.address_street || r.address_city) {
+      addr = {
+        street: String(r.address_street || ''),
+        number: String(r.address_number || ''),
+        neighborhood: String(r.address_neighborhood || ''),
+        city: String(r.address_city || ''),
+        state: String(r.address_state || ''),
+        postalCode: String(r.address_postal_code || '')
+      };
+    }
+
+    return {
+      id: String(r.id),
+      fullName: String(r.full_name),
+      documentType: (r.document_type || 'CPF') as HotelGuestDocumentType,
+      documentNumber: String(r.document_number),
+      phone: String(r.phone || ''),
+      email: String(r.email || ''),
+      nationality: String(r.nationality || 'Brasileira'),
+      birthDate: r.birth_date ? String(r.birth_date) : null,
+      address: addr,
+      notes: String(r.notes || ''),
+      totalStaysCount: Number(r.total_stays_count || 0),
+      createdAt: String(r.created_at),
+      updatedAt: String(r.updated_at)
+    };
+  }
+
+  public listHotelGuests(search?: string): HotelGuest[] {
+    let sql = 'SELECT * FROM hotel_guests WHERE 1=1';
+    const params: any[] = [];
+    if (search && search.trim() !== '') {
+      const q = `%${search.trim().toLowerCase()}%`;
+      sql += ' AND (lower(full_name) LIKE ? OR lower(document_number) LIKE ? OR lower(phone) LIKE ?)';
+      params.push(q, q, q);
+    }
+    sql += ' ORDER BY full_name ASC LIMIT 100';
+
+    const rows = this.db.prepare(sql).all(...params) as Array<Record<string, unknown>>;
+    return rows.map((r) => this.mapHotelGuestRow(r));
+  }
+
+  public getHotelGuestById(id: string): HotelGuest | null {
+    const row = this.db.prepare('SELECT * FROM hotel_guests WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    return row ? this.mapHotelGuestRow(row) : null;
+  }
+
+  public findGuestByDocument(documentNumber: string): HotelGuest | null {
+    const row = this.db.prepare('SELECT * FROM hotel_guests WHERE document_number = ?').get(documentNumber) as Record<string, unknown> | undefined;
+    return row ? this.mapHotelGuestRow(row) : null;
+  }
+
+  public createHotelGuest(input: {
+    id?: string;
+    fullName: string;
+    documentType?: HotelGuestDocumentType;
+    documentNumber: string;
+    phone?: string;
+    email?: string;
+    nationality?: string;
+    birthDate?: string | null;
+    address?: HotelGuestAddress;
+    notes?: string;
+    operatorUserId: string;
+  }): HotelGuest {
+    const existing = this.findGuestByDocument(input.documentNumber);
+    if (existing) {
+      return existing;
+    }
+
+    const id = input.id || `guest-${crypto.randomUUID()}`;
+    const now = new Date().toISOString();
+    const addr = input.address || {
+      street: '',
+      number: '',
+      neighborhood: '',
+      city: '',
+      state: '',
+      postalCode: ''
+    };
+
+    this.db.prepare(`
+      INSERT INTO hotel_guests (
+        id, full_name, document_type, document_number, phone, email,
+        nationality, birth_date, address_street, address_number, address_neighborhood,
+        address_city, address_state, address_postal_code, notes, total_stays_count,
+        created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+    `).run(
+      id,
+      input.fullName,
+      input.documentType || 'CPF',
+      input.documentNumber,
+      input.phone || '',
+      input.email || '',
+      input.nationality || 'Brasileira',
+      input.birthDate || null,
+      addr.street || '',
+      addr.number || '',
+      addr.neighborhood || '',
+      addr.city || '',
+      addr.state || '',
+      addr.postalCode || '',
+      input.notes || '',
+      now,
+      now
+    );
+
+    const created = this.getHotelGuestById(id)!;
+
+    this.appendOutboxEvent({
+      idempotencyKey: `hotel-guest-create-${id}`,
+      originNode: 'WINDOWS_PDV',
+      entityType: 'HOTEL_GUEST',
+      entityId: id,
+      operation: 'UPSERT',
+      entityVersion: 1,
+      payload: created
+    });
+
+    return created;
+  }
+
+  public updateHotelGuest(
+    id: string,
+    updates: Partial<{
+      fullName: string;
+      documentType: HotelGuestDocumentType;
+      documentNumber: string;
+      phone: string;
+      email: string;
+      nationality: string;
+      birthDate: string | null;
+      address: HotelGuestAddress;
+      notes: string;
+    }>,
+    operatorUserId: string
+  ): HotelGuest {
+    const existing = this.getHotelGuestById(id);
+    if (!existing) {
+      throw new Error(`Hóspede '${id}' não encontrado.`);
+    }
+
+    const now = new Date().toISOString();
+    const fields: string[] = ['updated_at = ?'];
+    const params: any[] = [now];
+
+    if (updates.fullName !== undefined) {
+      fields.push('full_name = ?');
+      params.push(updates.fullName);
+    }
+    if (updates.documentType !== undefined) {
+      fields.push('document_type = ?');
+      params.push(updates.documentType);
+    }
+    if (updates.documentNumber !== undefined) {
+      fields.push('document_number = ?');
+      params.push(updates.documentNumber);
+    }
+    if (updates.phone !== undefined) {
+      fields.push('phone = ?');
+      params.push(updates.phone);
+    }
+    if (updates.email !== undefined) {
+      fields.push('email = ?');
+      params.push(updates.email);
+    }
+    if (updates.nationality !== undefined) {
+      fields.push('nationality = ?');
+      params.push(updates.nationality);
+    }
+    if (updates.birthDate !== undefined) {
+      fields.push('birth_date = ?');
+      params.push(updates.birthDate);
+    }
+    if (updates.notes !== undefined) {
+      fields.push('notes = ?');
+      params.push(updates.notes);
+    }
+    if (updates.address) {
+      fields.push('address_street = ?, address_number = ?, address_neighborhood = ?, address_city = ?, address_state = ?, address_postal_code = ?');
+      params.push(
+        updates.address.street || '',
+        updates.address.number || '',
+        updates.address.neighborhood || '',
+        updates.address.city || '',
+        updates.address.state || '',
+        updates.address.postalCode || ''
+      );
+    }
+
+    params.push(id);
+    this.db.prepare(`UPDATE hotel_guests SET ${fields.join(', ')} WHERE id = ?`).run(...params);
+
+    const updated = this.getHotelGuestById(id)!;
+    return updated;
+  }
+
+  // ============================================================================
+  // RESERVAS COM PROTEÇÃO DE SOBREPOSIÇÃO DE DATAS [in, out)
+  // ============================================================================
+
+  private mapHotelReservationRow(r: Record<string, unknown>): HotelReservation {
+    return {
+      id: String(r.id),
+      reservationCode: String(r.reservation_code),
+      guestId: String(r.guest_id),
+      guestName: String(r.guest_name),
+      guestPhone: String(r.guest_phone || ''),
+      roomId: r.room_id ? String(r.room_id) : null,
+      roomNumber: String(r.room_number),
+      roomCategory: (r.room_category || 'STANDARD_DOUBLE') as HotelRoomCategory,
+      guestsCount: Number(r.guests_count || 1),
+      checkInDate: String(r.check_in_date),
+      checkOutDate: String(r.check_out_date),
+      dailyRateCents: Number(r.daily_rate_cents),
+      estimatedTotalCents: Number(r.estimated_total_cents),
+      depositCents: Number(r.deposit_cents || 0),
+      depositPaid: Boolean(r.deposit_paid),
+      sourceChannel: (r.source_channel || 'BALCAO') as HotelReservationSource,
+      status: (r.status || 'CONFIRMADA') as HotelReservationStatus,
+      cancellationReason: r.cancellation_reason ? String(r.cancellation_reason) : null,
+      cancelledAt: r.cancelled_at ? String(r.cancelled_at) : null,
+      cancelledByUserId: r.cancelled_by_user_id ? String(r.cancelled_by_user_id) : null,
+      notes: String(r.notes || ''),
+      createdByUserId: String(r.created_by_user_id),
+      createdAt: String(r.created_at),
+      updatedAt: String(r.updated_at)
+    };
+  }
+
+  public listHotelReservations(filters?: {
+    roomNumber?: string;
+    status?: HotelReservationStatus;
+    startDate?: string;
+    endDate?: string;
+  }): HotelReservation[] {
+    let sql = 'SELECT * FROM hotel_reservations WHERE 1=1';
+    const params: any[] = [];
+    if (filters?.roomNumber) {
+      sql += ' AND room_number = ?';
+      params.push(filters.roomNumber);
+    }
+    if (filters?.status) {
+      sql += ' AND status = ?';
+      params.push(filters.status);
+    }
+    if (filters?.startDate) {
+      sql += ' AND check_out_date >= ?';
+      params.push(filters.startDate);
+    }
+    if (filters?.endDate) {
+      sql += ' AND check_in_date <= ?';
+      params.push(filters.endDate);
+    }
+    sql += ' ORDER BY check_in_date ASC';
+
+    const rows = this.db.prepare(sql).all(...params) as Array<Record<string, unknown>>;
+    return rows.map((r) => this.mapHotelReservationRow(r));
+  }
+
+  public getHotelReservationById(id: string): HotelReservation | null {
+    const row = this.db.prepare('SELECT * FROM hotel_reservations WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    return row ? this.mapHotelReservationRow(row) : null;
+  }
+
+  public checkRoomAvailability(
+    roomNumber: string,
+    checkInDate: string,
+    checkOutDate: string,
+    excludeReservationId?: string
+  ): { available: boolean; conflictReason?: string } {
+    const room = this.getHotelRoomByNumber(roomNumber);
+    if (!room) {
+      return { available: false, conflictReason: `Apartamento ${roomNumber} não cadastrado.` };
+    }
+    if (!room.active) {
+      return { available: false, conflictReason: `Apartamento ${roomNumber} está desativado.` };
+    }
+    if (room.maintenanceStatus === 'INTERDITADO') {
+      return { available: false, conflictReason: `Apartamento ${roomNumber} está interditado para manutenção.` };
+    }
+
+    // Regra da Seção 5: Entrada inclusiva e saída exclusiva [inA, outA) vs [inB, outB)
+    const activeReservations = this.listHotelReservations({ roomNumber });
+    const conflicts = activeReservations.filter((r) => {
+      if (excludeReservationId && r.id === excludeReservationId) return false;
+      if (r.status === 'CANCELADA' || r.status === 'NO_SHOW' || r.status === 'CONCLUIDA') return false;
+      return areDateIntervalsOverlapping(checkInDate, checkOutDate, r.checkInDate, r.checkOutDate);
+    });
+
+    if (conflicts.length > 0) {
+      const c = conflicts[0]!;
+      return {
+        available: false,
+        conflictReason: `Conflito com reserva ativa ${c.reservationCode} (${c.checkInDate} a ${c.checkOutDate}).`
+      };
+    }
+
+    return { available: true };
+  }
+
+  public createHotelReservation(input: {
+    id?: string;
+    guestId: string;
+    guestName?: string;
+    guestPhone?: string;
+    roomNumber: string;
+    checkInDate: string; // YYYY-MM-DD
+    checkOutDate: string; // YYYY-MM-DD
+    guestsCount?: number;
+    dailyRateCents?: number;
+    depositCents?: number;
+    depositPaid?: boolean;
+    sourceChannel?: HotelReservationSource;
+    notes?: string;
+    operatorUserId: string;
+  }): HotelReservation {
+    const room = this.getHotelRoomByNumber(input.roomNumber);
+    if (!room) {
+      throw new Error(`Apartamento ${input.roomNumber} não encontrado.`);
+    }
+
+    const availability = this.checkRoomAvailability(input.roomNumber, input.checkInDate, input.checkOutDate);
+    if (!availability.available) {
+      throw new Error(`Apartamento indisponível para o período solicitado: ${availability.conflictReason}`);
+    }
+
+    const guest = this.getHotelGuestById(input.guestId);
+    if (!guest) {
+      throw new Error(`Hóspede '${input.guestId}' não encontrado.`);
+    }
+
+    const id = input.id || `res-${crypto.randomUUID()}`;
+    const reservationCode = `RES-${input.checkInDate.replace(/-/g, '')}-${room.number}-${Date.now().toString().slice(-4)}`;
+    const nights = calculateNightsCount(input.checkInDate, input.checkOutDate);
+    const dailyRate = input.dailyRateCents ?? room.dailyRateCents;
+    const estimatedTotalCents = nights * dailyRate;
+    const now = new Date().toISOString();
+
+    this.db.prepare(`
+      INSERT INTO hotel_reservations (
+        id, reservation_code, guest_id, guest_name, guest_phone, room_id, room_number,
+        room_category, guests_count, check_in_date, check_out_date, daily_rate_cents,
+        estimated_total_cents, deposit_cents, deposit_paid, source_channel, status,
+        notes, created_by_user_id, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'CONFIRMADA', ?, ?, ?, ?)
+    `).run(
+      id,
+      reservationCode,
+      guest.id,
+      input.guestName || guest.fullName,
+      input.guestPhone || guest.phone,
+      room.id,
+      room.number,
+      room.category,
+      input.guestsCount || 1,
+      input.checkInDate,
+      input.checkOutDate,
+      dailyRate,
+      estimatedTotalCents,
+      input.depositCents || 0,
+      input.depositPaid ? 1 : 0,
+      input.sourceChannel || 'BALCAO',
+      input.notes || '',
+      input.operatorUserId,
+      now,
+      now
+    );
+
+    const created = this.getHotelReservationById(id)!;
+
+    this.appendOutboxEvent({
+      idempotencyKey: `hotel-res-create-${id}`,
+      originNode: 'WINDOWS_PDV',
+      entityType: 'HOTEL_RESERVATION',
+      entityId: id,
+      operation: 'UPSERT',
+      entityVersion: 1,
+      payload: created
+    });
+
+    this.recordAuditLog({
+      actorUserId: input.operatorUserId,
+      action: 'HOTEL_RESERVATION_CREATE',
+      entityType: 'HOTEL_RESERVATION',
+      entityId: id,
+      metadata: { reservationCode, roomNumber: room.number, checkInDate: input.checkInDate, checkOutDate: input.checkOutDate }
+    });
+
+    return created;
+  }
+
+  public cancelHotelReservation(
+    id: string,
+    input: {
+      reason: string;
+      cancelledByUserId: string;
+    }
+  ): HotelReservation {
+    const existing = this.getHotelReservationById(id);
+    if (!existing) {
+      throw new Error(`Reserva '${id}' não encontrada.`);
+    }
+    if (existing.status === 'CANCELADA') {
+      return existing;
+    }
+
+    const now = new Date().toISOString();
+    this.db.prepare(`
+      UPDATE hotel_reservations
+      SET status = 'CANCELADA',
+          cancellation_reason = ?,
+          cancelled_at = ?,
+          cancelled_by_user_id = ?,
+          updated_at = ?
+      WHERE id = ?
+    `).run(input.reason, now, input.cancelledByUserId, now, id);
+
+    const updated = this.getHotelReservationById(id)!;
+
+    this.appendOutboxEvent({
+      idempotencyKey: `hotel-res-cancel-${id}`,
+      originNode: 'WINDOWS_PDV',
+      entityType: 'HOTEL_RESERVATION',
+      entityId: id,
+      operation: 'UPSERT',
+      entityVersion: 2,
+      payload: updated
+    });
+
+    this.recordAuditLog({
+      actorUserId: input.cancelledByUserId,
+      action: 'HOTEL_RESERVATION_CANCEL',
+      entityType: 'HOTEL_RESERVATION',
+      entityId: id,
+      metadata: { reason: input.reason }
+    });
+
+    return updated;
+  }
+
+  public rescheduleHotelReservation(
+    id: string,
+    input: {
+      newCheckInDate: string;
+      newCheckOutDate: string;
+      newRoomNumber?: string;
+      operatorUserId: string;
+    }
+  ): HotelReservation {
+    const existing = this.getHotelReservationById(id);
+    if (!existing) {
+      throw new Error(`Reserva '${id}' não encontrada.`);
+    }
+
+    const targetRoomNumber = input.newRoomNumber || existing.roomNumber;
+    const availability = this.checkRoomAvailability(
+      targetRoomNumber,
+      input.newCheckInDate,
+      input.newCheckOutDate,
+      existing.id
+    );
+
+    if (!availability.available) {
+      throw new Error(`Não há disponibilidade para o reagendamento: ${availability.conflictReason}`);
+    }
+
+    const room = this.getHotelRoomByNumber(targetRoomNumber)!;
+    const nights = calculateNightsCount(input.newCheckInDate, input.newCheckOutDate);
+    const estimatedTotalCents = nights * existing.dailyRateCents;
+    const now = new Date().toISOString();
+
+    this.db.prepare(`
+      UPDATE hotel_reservations
+      SET check_in_date = ?,
+          check_out_date = ?,
+          room_id = ?,
+          room_number = ?,
+          room_category = ?,
+          estimated_total_cents = ?,
+          updated_at = ?
+      WHERE id = ?
+    `).run(
+      input.newCheckInDate,
+      input.newCheckOutDate,
+      room.id,
+      room.number,
+      room.category,
+      estimatedTotalCents,
+      now,
+      id
+    );
+
+    const updated = this.getHotelReservationById(id)!;
+
+    this.appendOutboxEvent({
+      idempotencyKey: `hotel-res-reschedule-${id}-${Date.now()}`,
+      originNode: 'WINDOWS_PDV',
+      entityType: 'HOTEL_RESERVATION',
+      entityId: id,
+      operation: 'UPSERT',
+      entityVersion: 3,
+      payload: updated
+    });
+
+    return updated;
+  }
+
+  // ============================================================================
+  // ESTADIAS / HOSPEDAGENS (HOTEL_STAYS — CHECK-IN & CHECK-OUT GUIADO)
+  // ============================================================================
+
+  private mapHotelStayRow(r: Record<string, unknown>): HotelStay {
+    let companions: HotelCompanion[] = [];
+    if (r.companions_json) {
+      try {
+        companions = JSON.parse(String(r.companions_json));
+      } catch {
+        // Fallback
+      }
+    }
+
+    return {
+      id: String(r.id),
+      stayCode: String(r.stay_code),
+      reservationId: r.reservation_id ? String(r.reservation_id) : null,
+      roomId: String(r.room_id),
+      roomNumber: String(r.room_number),
+      guestId: String(r.guest_id),
+      guestName: String(r.guest_name),
+      guestDocument: String(r.guest_document),
+      companions,
+      checkInAt: String(r.check_in_at),
+      checkOutScheduledAt: String(r.check_out_scheduled_at),
+      checkOutActualAt: r.check_out_actual_at ? String(r.check_out_actual_at) : null,
+      dailyRateCents: Number(r.daily_rate_cents),
+      nightsCount: Number(r.nights_count || 1),
+      earlyCheckinCents: Number(r.early_checkin_cents || 0),
+      lateCheckoutCents: Number(r.late_checkout_cents || 0),
+      extraGuestsCents: Number(r.extra_guests_cents || 0),
+      discountCents: Number(r.discount_cents || 0),
+      discountReason: r.discount_reason ? String(r.discount_reason) : null,
+      tabId: String(r.tab_id),
+      status: (r.status || 'ACTIVE') as HotelStayStatus,
+      openedByUserId: String(r.opened_by_user_id),
+      closedByUserId: r.closed_by_user_id ? String(r.closed_by_user_id) : null,
+      notes: String(r.notes || ''),
+      createdAt: String(r.created_at),
+      updatedAt: String(r.updated_at)
+    };
+  }
+
+  public listHotelStays(filters?: {
+    status?: HotelStayStatus;
+    roomNumber?: string;
+  }): HotelStay[] {
+    let sql = 'SELECT * FROM hotel_stays WHERE 1=1';
+    const params: any[] = [];
+    if (filters?.status) {
+      sql += ' AND status = ?';
+      params.push(filters.status);
+    }
+    if (filters?.roomNumber) {
+      sql += ' AND room_number = ?';
+      params.push(filters.roomNumber);
+    }
+    sql += ' ORDER BY created_at DESC';
+
+    const rows = this.db.prepare(sql).all(...params) as Array<Record<string, unknown>>;
+    return rows.map((r) => this.mapHotelStayRow(r));
+  }
+
+  public getHotelStayById(id: string): HotelStay | null {
+    const row = this.db.prepare('SELECT * FROM hotel_stays WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    return row ? this.mapHotelStayRow(row) : null;
+  }
+
+  public getActiveStayByRoomNumber(roomNumber: string): HotelStay | null {
+    const row = this.db.prepare("SELECT * FROM hotel_stays WHERE room_number = ? AND status = 'ACTIVE' LIMIT 1")
+      .get(roomNumber) as Record<string, unknown> | undefined;
+    return row ? this.mapHotelStayRow(row) : null;
+  }
+
+  public checkInHotelStay(input: {
+    reservationId?: string;
+    roomNumber: string;
+    guestId: string;
+    companions?: HotelCompanion[];
+    checkInAt?: string;
+    checkOutScheduledAt: string;
+    dailyRateCents?: number;
+    earlyCheckinCents?: number;
+    notes?: string;
+    operatorUserId: string;
+    operatorName: string;
+  }): { stay: HotelStay; room: HotelRoom; folioTab: Tab; firstFolioEntry: HotelFolioEntry } {
+    const room = this.getHotelRoomByNumber(input.roomNumber);
+    if (!room) {
+      throw new Error(`Apartamento ${input.roomNumber} não cadastrado.`);
+    }
+    if (!room.active) {
+      throw new Error(`Apartamento ${input.roomNumber} está desativado.`);
+    }
+    if (room.occupancyStatus === 'OCUPADO' || room.activeStayId) {
+      throw new Error(`Apartamento ${input.roomNumber} já se encontra ocupado por outra hospedagem.`);
+    }
+    if (room.maintenanceStatus === 'INTERDITADO') {
+      throw new Error(`Apartamento ${input.roomNumber} está interditado para manutenção.`);
+    }
+
+    const guest = this.getHotelGuestById(input.guestId);
+    if (!guest) {
+      throw new Error(`Hóspede '${input.guestId}' não encontrado.`);
+    }
+
+    const now = new Date().toISOString();
+    const checkInTime = input.checkInAt || now;
+    const nights = calculateNightsCount(checkInTime, input.checkOutScheduledAt);
+    const rate = input.dailyRateCents ?? room.dailyRateCents;
+
+    const stayId = crypto.randomUUID();
+    const stayCode = `STAY-${room.number}-${Date.now().toString().slice(-6)}`;
+
+    // Abre ou obtém Comanda Tab de Folio
+    const folioTab = this.openOrGetTab({
+      code: `APTO-${room.number}`,
+      type: 'HOTEL_FOLIO',
+      customerName: guest.fullName,
+      openedByUserId: input.operatorUserId
+    });
+
+    // Insere hotel_stays
+    this.db.prepare(`
+      INSERT INTO hotel_stays (
+        id, stay_code, reservation_id, room_id, room_number, guest_id, guest_name, guest_document,
+        companions_json, check_in_at, check_out_scheduled_at, daily_rate_cents, nights_count,
+        early_checkin_cents, tab_id, status, opened_by_user_id, notes, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ACTIVE', ?, ?, ?, ?)
+    `).run(
+      stayId,
+      stayCode,
+      input.reservationId || null,
+      room.id,
+      room.number,
+      guest.id,
+      guest.fullName,
+      guest.documentNumber,
+      JSON.stringify(input.companions || []),
+      checkInTime,
+      input.checkOutScheduledAt,
+      rate,
+      nights,
+      input.earlyCheckinCents || 0,
+      folioTab.id,
+      input.operatorUserId,
+      input.notes || '',
+      now,
+      now
+    );
+
+    // Atualiza quarto
+    this.db.prepare(`
+      UPDATE hotel_rooms
+      SET occupancy_status = 'OCUPADO',
+          status = 'OCCUPIED',
+          current_guest_name = ?,
+          current_guest_id = ?,
+          active_tab_id = ?,
+          active_stay_id = ?,
+          updated_at = ?
+      WHERE id = ?
+    `).run(guest.fullName, guest.id, folioTab.id, stayId, now, room.id);
+
+    // Se houver reserva associada, atualiza status para CHECK_IN_REALIZADO
+    if (input.reservationId) {
+      this.db.prepare(`
+        UPDATE hotel_reservations
+        SET status = 'CHECK_IN_REALIZADO', updated_at = ?
+        WHERE id = ?
+      `).run(now, input.reservationId);
+    }
+
+    // Incrementa contador de hospedagens do hóspede
+    this.db.prepare(`
+      UPDATE hotel_guests
+      SET total_stays_count = total_stays_count + 1, updated_at = ?
+      WHERE id = ?
+    `).run(now, guest.id);
+
+    // Lança primeira diária no folio
+    const firstFolioEntry = this.addFolioEntry({
+      stayId,
+      entryType: 'ROOM_RATE',
+      description: `Diária (${nights} ${nights > 1 ? 'diárias' : 'diária'} - Apto ${room.number})`,
+      amountCents: rate * nights + (input.earlyCheckinCents || 0),
+      sourceReferenceType: 'ROOM_RATE',
+      sourceReferenceId: stayId,
+      operatorUserId: input.operatorUserId,
+      operatorName: input.operatorName
+    });
+
+    const updatedRoom = this.getHotelRoomById(room.id)!;
+    const stay = this.getHotelStayById(stayId)!;
+
+    this.appendOutboxEvent({
+      idempotencyKey: `hotel-stay-checkin-${stay.id}`,
+      originNode: 'WINDOWS_PDV',
+      entityType: 'HOTEL_STAY',
+      entityId: stay.id,
+      operation: 'UPSERT',
+      entityVersion: 1,
+      payload: stay
+    });
+
+    this.appendOutboxEvent({
+      idempotencyKey: `hotel-room-checkin-${room.id}-${stay.id}`,
       originNode: 'WINDOWS_PDV',
       entityType: 'HOTEL_ROOM',
       entityId: room.id,
       operation: 'UPSERT',
       entityVersion: 1,
-      payload: room
+      payload: updatedRoom
     });
 
-    return { room, folioTab };
+    this.recordAuditLog({
+      actorUserId: input.operatorUserId,
+      action: 'HOTEL_CHECKIN',
+      entityType: 'HOTEL_STAY',
+      entityId: stay.id,
+      metadata: { stayCode, roomNumber: room.number, guestName: guest.fullName, nights }
+    });
+
+    return { stay, room: updatedRoom, folioTab, firstFolioEntry };
+  }
+
+  // Método legado compatível para check-in rápido
+  public checkInHotelRoom(input: { roomNumber: string; guestName: string }): { room: HotelRoom; folioTab: Tab } {
+    let guest = this.listHotelGuests().find((g) => g.fullName.toLowerCase() === input.guestName.toLowerCase());
+    if (!guest) {
+      guest = this.createHotelGuest({
+        fullName: input.guestName,
+        documentNumber: `AUTOGEN-${Date.now().toString().slice(-6)}`,
+        operatorUserId: 'usr-reception-01'
+      });
+    }
+
+    const tomorrow = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+    const res = this.checkInHotelStay({
+      roomNumber: input.roomNumber,
+      guestId: guest.id,
+      checkOutScheduledAt: tomorrow,
+      operatorUserId: 'usr-reception-01',
+      operatorName: 'Recepção Hotel Milla'
+    });
+
+    return { room: res.room, folioTab: res.folioTab };
+  }
+
+  public checkOutHotelStay(
+    stayId: string,
+    input: {
+      operatorUserId: string;
+      operatorName: string;
+      notes?: string;
+      allowOverrideWithAudit?: boolean;
+    }
+  ): { stay: HotelStay; room: HotelRoom; folioTab: Tab; balanceCents: number } {
+    const stay = this.getHotelStayById(stayId);
+    if (!stay) {
+      throw new Error(`Estadia '${stayId}' não encontrada.`);
+    }
+    if (stay.status !== 'ACTIVE') {
+      throw new Error(`Estadia '${stay.stayCode}' já foi encerrada anteriormente.`);
+    }
+
+    const entries = this.listFolioEntriesByStayId(stayId);
+    const totals = calculateStayFolioTotals(entries);
+
+    // Regra da Seção 14: Não permitir encerramento com saldo pendente sem auditoria
+    if (totals.balanceCents !== 0 && !input.allowOverrideWithAudit) {
+      throw new Error(
+        `Check-out bloqueado: Conta do apartamento ${stay.roomNumber} possui saldo pendente de R$ ${(totals.balanceCents / 100).toFixed(2)}. Efetue o pagamento ou realize o ajuste financeiro antes do check-out.`
+      );
+    }
+
+    const now = new Date().toISOString();
+
+    // Encerra estadia
+    this.db.prepare(`
+      UPDATE hotel_stays
+      SET status = 'CHECKED_OUT',
+          check_out_actual_at = ?,
+          closed_by_user_id = ?,
+          notes = CASE WHEN ? != '' THEN notes || ' | ' || ? ELSE notes END,
+          updated_at = ?
+      WHERE id = ?
+    `).run(now, input.operatorUserId, input.notes || '', input.notes || '', now, stayId);
+
+    // Encerra comanda da hospedagem (tab)
+    this.db.prepare(`
+      UPDATE tabs
+      SET status = 'CLOSED', closed_at = ?, closed_by_user_id = ?, updated_at = ?
+      WHERE id = ?
+    `).run(now, input.operatorUserId, now, stay.tabId);
+
+    // Atualiza quarto: LIVRE e SUJO (enviado para governança/limpeza)
+    this.db.prepare(`
+      UPDATE hotel_rooms
+      SET occupancy_status = 'LIVRE',
+          status = 'AVAILABLE',
+          housekeeping_status = 'SUJO',
+          current_guest_name = NULL,
+          current_guest_id = NULL,
+          active_stay_id = NULL,
+          active_tab_id = NULL,
+          updated_at = ?
+      WHERE id = ?
+    `).run(now, stay.roomId);
+
+    // Registra log de governança
+    this.db.prepare(`
+      INSERT INTO hotel_housekeeping_logs (
+        id, room_number, action, previous_status, new_status, attendant_user_id, attendant_name, notes, created_at
+      ) VALUES (?, ?, 'SET_DIRTY', 'LIMPO', 'SUJO', ?, ?, 'Encaminhado para limpeza após check-out', ?)
+    `).run(crypto.randomUUID(), stay.roomNumber, input.operatorUserId, input.operatorName, now);
+
+    // Se havia reserva vinculada, encerra como CONCLUIDA
+    if (stay.reservationId) {
+      this.db.prepare(`
+        UPDATE hotel_reservations
+        SET status = 'CONCLUIDA', updated_at = ?
+        WHERE id = ?
+      `).run(now, stay.reservationId);
+    }
+
+    const updatedStay = this.getHotelStayById(stayId)!;
+    const updatedRoom = this.getHotelRoomById(stay.roomId)!;
+    const updatedTab = this.getTabById(stay.tabId)!;
+
+    this.appendOutboxEvent({
+      idempotencyKey: `hotel-stay-checkout-${stay.id}`,
+      originNode: 'WINDOWS_PDV',
+      entityType: 'HOTEL_STAY',
+      entityId: stay.id,
+      operation: 'UPSERT',
+      entityVersion: 2,
+      payload: updatedStay
+    });
+
+    this.appendOutboxEvent({
+      idempotencyKey: `hotel-room-checkout-${updatedRoom.id}-${stay.id}`,
+      originNode: 'WINDOWS_PDV',
+      entityType: 'HOTEL_ROOM',
+      entityId: updatedRoom.id,
+      operation: 'UPSERT',
+      entityVersion: 2,
+      payload: updatedRoom
+    });
+
+    this.recordAuditLog({
+      actorUserId: input.operatorUserId,
+      action: 'HOTEL_CHECKOUT',
+      entityType: 'HOTEL_STAY',
+      entityId: stay.id,
+      metadata: { stayCode: stay.stayCode, roomNumber: stay.roomNumber, balanceCents: totals.balanceCents }
+    });
+
+    return { stay: updatedStay, room: updatedRoom, folioTab: updatedTab, balanceCents: totals.balanceCents };
+  }
+
+  // ============================================================================
+  // CONTA DO HÓSPEDE (HOTEL FOLIO & INTEGRAÇÃO RESTAURANTE)
+  // ============================================================================
+
+  private mapHotelFolioEntryRow(r: Record<string, unknown>): HotelFolioEntry {
+    return {
+      id: String(r.id),
+      stayId: String(r.stay_id),
+      tabId: String(r.tab_id),
+      roomNumber: String(r.room_number),
+      entryType: r.entry_type as HotelFolioEntryType,
+      description: String(r.description),
+      amountCents: Number(r.amount_cents),
+      sourceReferenceType: r.source_reference_type ? String(r.source_reference_type) : null,
+      sourceReferenceId: r.source_reference_id ? String(r.source_reference_id) : null,
+      sourceDetailsJson: r.source_details_json ? String(r.source_details_json) : null,
+      operatorUserId: String(r.operator_user_id),
+      operatorName: String(r.operator_name),
+      createdAt: String(r.created_at)
+    };
+  }
+
+  public listFolioEntriesByStayId(stayId: string): HotelFolioEntry[] {
+    const rows = this.db.prepare('SELECT * FROM hotel_folio_entries WHERE stay_id = ? ORDER BY created_at ASC')
+      .all(stayId) as Array<Record<string, unknown>>;
+    return rows.map((r) => this.mapHotelFolioEntryRow(r));
+  }
+
+  public addFolioEntry(input: {
+    stayId: string;
+    entryType: HotelFolioEntryType;
+    description: string;
+    amountCents: number;
+    sourceReferenceType?: string;
+    sourceReferenceId?: string;
+    sourceDetailsJson?: string;
+    operatorUserId: string;
+    operatorName: string;
+  }): HotelFolioEntry {
+    const stay = this.getHotelStayById(input.stayId);
+    if (!stay) {
+      throw new Error(`Estadia '${input.stayId}' não encontrada.`);
+    }
+
+    const id = crypto.randomUUID();
+    const now = new Date().toISOString();
+
+    this.db.prepare(`
+      INSERT INTO hotel_folio_entries (
+        id, stay_id, tab_id, room_number, entry_type, description, amount_cents,
+        source_reference_type, source_reference_id, source_details_json,
+        operator_user_id, operator_name, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      stay.id,
+      stay.tabId,
+      stay.roomNumber,
+      input.entryType,
+      input.description,
+      input.amountCents,
+      input.sourceReferenceType || null,
+      input.sourceReferenceId || null,
+      input.sourceDetailsJson || null,
+      input.operatorUserId,
+      input.operatorName,
+      now
+    );
+
+    const entry: HotelFolioEntry = {
+      id,
+      stayId: stay.id,
+      tabId: stay.tabId,
+      roomNumber: stay.roomNumber,
+      entryType: input.entryType,
+      description: input.description,
+      amountCents: input.amountCents,
+      sourceReferenceType: input.sourceReferenceType || null,
+      sourceReferenceId: input.sourceReferenceId || null,
+      sourceDetailsJson: input.sourceDetailsJson || null,
+      operatorUserId: input.operatorUserId,
+      operatorName: input.operatorName,
+      createdAt: now
+    };
+
+    this.appendOutboxEvent({
+      idempotencyKey: `hotel-folio-entry-${id}`,
+      originNode: 'WINDOWS_PDV',
+      entityType: 'HOTEL_FOLIO_ENTRY',
+      entityId: id,
+      operation: 'APPEND_LEDGER',
+      entityVersion: 1,
+      payload: entry
+    });
+
+    return entry;
+  }
+
+  // Seção 10: Integração Restaurante -> Folio do Quarto
+  public transferRestaurantTabToFolio(input: {
+    restaurantTabId: string;
+    roomNumber: string;
+    operatorUserId: string;
+    operatorName: string;
+  }): { folioEntry: HotelFolioEntry; restaurantTab: Tab; payment: Payment } {
+    const tab = this.getTabById(input.restaurantTabId);
+    if (!tab) {
+      throw new Error(`Comanda '${input.restaurantTabId}' não encontrada.`);
+    }
+    if (tab.status === 'CLOSED') {
+      throw new Error(`Comanda '${tab.code}' já se encontra encerrada.`);
+    }
+
+    const stay = this.getActiveStayByRoomNumber(input.roomNumber);
+    if (!stay) {
+      throw new Error(`Apartamento ${input.roomNumber} não possui hospedagem ativa no momento.`);
+    }
+
+    // Regra da Seção 10: Impedir duplicidade de cobrança
+    const existingTransfer = this.db.prepare(`
+      SELECT id FROM hotel_folio_entries
+      WHERE source_reference_type = 'TAB' AND source_reference_id = ?
+    `).get(tab.id) as { id?: string } | undefined;
+
+    if (existingTransfer) {
+      throw new Error(`O consumo da comanda '${tab.code}' já foi transferido para a conta do quarto anteriormente.`);
+    }
+
+    const remainingCents = Math.max(0, tab.totalCents - tab.paidCents);
+
+    if (remainingCents <= 0) {
+      throw new Error(`Comanda '${tab.code}' não possui saldo pendente para transferência.`);
+    }
+
+    const now = new Date().toISOString();
+
+    // 1. Registra pagamento na comanda com o método ROOM_CHARGE
+    // Não baixa estoque novamente (já baixado no pedido) e não inflaciona dinheiro em caixa
+    const { payment } = this.recordPayment({
+      tabId: tab.id,
+      amountCents: remainingCents,
+      method: 'ROOM_CHARGE',
+      operatorUserId: input.operatorUserId,
+      confirmationMode: 'MANUAL_DECLARED',
+      idempotencyKey: `room-charge-tab-${tab.id}-${Date.now()}`
+    });
+
+    // 2. Encerra a comanda do restaurante
+    this.db.prepare(`
+      UPDATE tabs
+      SET status = 'CLOSED', closed_at = ?, closed_by_user_id = ?, updated_at = ?
+      WHERE id = ?
+    `).run(now, input.operatorUserId, now, tab.id);
+
+    // 3. Libera mesa física caso estivesse vinculada
+    if (tab.tableNumber) {
+      this.db.prepare(`
+        UPDATE dining_tables_qr
+        SET physical_status = 'LIVRE', active_tab_id = NULL, guests_count = 0, opened_at = NULL, updated_at = ?
+        WHERE table_number = ? AND active_tab_id = ?
+      `).run(now, tab.tableNumber, tab.id);
+    }
+
+    // 4. Lança o débito correspondente no folio da hospedagem
+    const folioEntry = this.addFolioEntry({
+      stayId: stay.id,
+      entryType: 'RESTAURANT_ORDER',
+      description: `Consumo Restaurante/Bar — Comanda ${tab.code}${tab.tableNumber ? ` (Mesa ${tab.tableNumber})` : ''}`,
+      amountCents: remainingCents,
+      sourceReferenceType: 'TAB',
+      sourceReferenceId: tab.id,
+      sourceDetailsJson: JSON.stringify({
+        tabId: tab.id,
+        tabCode: tab.code,
+        tableNumber: tab.tableNumber,
+        customerName: tab.customerName,
+        subtotalCents: tab.subtotalCents,
+        serviceFeeCents: tab.serviceFeeCents
+      }),
+      operatorUserId: input.operatorUserId,
+      operatorName: input.operatorName
+    });
+
+    const updatedTab = this.getTabById(tab.id)!;
+
+    this.recordAuditLog({
+      actorUserId: input.operatorUserId,
+      action: 'HOTEL_TRANSFER_TAB_TO_FOLIO',
+      entityType: 'TAB',
+      entityId: tab.id,
+      metadata: { roomNumber: input.roomNumber, stayId: stay.id, amountCents: remainingCents }
+    });
+
+    return { folioEntry, restaurantTab: updatedTab, payment };
+  }
+
+  // ============================================================================
+  // FRIGOBAR (ITENS, CONSUMOS E REPOSIÇÃO)
+  // ============================================================================
+
+  public listMinibarItemsByRoom(roomNumber: string): HotelMinibarItem[] {
+    const rows = this.db.prepare('SELECT * FROM hotel_minibar_items WHERE room_number = ? ORDER BY product_name ASC')
+      .all(roomNumber) as Array<Record<string, unknown>>;
+    return rows.map((r) => ({
+      id: String(r.id),
+      roomNumber: String(r.room_number),
+      productId: String(r.product_id),
+      productName: String(r.product_name),
+      initialQuantity: Number(r.initial_quantity),
+      currentQuantity: Number(r.current_quantity),
+      unitPriceCents: Number(r.unit_price_cents),
+      updatedAt: String(r.updated_at)
+    }));
+  }
+
+  public configureMinibarItem(input: {
+    roomNumber: string;
+    productId: string;
+    initialQuantity: number;
+    unitPriceCents?: number;
+  }): HotelMinibarItem {
+    const prod = this.db.prepare('SELECT * FROM catalog_products WHERE id = ?').get(input.productId) as Record<string, unknown> | undefined;
+    if (!prod) {
+      throw new Error(`Produto '${input.productId}' não encontrado no catálogo.`);
+    }
+    const productName = String(prod.name);
+    const price = input.unitPriceCents ?? Number(prod.price_cents);
+    const now = new Date().toISOString();
+    const id = `mb-${input.roomNumber}-${input.productId}`;
+
+    this.db.prepare(`
+      INSERT INTO hotel_minibar_items (id, room_number, product_id, product_name, initial_quantity, current_quantity, unit_price_cents, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(room_number, product_id) DO UPDATE SET
+        initial_quantity = excluded.initial_quantity,
+        current_quantity = excluded.initial_quantity,
+        unit_price_cents = excluded.unit_price_cents,
+        updated_at = excluded.updated_at
+    `).run(id, input.roomNumber, input.productId, productName, input.initialQuantity, input.initialQuantity, price, now);
+
+    return this.listMinibarItemsByRoom(input.roomNumber).find((i) => i.productId === input.productId)!;
+  }
+
+  public recordMinibarConsumption(input: {
+    stayId: string;
+    roomNumber: string;
+    productId: string;
+    quantity: number;
+    operatorUserId: string;
+    operatorName: string;
+  }): { consumption: HotelMinibarConsumption; folioEntry: HotelFolioEntry } {
+    const stay = this.getHotelStayById(input.stayId);
+    if (!stay) {
+      throw new Error(`Estadia '${input.stayId}' não encontrada.`);
+    }
+    const item = this.listMinibarItemsByRoom(input.roomNumber).find((i) => i.productId === input.productId);
+    if (!item) {
+      throw new Error(`Item de frigobar '${input.productId}' não configurado no quarto ${input.roomNumber}.`);
+    }
+
+    const now = new Date().toISOString();
+    const consumptionId = crypto.randomUUID();
+    const totalCents = item.unitPriceCents * input.quantity;
+
+    // Lança consumo no folio
+    const folioEntry = this.addFolioEntry({
+      stayId: stay.id,
+      entryType: 'MINIBAR',
+      description: `Frigobar: ${input.quantity}x ${item.productName}`,
+      amountCents: totalCents,
+      sourceReferenceType: 'MINIBAR',
+      sourceReferenceId: consumptionId,
+      operatorUserId: input.operatorUserId,
+      operatorName: input.operatorName
+    });
+
+    // Registra log de consumo de frigobar
+    this.db.prepare(`
+      INSERT INTO hotel_minibar_consumptions (
+        id, stay_id, room_number, product_id, product_name, quantity, unit_price_cents, total_cents,
+        movement_type, folio_entry_id, recorded_by_user_id, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'CONSUMPTION', ?, ?, ?)
+    `).run(
+      consumptionId,
+      stay.id,
+      input.roomNumber,
+      item.productId,
+      item.productName,
+      input.quantity,
+      item.unitPriceCents,
+      totalCents,
+      folioEntry.id,
+      input.operatorUserId,
+      now
+    );
+
+    // Atualiza quantidade restante no frigobar do apartamento
+    const newQty = Math.max(0, item.currentQuantity - input.quantity);
+    this.db.prepare(`
+      UPDATE hotel_minibar_items
+      SET current_quantity = ?, updated_at = ?
+      WHERE room_number = ? AND product_id = ?
+    `).run(newQty, now, input.roomNumber, item.productId);
+
+    const consumption: HotelMinibarConsumption = {
+      id: consumptionId,
+      stayId: stay.id,
+      roomNumber: input.roomNumber,
+      productId: item.productId,
+      productName: item.productName,
+      quantity: input.quantity,
+      unitPriceCents: item.unitPriceCents,
+      totalCents,
+      movementType: 'CONSUMPTION',
+      folioEntryId: folioEntry.id,
+      recordedByUserId: input.operatorUserId,
+      createdAt: now
+    };
+
+    return { consumption, folioEntry };
+  }
+
+  public restockMinibarItem(input: {
+    roomNumber: string;
+    productId: string;
+    addedQuantity: number;
+    operatorUserId: string;
+  }): HotelMinibarItem {
+    const item = this.listMinibarItemsByRoom(input.roomNumber).find((i) => i.productId === input.productId);
+    if (!item) {
+      throw new Error(`Item de frigobar '${input.productId}' não configurado no quarto ${input.roomNumber}.`);
+    }
+    const now = new Date().toISOString();
+    const newQty = item.currentQuantity + input.addedQuantity;
+    this.db.prepare(`
+      UPDATE hotel_minibar_items
+      SET current_quantity = ?, updated_at = ?
+      WHERE room_number = ? AND product_id = ?
+    `).run(newQty, now, input.roomNumber, input.productId);
+
+    return this.listMinibarItemsByRoom(input.roomNumber).find((i) => i.productId === input.productId)!;
+  }
+
+  // ============================================================================
+  // SERVIÇOS ADICIONAIS (LAVANDERIA, CAFÉ, ESTACIONAMENTO, ETC.)
+  // ============================================================================
+
+  public listHotelServices(activeOnly: boolean = false): HotelService[] {
+    const query = activeOnly
+      ? 'SELECT * FROM hotel_services WHERE active = 1 ORDER BY name ASC'
+      : 'SELECT * FROM hotel_services ORDER BY name ASC';
+    const rows = this.db.prepare(query).all() as Array<Record<string, unknown>>;
+    return rows.map((r) => ({
+      id: String(r.id),
+      name: String(r.name),
+      category: r.category as HotelService['category'],
+      defaultPriceCents: Number(r.default_price_cents),
+      active: Boolean(r.active),
+      createdAt: String(r.created_at)
+    }));
+  }
+
+  public createHotelService(input: {
+    id?: string;
+    name: string;
+    category?: HotelServiceCategory;
+    defaultPriceCents: number;
+  }): HotelService {
+    const id = input.id || `srv-${crypto.randomUUID()}`;
+    const now = new Date().toISOString();
+    this.db.prepare(`
+      INSERT INTO hotel_services (id, name, category, default_price_cents, active, created_at)
+      VALUES (?, ?, ?, ?, 1, ?)
+    `).run(id, input.name, input.category || 'GERAL', input.defaultPriceCents, now);
+
+    return {
+      id,
+      name: input.name,
+      category: input.category || 'GERAL',
+      defaultPriceCents: input.defaultPriceCents,
+      active: true,
+      createdAt: now
+    };
+  }
+
+  public orderHotelService(input: {
+    stayId: string;
+    serviceId: string;
+    quantity?: number;
+    unitPriceCents?: number;
+    operatorUserId: string;
+    operatorName: string;
+  }): { order: HotelServiceOrder; folioEntry: HotelFolioEntry } {
+    const stay = this.getHotelStayById(input.stayId);
+    if (!stay) {
+      throw new Error(`Estadia '${input.stayId}' não encontrada.`);
+    }
+    const services = this.listHotelServices();
+    const service = services.find((s) => s.id === input.serviceId);
+    if (!service) {
+      throw new Error(`Serviço '${input.serviceId}' não encontrado.`);
+    }
+
+    const qty = input.quantity ?? 1;
+    const unitPrice = input.unitPriceCents ?? service.defaultPriceCents;
+    const totalCents = qty * unitPrice;
+    const now = new Date().toISOString();
+    const orderId = crypto.randomUUID();
+
+    const folioEntry = this.addFolioEntry({
+      stayId: stay.id,
+      entryType: 'SERVICE',
+      description: `Serviço: ${qty}x ${service.name}`,
+      amountCents: totalCents,
+      sourceReferenceType: 'SERVICE',
+      sourceReferenceId: orderId,
+      operatorUserId: input.operatorUserId,
+      operatorName: input.operatorName
+    });
+
+    this.db.prepare(`
+      INSERT INTO hotel_service_orders (
+        id, stay_id, service_id, service_name, quantity, unit_price_cents, total_cents,
+        folio_entry_id, status, operator_user_id, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'CONFIRMED', ?, ?)
+    `).run(
+      orderId,
+      stay.id,
+      service.id,
+      service.name,
+      qty,
+      unitPrice,
+      totalCents,
+      folioEntry.id,
+      input.operatorUserId,
+      now
+    );
+
+    const order: HotelServiceOrder = {
+      id: orderId,
+      stayId: stay.id,
+      serviceId: service.id,
+      serviceName: service.name,
+      quantity: qty,
+      unitPriceCents: unitPrice,
+      totalCents,
+      folioEntryId: folioEntry.id,
+      status: 'CONFIRMED',
+      operatorUserId: input.operatorUserId,
+      createdAt: now
+    };
+
+    return { order, folioEntry };
+  }
+
+  // ============================================================================
+  // GOVERNANÇA, LIMPEZA E MANUTENÇÃO
+  // ============================================================================
+
+  public listHousekeepingLogs(roomNumber?: string): HotelHousekeepingLog[] {
+    const query = roomNumber
+      ? 'SELECT * FROM hotel_housekeeping_logs WHERE room_number = ? ORDER BY created_at DESC'
+      : 'SELECT * FROM hotel_housekeeping_logs ORDER BY created_at DESC LIMIT 100';
+    const rows = roomNumber
+      ? (this.db.prepare(query).all(roomNumber) as Array<Record<string, unknown>>)
+      : (this.db.prepare(query).all() as Array<Record<string, unknown>>);
+
+    return rows.map((r) => ({
+      id: String(r.id),
+      roomNumber: String(r.room_number),
+      action: r.action as HotelHousekeepingAction,
+      previousStatus: String(r.previous_status),
+      newStatus: String(r.new_status),
+      attendantUserId: String(r.attendant_user_id),
+      attendantName: String(r.attendant_name),
+      notes: String(r.notes || ''),
+      createdAt: String(r.created_at)
+    }));
+  }
+
+  public updateHousekeepingStatus(input: {
+    roomNumber: string;
+    action: HotelHousekeepingAction;
+    attendantUserId: string;
+    attendantName: string;
+    notes?: string;
+  }): { room: HotelRoom; log: HotelHousekeepingLog } {
+    const room = this.getHotelRoomByNumber(input.roomNumber);
+    if (!room) {
+      throw new Error(`Apartamento ${input.roomNumber} não cadastrado.`);
+    }
+
+    // Regra da Seção 15: Impedir liberação de quarto interditado ou em manutenção
+    if ((room.maintenanceStatus === 'INTERDITADO' || room.maintenanceStatus === 'EM_MANUTENCAO') &&
+        (input.action === 'APPROVE_INSPECTION' || input.action === 'FINISH_CLEANING')) {
+      throw new Error(
+        `Liberação bloqueada: Apartamento ${room.number} está sob manutenção (${room.maintenanceStatus}). Resolva a manutenção antes de liberar.`
+      );
+    }
+
+    let newHousekeeping: RoomHousekeepingStatus = room.housekeepingStatus;
+    switch (input.action) {
+      case 'SET_DIRTY':
+        newHousekeeping = 'SUJO';
+        break;
+      case 'START_CLEANING':
+        newHousekeeping = 'EM_LIMPEZA';
+        break;
+      case 'FINISH_CLEANING':
+        newHousekeeping = 'INSPECAO_PENDENTE';
+        break;
+      case 'REQUEST_INSPECTION':
+        newHousekeeping = 'INSPECAO_PENDENTE';
+        break;
+      case 'APPROVE_INSPECTION':
+        newHousekeeping = 'LIMPO';
+        break;
+      case 'REJECT_INSPECTION':
+        newHousekeeping = 'SUJO';
+        break;
+    }
+
+    const now = new Date().toISOString();
+    const logId = crypto.randomUUID();
+
+    this.db.prepare(`
+      UPDATE hotel_rooms
+      SET housekeeping_status = ?, updated_at = ?
+      WHERE id = ?
+    `).run(newHousekeeping, now, room.id);
+
+    this.db.prepare(`
+      INSERT INTO hotel_housekeeping_logs (
+        id, room_number, action, previous_status, new_status, attendant_user_id, attendant_name, notes, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      logId,
+      room.number,
+      input.action,
+      room.housekeepingStatus,
+      newHousekeeping,
+      input.attendantUserId,
+      input.attendantName,
+      input.notes || '',
+      now
+    );
+
+    const updatedRoom = this.getHotelRoomById(room.id)!;
+    const log: HotelHousekeepingLog = {
+      id: logId,
+      roomNumber: room.number,
+      action: input.action,
+      previousStatus: room.housekeepingStatus,
+      newStatus: newHousekeeping,
+      attendantUserId: input.attendantUserId,
+      attendantName: input.attendantName,
+      notes: input.notes || '',
+      createdAt: now
+    };
+
+    return { room: updatedRoom, log };
+  }
+
+  public listMaintenanceRecords(filters?: {
+    roomNumber?: string;
+    status?: HotelMaintenanceStatus;
+  }): HotelMaintenanceRecord[] {
+    let sql = 'SELECT * FROM hotel_maintenance_records WHERE 1=1';
+    const params: any[] = [];
+    if (filters?.roomNumber) {
+      sql += ' AND room_number = ?';
+      params.push(filters.roomNumber);
+    }
+    if (filters?.status) {
+      sql += ' AND maintenance_status = ?';
+      params.push(filters.status);
+    }
+    sql += ' ORDER BY created_at DESC';
+
+    const rows = this.db.prepare(sql).all(...params) as Array<Record<string, unknown>>;
+    return rows.map((r) => ({
+      id: String(r.id),
+      roomNumber: String(r.room_number),
+      issueDescription: String(r.issue_description),
+      priority: r.priority as HotelMaintenancePriority,
+      maintenanceStatus: r.maintenance_status as HotelMaintenanceStatus,
+      reportedByUserId: String(r.reported_by_user_id),
+      reportedByName: String(r.reported_by_name),
+      assignedTo: String(r.assigned_to || ''),
+      resolutionNotes: String(r.resolution_notes || ''),
+      resolvedByUserId: r.resolved_by_user_id ? String(r.resolved_by_user_id) : null,
+      resolvedAt: r.resolved_at ? String(r.resolved_at) : null,
+      createdAt: String(r.created_at),
+      updatedAt: String(r.updated_at)
+    }));
+  }
+
+  public createMaintenanceRecord(input: {
+    roomNumber: string;
+    issueDescription: string;
+    priority?: HotelMaintenancePriority;
+    blockRoom?: boolean;
+    reportedByUserId: string;
+    reportedByName: string;
+    assignedTo?: string;
+  }): { record: HotelMaintenanceRecord; room: HotelRoom } {
+    const room = this.getHotelRoomByNumber(input.roomNumber);
+    if (!room) {
+      throw new Error(`Apartamento ${input.roomNumber} não cadastrado.`);
+    }
+
+    const now = new Date().toISOString();
+    const id = crypto.randomUUID();
+    const priority = input.priority || 'NORMAL';
+    const shouldBlock = input.blockRoom || priority === 'CRITICAL';
+    const maintenanceStatus: HotelMaintenanceStatus = shouldBlock ? 'INTERDITADO' : 'EM_MANUTENCAO';
+
+    this.db.prepare(`
+      INSERT INTO hotel_maintenance_records (
+        id, room_number, issue_description, priority, maintenance_status,
+        reported_by_user_id, reported_by_name, assigned_to, resolution_notes,
+        created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', ?, ?)
+    `).run(
+      id,
+      room.number,
+      input.issueDescription,
+      priority,
+      maintenanceStatus,
+      input.reportedByUserId,
+      input.reportedByName,
+      input.assignedTo || '',
+      now,
+      now
+    );
+
+    if (shouldBlock) {
+      this.db.prepare(`
+        UPDATE hotel_rooms
+        SET maintenance_status = ?,
+            occupancy_status = CASE WHEN occupancy_status = 'LIVRE' THEN 'BLOQUEADO' ELSE occupancy_status END,
+            updated_at = ?
+        WHERE id = ?
+      `).run(maintenanceStatus, now, room.id);
+    } else {
+      this.db.prepare(`
+        UPDATE hotel_rooms
+        SET maintenance_status = ?, updated_at = ?
+        WHERE id = ?
+      `).run(maintenanceStatus, now, room.id);
+    }
+
+    const updatedRoom = this.getHotelRoomById(room.id)!;
+    const record: HotelMaintenanceRecord = {
+      id,
+      roomNumber: room.number,
+      issueDescription: input.issueDescription,
+      priority,
+      maintenanceStatus,
+      reportedByUserId: input.reportedByUserId,
+      reportedByName: input.reportedByName,
+      assignedTo: input.assignedTo || '',
+      resolutionNotes: '',
+      resolvedByUserId: null,
+      resolvedAt: null,
+      createdAt: now,
+      updatedAt: now
+    };
+
+    return { record, room: updatedRoom };
+  }
+
+  public resolveMaintenanceRecord(
+    recordId: string,
+    input: {
+      resolutionNotes: string;
+      resolvedByUserId: string;
+    }
+  ): { record: HotelMaintenanceRecord; room: HotelRoom } {
+    const row = this.db.prepare('SELECT * FROM hotel_maintenance_records WHERE id = ?').get(recordId) as Record<string, unknown> | undefined;
+    if (!row) {
+      throw new Error(`Registro de manutenção '${recordId}' não encontrado.`);
+    }
+
+    const now = new Date().toISOString();
+    this.db.prepare(`
+      UPDATE hotel_maintenance_records
+      SET maintenance_status = 'RESOLVED',
+          resolution_notes = ?,
+          resolved_by_user_id = ?,
+          resolved_at = ?,
+          updated_at = ?
+      WHERE id = ?
+    `).run(input.resolutionNotes, input.resolvedByUserId, now, now, recordId);
+
+    const roomNumber = String(row.room_number);
+    const remainingActive = this.db.prepare(`
+      SELECT COUNT(*) as cnt FROM hotel_maintenance_records
+      WHERE room_number = ? AND maintenance_status IN ('EM_MANUTENCAO', 'INTERDITADO')
+    `).get(roomNumber) as { cnt: number };
+
+    if (remainingActive.cnt === 0) {
+      this.db.prepare(`
+        UPDATE hotel_rooms
+        SET maintenance_status = 'DISPONIVEL',
+            occupancy_status = CASE WHEN occupancy_status = 'BLOQUEADO' THEN 'LIVRE' ELSE occupancy_status END,
+            updated_at = ?
+        WHERE number = ?
+      `).run(now, roomNumber);
+    }
+
+    const updatedRoom = this.getHotelRoomByNumber(roomNumber)!;
+    const updatedRecord = this.listMaintenanceRecords().find((r) => r.id === recordId)!;
+
+    return { record: updatedRecord, room: updatedRoom };
+  }
+
+  // ============================================================================
+  // DASHBOARD HOTELEIRO & INDICADORES (ADR, RevPAR, OCUPAÇÃO)
+  // ============================================================================
+
+  public getHotelDashboardMetrics(): HotelDashboardMetrics {
+    const rooms = this.listHotelRooms();
+    const activeRooms = rooms.filter((r) => r.active);
+    const totalRooms = activeRooms.length;
+    const occupiedRooms = activeRooms.filter((r) => r.occupancyStatus === 'OCUPADO').length;
+    const availableRooms = activeRooms.filter((r) => r.occupancyStatus === 'LIVRE' && r.maintenanceStatus === 'DISPONIVEL').length;
+    const dirtyCleaningRooms = activeRooms.filter((r) => r.housekeepingStatus === 'SUJO' || r.housekeepingStatus === 'EM_LIMPEZA' || r.housekeepingStatus === 'INSPECAO_PENDENTE').length;
+    const maintenanceRooms = activeRooms.filter((r) => r.maintenanceStatus === 'EM_MANUTENCAO' || r.maintenanceStatus === 'INTERDITADO').length;
+    const blockedRooms = activeRooms.filter((r) => r.occupancyStatus === 'BLOQUEADO').length;
+
+    const occupancyRatePercent = totalRooms > 0 ? Math.round((occupiedRooms / totalRooms) * 1000) / 10 : 0;
+
+    // ADR (Diária Média): soma das diárias dos quartos ocupados / total de quartos ocupados
+    const occupiedRoomRatesSum = activeRooms
+      .filter((r) => r.occupancyStatus === 'OCUPADO')
+      .reduce((sum, r) => sum + r.dailyRateCents, 0);
+    const adrCents = occupiedRooms > 0 ? Math.round(occupiedRoomRatesSum / occupiedRooms) : 0;
+
+    // RevPAR: Receita Total de Diárias / Total de Quartos Ativos
+    const revparCents = totalRooms > 0 ? Math.round(occupiedRoomRatesSum / totalRooms) : 0;
+
+    const todayStr = new Date().toISOString().slice(0, 10);
+
+    // Check-ins previstos para hoje
+    const expectedCheckInsToday = (
+      this.db.prepare(`
+        SELECT COUNT(*) as cnt FROM hotel_reservations
+        WHERE check_in_date = ? AND status IN ('CONFIRMADA', 'PENDENTE')
+      `).get(todayStr) as { cnt: number }
+    ).cnt;
+
+    // Check-outs previstos para hoje
+    const expectedCheckOutsToday = (
+      this.db.prepare(`
+        SELECT COUNT(*) as cnt FROM hotel_stays
+        WHERE substr(check_out_scheduled_at, 1, 10) = ? AND status = 'ACTIVE'
+      `).get(todayStr) as { cnt: number }
+    ).cnt;
+
+    // Lançamentos no folio: Cobranças vs Pagamentos
+    const folioEntries = this.db.prepare('SELECT amount_cents FROM hotel_folio_entries').all() as Array<{ amount_cents: number }>;
+    let totalFolioRevenueCents = 0;
+    let totalPaymentsReceivedCents = 0;
+
+    for (const entry of folioEntries) {
+      if (entry.amount_cents > 0) {
+        totalFolioRevenueCents += entry.amount_cents;
+      } else {
+        totalPaymentsReceivedCents += Math.abs(entry.amount_cents);
+      }
+    }
+
+    const totalBalancePendingCents = Math.max(0, totalFolioRevenueCents - totalPaymentsReceivedCents);
+
+    return {
+      totalRooms,
+      occupiedRooms,
+      availableRooms,
+      dirtyCleaningRooms,
+      maintenanceRooms,
+      blockedRooms,
+      occupancyRatePercent,
+      adrCents,
+      revparCents,
+      expectedCheckInsToday,
+      expectedCheckOutsToday,
+      totalFolioRevenueCents,
+      totalPaymentsReceivedCents,
+      totalBalancePendingCents
+    };
   }
 
   private appendOutboxEvent(params: {

@@ -17,6 +17,17 @@ import {
   BillSplitModeSchema,
   CashRegisterMovementTypeSchema,
   DiscountTypeSchema,
+  HotelFolioEntryTypeSchema,
+  HotelGuestAddressSchema,
+  HotelGuestDocumentTypeSchema,
+  HotelHousekeepingActionSchema,
+  HotelMaintenancePrioritySchema,
+  HotelMaintenanceStatusSchema,
+  HotelReservationSourceSchema,
+  HotelReservationStatusSchema,
+  HotelRoomCategorySchema,
+  HotelServiceCategorySchema,
+  HotelStayStatusSchema,
   ModifierGroupSchema,
   OrderPrioritySchema,
   OrderStatusSchema,
@@ -27,6 +38,9 @@ import {
   Permission,
   PrepStationSchema,
   PrintJobStatusSchema,
+  RoomHousekeepingStatusSchema,
+  RoomMaintenanceStatusSchema,
+  RoomOccupancyStatusSchema,
   SalesChannel,
   SalesChannelSchema,
   StockMovementTypeSchema,
@@ -34,6 +48,7 @@ import {
   TabTypeSchema,
   TablePhysicalStatusSchema,
   UserRole,
+  calculateStayFolioTotals,
   hasPermission
 } from '@deck26/contracts';
 import { z } from 'zod';
@@ -249,6 +264,11 @@ export async function buildLocalServer(options?: {
     const printJobs = store.listPrintJobs();
     const stock = store.listStockBalancesAndMovements();
     const hotelRooms = store.listHotelRooms();
+    const hotelGuests = store.listHotelGuests();
+    const hotelReservations = store.listHotelReservations();
+    const hotelStays = store.listHotelStays();
+    const hotelServices = store.listHotelServices();
+    const hotelMetrics = store.getHotelDashboardMetrics();
     const syncEvents = store.listAllSyncEvents(50);
     const notifications = store.listNotifications({ limit: 50 });
     const kdsSlaConfig = store.getKdsSlaConfig();
@@ -267,6 +287,11 @@ export async function buildLocalServer(options?: {
       printJobs,
       stock,
       hotelRooms,
+      hotelGuests,
+      hotelReservations,
+      hotelStays,
+      hotelServices,
+      hotelMetrics,
       syncEvents,
       notifications,
       kdsSlaConfig,
@@ -1406,24 +1431,604 @@ export async function buildLocalServer(options?: {
     }
   });
 
-  // 11. Check-in de Hóspede no Hotel Auto Posto Milla
-  const HotelCheckInSchema = z.object({
+  // ============================================================================
+  // 11. GESTÃO HOTELEIRA COMPLETA — HOTEL AUTO POSTO MILLA (PMS)
+  // ============================================================================
+
+  // 11.1 Apartamentos / Quartos
+  app.get('/api/hotel/rooms', async (req, reply) => {
+    const q = req.query as { activeOnly?: string; occupancyStatus?: string; housekeepingStatus?: string };
+    const rooms = store.listHotelRooms({
+      activeOnly: q.activeOnly === 'true',
+      occupancyStatus: q.occupancyStatus as any,
+      housekeepingStatus: q.housekeepingStatus as any
+    });
+    return reply.send({ rooms });
+  });
+
+  app.get<{ Params: { id: string } }>('/api/hotel/rooms/:id', async (req, reply) => {
+    const room = store.getHotelRoomById(req.params.id);
+    if (!room) return reply.status(404).send({ error: 'Quarto não encontrado' });
+    return reply.send({ room });
+  });
+
+  const CreateHotelRoomSchema = z.object({
+    id: z.string().optional(),
+    number: z.string().min(1),
+    floorSector: z.string().optional(),
+    category: HotelRoomCategorySchema.optional(),
+    maxGuests: z.number().int().min(1).optional(),
+    bedCount: z.number().int().min(1).optional(),
+    bedConfiguration: z.string().optional(),
+    description: z.string().optional(),
+    amenities: z.array(z.string()).optional(),
+    dailyRateCents: z.number().int().positive(),
+    internalNotes: z.string().optional()
+  });
+
+  app.post('/api/hotel/rooms', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'hotel:manage_rooms');
+    if (!session) return;
+    const parsed = CreateHotelRoomSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: 'Dados inválidos para cadastro de quarto', issues: parsed.error.issues });
+    }
+    try {
+      const room = store.createHotelRoom({ ...parsed.data, operatorUserId: session.userId });
+      return reply.status(201).send({ room });
+    } catch (err) {
+      return reply.status(400).send({ error: err instanceof Error ? err.message : 'Erro ao cadastrar quarto' });
+    }
+  });
+
+  app.put<{ Params: { id: string } }>('/api/hotel/rooms/:id', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'hotel:manage_rooms');
+    if (!session) return;
+    try {
+      const room = store.updateHotelRoom(req.params.id, req.body as any, session.userId);
+      return reply.send({ room });
+    } catch (err) {
+      return reply.status(400).send({ error: err instanceof Error ? err.message : 'Erro ao atualizar quarto' });
+    }
+  });
+
+  app.delete<{ Params: { id: string } }>('/api/hotel/rooms/:id', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'hotel:manage_rooms');
+    if (!session) return;
+    try {
+      const result = store.deactivateHotelRoom(req.params.id, session.userId);
+      return reply.send(result);
+    } catch (err) {
+      return reply.status(400).send({ error: err instanceof Error ? err.message : 'Erro ao desativar quarto' });
+    }
+  });
+
+  // 11.2 Cadastro de Hóspedes (LGPD e Auditoria)
+  app.get('/api/hotel/guests', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'hotel:view_pii');
+    if (!session) return;
+    const q = req.query as { search?: string };
+    const guests = store.listHotelGuests(q.search);
+    return reply.send({ guests });
+  });
+
+  app.get<{ Params: { id: string } }>('/api/hotel/guests/:id', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'hotel:view_pii');
+    if (!session) return;
+    const guest = store.getHotelGuestById(req.params.id);
+    if (!guest) return reply.status(404).send({ error: 'Hóspede não encontrado' });
+    return reply.send({ guest });
+  });
+
+  const CreateHotelGuestSchema = z.object({
+    id: z.string().optional(),
+    fullName: z.string().min(2),
+    documentType: HotelGuestDocumentTypeSchema.optional(),
+    documentNumber: z.string().min(3),
+    phone: z.string().optional(),
+    email: z.string().optional(),
+    nationality: z.string().optional(),
+    birthDate: z.string().nullable().optional(),
+    address: HotelGuestAddressSchema.optional(),
+    notes: z.string().optional()
+  });
+
+  app.post('/api/hotel/guests', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'hotel:manage_guests');
+    if (!session) return;
+    const parsed = CreateHotelGuestSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: 'Dados inválidos de hóspede', issues: parsed.error.issues });
+    }
+    try {
+      const guest = store.createHotelGuest({ ...parsed.data, operatorUserId: session.userId });
+      return reply.status(201).send({ guest });
+    } catch (err) {
+      return reply.status(400).send({ error: err instanceof Error ? err.message : 'Erro ao cadastrar hóspede' });
+    }
+  });
+
+  app.put<{ Params: { id: string } }>('/api/hotel/guests/:id', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'hotel:manage_guests');
+    if (!session) return;
+    try {
+      const guest = store.updateHotelGuest(req.params.id, req.body as any, session.userId);
+      return reply.send({ guest });
+    } catch (err) {
+      return reply.status(400).send({ error: err instanceof Error ? err.message : 'Erro ao atualizar hóspede' });
+    }
+  });
+
+  // 11.3 Reservas e Disponibilidade
+  app.get('/api/hotel/reservations', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'hotel:manage_reservations');
+    if (!session) return;
+    const q = req.query as { roomNumber?: string; status?: string; startDate?: string; endDate?: string };
+    const reservations = store.listHotelReservations({
+      roomNumber: q.roomNumber,
+      status: q.status as any,
+      startDate: q.startDate,
+      endDate: q.endDate
+    });
+    return reply.send({ reservations });
+  });
+
+  app.get('/api/hotel/availability', async (req, reply) => {
+    const q = req.query as { roomNumber: string; checkInDate: string; checkOutDate: string; excludeReservationId?: string };
+    if (!q.roomNumber || !q.checkInDate || !q.checkOutDate) {
+      return reply.status(400).send({ error: 'roomNumber, checkInDate e checkOutDate são obrigatórios' });
+    }
+    const availability = store.checkRoomAvailability(q.roomNumber, q.checkInDate, q.checkOutDate, q.excludeReservationId);
+    return reply.send(availability);
+  });
+
+  const CreateHotelReservationSchema = z.object({
+    id: z.string().optional(),
+    guestId: z.string().min(1),
+    guestName: z.string().optional(),
+    guestPhone: z.string().optional(),
     roomNumber: z.string().min(1),
-    guestName: z.string().min(2)
+    checkInDate: z.string().min(10),
+    checkOutDate: z.string().min(10),
+    guestsCount: z.number().int().min(1).optional(),
+    dailyRateCents: z.number().int().positive().optional(),
+    depositCents: z.number().int().nonnegative().optional(),
+    depositPaid: z.boolean().optional(),
+    sourceChannel: HotelReservationSourceSchema.optional(),
+    notes: z.string().optional()
+  });
+
+  app.post('/api/hotel/reservations', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'hotel:manage_reservations');
+    if (!session) return;
+    const parsed = CreateHotelReservationSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: 'Dados inválidos de reserva', issues: parsed.error.issues });
+    }
+    try {
+      const reservation = store.createHotelReservation({ ...parsed.data, operatorUserId: session.userId });
+      return reply.status(201).send({ reservation });
+    } catch (err) {
+      return reply.status(400).send({ error: err instanceof Error ? err.message : 'Erro ao criar reserva' });
+    }
+  });
+
+  app.post<{ Params: { id: string } }>('/api/hotel/reservations/:id/cancel', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'hotel:manage_reservations');
+    if (!session) return;
+    const body = req.body as { reason?: string };
+    try {
+      const reservation = store.cancelHotelReservation(req.params.id, {
+        reason: body?.reason || 'Cancelamento solicitado pelo hóspede',
+        cancelledByUserId: session.userId
+      });
+      return reply.send({ reservation });
+    } catch (err) {
+      return reply.status(400).send({ error: err instanceof Error ? err.message : 'Erro ao cancelar reserva' });
+    }
+  });
+
+  app.post<{ Params: { id: string } }>('/api/hotel/reservations/:id/reschedule', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'hotel:manage_reservations');
+    if (!session) return;
+    const body = req.body as { newCheckInDate: string; newCheckOutDate: string; newRoomNumber?: string };
+    if (!body?.newCheckInDate || !body?.newCheckOutDate) {
+      return reply.status(400).send({ error: 'newCheckInDate e newCheckOutDate são obrigatórios' });
+    }
+    try {
+      const reservation = store.rescheduleHotelReservation(req.params.id, {
+        newCheckInDate: body.newCheckInDate,
+        newCheckOutDate: body.newCheckOutDate,
+        newRoomNumber: body.newRoomNumber,
+        operatorUserId: session.userId
+      });
+      return reply.send({ reservation });
+    } catch (err) {
+      return reply.status(400).send({ error: err instanceof Error ? err.message : 'Erro ao reagendar reserva' });
+    }
+  });
+
+  // 11.4 Estadias, Check-In e Check-Out Guiado
+  app.get('/api/hotel/stays', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'hotel:checkin_checkout');
+    if (!session) return;
+    const q = req.query as { status?: string; roomNumber?: string };
+    const stays = store.listHotelStays({ status: q.status as any, roomNumber: q.roomNumber });
+    return reply.send({ stays });
+  });
+
+  app.get<{ Params: { id: string } }>('/api/hotel/stays/:id', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'hotel:checkin_checkout');
+    if (!session) return;
+    const stay = store.getHotelStayById(req.params.id);
+    if (!stay) return reply.status(404).send({ error: 'Estadia não encontrada' });
+    return reply.send({ stay });
+  });
+
+  const AdvancedCheckInSchema = z.object({
+    roomNumber: z.string().min(1),
+    guestId: z.string().optional(),
+    guestName: z.string().optional(),
+    checkInAt: z.string().optional(),
+    checkOutScheduledAt: z.string().optional(),
+    reservationId: z.string().optional(),
+    companions: z.array(z.object({ name: z.string(), document: z.string().optional() })).optional(),
+    dailyRateCents: z.number().int().positive().optional(),
+    earlyCheckinCents: z.number().int().nonnegative().optional(),
+    notes: z.string().optional()
   });
 
   app.post('/api/hotel/checkin', async (req, reply) => {
-    const session = authorizePermission(req, reply, 'hotel:manage_reservations');
+    const session = authorizePermission(req, reply, 'hotel:checkin_checkout');
     if (!session) return;
 
-    const parsed = HotelCheckInSchema.safeParse(req.body);
+    const parsed = AdvancedCheckInSchema.safeParse(req.body);
     if (!parsed.success) {
-      return reply
-        .status(400)
-        .send({ error: 'Dados de check-in inválidos', issues: parsed.error.issues });
+      return reply.status(400).send({ error: 'Dados de check-in inválidos', issues: parsed.error.issues });
     }
-    const result = store.checkInHotelRoom(parsed.data);
-    return reply.status(201).send(result);
+
+    try {
+      if (parsed.data.guestId && parsed.data.checkOutScheduledAt) {
+        const result = store.checkInHotelStay({
+          roomNumber: parsed.data.roomNumber,
+          guestId: parsed.data.guestId,
+          checkInAt: parsed.data.checkInAt,
+          checkOutScheduledAt: parsed.data.checkOutScheduledAt,
+          reservationId: parsed.data.reservationId,
+          companions: parsed.data.companions,
+          dailyRateCents: parsed.data.dailyRateCents,
+          earlyCheckinCents: parsed.data.earlyCheckinCents,
+          notes: parsed.data.notes,
+          operatorUserId: session.userId,
+          operatorName: session.name
+        });
+        return reply.status(201).send(result);
+      } else if (parsed.data.guestName) {
+        const result = store.checkInHotelRoom({
+          roomNumber: parsed.data.roomNumber,
+          guestName: parsed.data.guestName
+        });
+        return reply.status(201).send(result);
+      } else {
+        return reply.status(400).send({ error: 'Informe guestId e checkOutScheduledAt, ou guestName' });
+      }
+    } catch (err) {
+      return reply.status(400).send({ error: err instanceof Error ? err.message : 'Erro ao realizar check-in' });
+    }
+  });
+
+  const CheckOutSchema = z.object({
+    stayId: z.string().min(1),
+    notes: z.string().optional(),
+    allowOverrideWithAudit: z.boolean().optional()
+  });
+
+  app.post('/api/hotel/checkout', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'hotel:checkin_checkout');
+    if (!session) return;
+
+    const parsed = CheckOutSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: 'Dados de check-out inválidos', issues: parsed.error.issues });
+    }
+
+    try {
+      const result = store.checkOutHotelStay(parsed.data.stayId, {
+        operatorUserId: session.userId,
+        operatorName: session.name,
+        notes: parsed.data.notes,
+        allowOverrideWithAudit: parsed.data.allowOverrideWithAudit
+      });
+      return reply.send(result);
+    } catch (err) {
+      return reply.status(400).send({ error: err instanceof Error ? err.message : 'Erro ao realizar check-out' });
+    }
+  });
+
+  // 11.5 Folio e Transferência Restaurante -> Hotel
+  app.get<{ Params: { id: string } }>('/api/hotel/stays/:id/folio', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'hotel:post_charges');
+    if (!session) return;
+    const entries = store.listFolioEntriesByStayId(req.params.id);
+    const totals = calculateStayFolioTotals(entries);
+    return reply.send({ entries, totals });
+  });
+
+  const AddFolioEntrySchema = z.object({
+    entryType: HotelFolioEntryTypeSchema,
+    description: z.string().min(1),
+    amountCents: z.number().int(),
+    sourceReferenceType: z.string().optional(),
+    sourceReferenceId: z.string().optional(),
+    sourceDetailsJson: z.string().optional()
+  });
+
+  app.post<{ Params: { id: string } }>('/api/hotel/stays/:id/folio/entry', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'hotel:post_charges');
+    if (!session) return;
+    const parsed = AddFolioEntrySchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: 'Dados inválidos para lançamento no folio', issues: parsed.error.issues });
+    }
+    try {
+      const entry = store.addFolioEntry({
+        stayId: req.params.id,
+        ...parsed.data,
+        operatorUserId: session.userId,
+        operatorName: session.name
+      });
+      return reply.status(201).send({ entry });
+    } catch (err) {
+      return reply.status(400).send({ error: err instanceof Error ? err.message : 'Erro ao lançar no folio' });
+    }
+  });
+
+  const TransferTabToFolioSchema = z.object({
+    restaurantTabId: z.string().min(1),
+    roomNumber: z.string().min(1)
+  });
+
+  app.post('/api/hotel/transfer-tab-to-folio', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'hotel:post_charges');
+    if (!session) return;
+    const parsed = TransferTabToFolioSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: 'Dados inválidos para transferência', issues: parsed.error.issues });
+    }
+    try {
+      const result = store.transferRestaurantTabToFolio({
+        restaurantTabId: parsed.data.restaurantTabId,
+        roomNumber: parsed.data.roomNumber,
+        operatorUserId: session.userId,
+        operatorName: session.name
+      });
+      return reply.status(200).send(result);
+    } catch (err) {
+      return reply.status(400).send({ error: err instanceof Error ? err.message : 'Erro ao transferir consumo' });
+    }
+  });
+
+  // 11.6 Frigobar
+  app.get<{ Params: { roomNumber: string } }>('/api/hotel/rooms/:roomNumber/minibar', async (req, reply) => {
+    const items = store.listMinibarItemsByRoom(req.params.roomNumber);
+    return reply.send({ items });
+  });
+
+  const ConfigureMinibarSchema = z.object({
+    roomNumber: z.string().min(1),
+    productId: z.string().min(1),
+    initialQuantity: z.number().int().nonnegative(),
+    unitPriceCents: z.number().int().nonnegative().optional()
+  });
+
+  app.post('/api/hotel/minibar/config', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'hotel:manage_rooms');
+    if (!session) return;
+    const parsed = ConfigureMinibarSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: 'Dados inválidos de frigobar', issues: parsed.error.issues });
+    }
+    try {
+      const item = store.configureMinibarItem(parsed.data);
+      return reply.status(201).send({ item });
+    } catch (err) {
+      return reply.status(400).send({ error: err instanceof Error ? err.message : 'Erro ao configurar frigobar' });
+    }
+  });
+
+  const MinibarConsumeSchema = z.object({
+    stayId: z.string().min(1),
+    roomNumber: z.string().min(1),
+    productId: z.string().min(1),
+    quantity: z.number().int().positive()
+  });
+
+  app.post('/api/hotel/minibar/consume', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'hotel:post_charges');
+    if (!session) return;
+    const parsed = MinibarConsumeSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: 'Dados de consumo inválidos', issues: parsed.error.issues });
+    }
+    try {
+      const result = store.recordMinibarConsumption({
+        ...parsed.data,
+        operatorUserId: session.userId,
+        operatorName: session.name
+      });
+      return reply.status(201).send(result);
+    } catch (err) {
+      return reply.status(400).send({ error: err instanceof Error ? err.message : 'Erro ao lançar frigobar' });
+    }
+  });
+
+  const MinibarRestockSchema = z.object({
+    roomNumber: z.string().min(1),
+    productId: z.string().min(1),
+    addedQuantity: z.number().int().positive()
+  });
+
+  app.post('/api/hotel/minibar/restock', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'stock:adjust');
+    if (!session) return;
+    const parsed = MinibarRestockSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: 'Dados de reposição inválidos', issues: parsed.error.issues });
+    }
+    try {
+      const item = store.restockMinibarItem({ ...parsed.data, operatorUserId: session.userId });
+      return reply.send({ item });
+    } catch (err) {
+      return reply.status(400).send({ error: err instanceof Error ? err.message : 'Erro ao repor frigobar' });
+    }
+  });
+
+  // 11.7 Serviços Adicionais
+  app.get('/api/hotel/services', async (req, reply) => {
+    const services = store.listHotelServices();
+    return reply.send({ services });
+  });
+
+  const CreateHotelServiceSchema = z.object({
+    id: z.string().optional(),
+    name: z.string().min(2),
+    category: HotelServiceCategorySchema.optional(),
+    defaultPriceCents: z.number().int().nonnegative()
+  });
+
+  app.post('/api/hotel/services', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'hotel:manage_rates');
+    if (!session) return;
+    const parsed = CreateHotelServiceSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: 'Dados inválidos de serviço', issues: parsed.error.issues });
+    }
+    try {
+      const service = store.createHotelService(parsed.data);
+      return reply.status(201).send({ service });
+    } catch (err) {
+      return reply.status(400).send({ error: err instanceof Error ? err.message : 'Erro ao cadastrar serviço' });
+    }
+  });
+
+  const OrderHotelServiceSchema = z.object({
+    stayId: z.string().min(1),
+    serviceId: z.string().min(1),
+    quantity: z.number().int().positive().optional(),
+    unitPriceCents: z.number().int().nonnegative().optional()
+  });
+
+  app.post('/api/hotel/services/order', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'hotel:post_charges');
+    if (!session) return;
+    const parsed = OrderHotelServiceSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: 'Dados de pedido de serviço inválidos', issues: parsed.error.issues });
+    }
+    try {
+      const result = store.orderHotelService({
+        ...parsed.data,
+        operatorUserId: session.userId,
+        operatorName: session.name
+      });
+      return reply.status(201).send(result);
+    } catch (err) {
+      return reply.status(400).send({ error: err instanceof Error ? err.message : 'Erro ao pedir serviço' });
+    }
+  });
+
+  // 11.8 Governança e Manutenção
+  app.get('/api/hotel/housekeeping/logs', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'hotel:housekeeping');
+    if (!session) return;
+    const q = req.query as { roomNumber?: string };
+    const logs = store.listHousekeepingLogs(q.roomNumber);
+    return reply.send({ logs });
+  });
+
+  const HousekeepingUpdateSchema = z.object({
+    roomNumber: z.string().min(1),
+    action: HotelHousekeepingActionSchema,
+    notes: z.string().optional()
+  });
+
+  app.post('/api/hotel/housekeeping/update', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'hotel:housekeeping');
+    if (!session) return;
+    const parsed = HousekeepingUpdateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: 'Dados inválidos de governança', issues: parsed.error.issues });
+    }
+    try {
+      const result = store.updateHousekeepingStatus({
+        roomNumber: parsed.data.roomNumber,
+        action: parsed.data.action,
+        attendantUserId: session.userId,
+        attendantName: session.name,
+        notes: parsed.data.notes
+      });
+      return reply.send(result);
+    } catch (err) {
+      return reply.status(400).send({ error: err instanceof Error ? err.message : 'Erro ao atualizar governança' });
+    }
+  });
+
+  app.get('/api/hotel/maintenance', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'hotel:maintenance');
+    if (!session) return;
+    const q = req.query as { roomNumber?: string; status?: string };
+    const records = store.listMaintenanceRecords({ roomNumber: q.roomNumber, status: q.status as any });
+    return reply.send({ records });
+  });
+
+  const CreateMaintenanceSchema = z.object({
+    roomNumber: z.string().min(1),
+    issueDescription: z.string().min(2),
+    priority: HotelMaintenancePrioritySchema.optional(),
+    blockRoom: z.boolean().optional(),
+    assignedTo: z.string().optional()
+  });
+
+  app.post('/api/hotel/maintenance', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'hotel:maintenance');
+    if (!session) return;
+    const parsed = CreateMaintenanceSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: 'Dados inválidos de manutenção', issues: parsed.error.issues });
+    }
+    try {
+      const result = store.createMaintenanceRecord({
+        ...parsed.data,
+        reportedByUserId: session.userId,
+        reportedByName: session.name
+      });
+      return reply.status(201).send(result);
+    } catch (err) {
+      return reply.status(400).send({ error: err instanceof Error ? err.message : 'Erro ao criar chamado de manutenção' });
+    }
+  });
+
+  app.post<{ Params: { id: string } }>('/api/hotel/maintenance/:id/resolve', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'hotel:maintenance');
+    if (!session) return;
+    const body = req.body as { resolutionNotes?: string };
+    try {
+      const result = store.resolveMaintenanceRecord(req.params.id, {
+        resolutionNotes: body?.resolutionNotes || 'Manutenção concluída e conferida.',
+        resolvedByUserId: session.userId
+      });
+      return reply.send(result);
+    } catch (err) {
+      return reply.status(400).send({ error: err instanceof Error ? err.message : 'Erro ao resolver manutenção' });
+    }
+  });
+
+  // 11.9 Métricas do Dashboard Hoteleiro
+  app.get('/api/hotel/metrics', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'hotel:reports');
+    if (!session) return;
+    const metrics = store.getHotelDashboardMetrics();
+    return reply.send({ metrics });
   });
 
   // 12. Ciclo de Sincronização Bidirecional Local ↔ VPS

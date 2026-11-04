@@ -57,7 +57,16 @@ export const PermissionSchema = z.enum([
   'orders:advance_kitchen',
   'catalog:manage',
   'stock:adjust',
+  'hotel:manage_rooms',
+  'hotel:manage_guests',
   'hotel:manage_reservations',
+  'hotel:manage_rates',
+  'hotel:checkin_checkout',
+  'hotel:post_charges',
+  'hotel:housekeeping',
+  'hotel:maintenance',
+  'hotel:view_pii',
+  'hotel:reports',
   'finance:view_and_manage',
   'reports:view',
   'staff:manage',
@@ -72,20 +81,27 @@ export const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
   OWNER: [
     'dashboard:view', 'pos:operate', 'pos:open_close_register', 'tabs:manage',
     'tabs:discount_or_void', 'orders:create', 'orders:advance_kitchen',
-    'catalog:manage', 'stock:adjust', 'hotel:manage_reservations',
+    'catalog:manage', 'stock:adjust',
+    'hotel:manage_rooms', 'hotel:manage_guests', 'hotel:manage_reservations',
+    'hotel:manage_rates', 'hotel:checkin_checkout', 'hotel:post_charges',
+    'hotel:housekeeping', 'hotel:maintenance', 'hotel:view_pii', 'hotel:reports',
     'finance:view_and_manage', 'reports:view', 'staff:manage',
     'admin:configure', 'printers:manage', 'fiscal:configure', 'sync:manage'
   ],
   MANAGER: [
     'dashboard:view', 'pos:operate', 'pos:open_close_register', 'tabs:manage',
     'tabs:discount_or_void', 'orders:create', 'orders:advance_kitchen',
-    'catalog:manage', 'stock:adjust', 'hotel:manage_reservations',
+    'catalog:manage', 'stock:adjust',
+    'hotel:manage_rooms', 'hotel:manage_guests', 'hotel:manage_reservations',
+    'hotel:manage_rates', 'hotel:checkin_checkout', 'hotel:post_charges',
+    'hotel:housekeeping', 'hotel:maintenance', 'hotel:view_pii', 'hotel:reports',
     'finance:view_and_manage', 'reports:view', 'staff:manage',
     'printers:manage', 'sync:manage'
   ],
   CASHIER: [
     'dashboard:view', 'pos:operate', 'pos:open_close_register',
-    'tabs:manage', 'orders:create', 'printers:manage'
+    'tabs:manage', 'orders:create', 'printers:manage',
+    'hotel:post_charges', 'hotel:checkin_checkout'
   ],
   WAITER: [
     'tabs:manage', 'orders:create'
@@ -94,7 +110,10 @@ export const ROLE_PERMISSIONS: Record<UserRole, Permission[]> = {
     'orders:advance_kitchen'
   ],
   RECEPTIONIST: [
-    'dashboard:view', 'hotel:manage_reservations', 'tabs:manage', 'orders:create', 'pos:operate'
+    'dashboard:view', 'pos:operate', 'tabs:manage', 'orders:create',
+    'hotel:manage_rooms', 'hotel:manage_guests', 'hotel:manage_reservations',
+    'hotel:manage_rates', 'hotel:checkin_checkout', 'hotel:post_charges',
+    'hotel:housekeeping', 'hotel:maintenance', 'hotel:view_pii', 'hotel:reports'
   ],
   STOCK_CLERK: [
     'catalog:manage', 'stock:adjust'
@@ -852,8 +871,42 @@ export const StockMovementSchema = z.object({
 export type StockMovement = z.infer<typeof StockMovementSchema>;
 
 // ============================================================================
-// 6. HOTELARIA (HOTEL AUTO POSTO MILLA)
+// 6. HOTELARIA (HOTEL AUTO POSTO MILLA — PMS INTEGRADO AO RESTAURANTE/BAR)
 // ============================================================================
+
+// 6.1 Status Operacionais Independentes (Ocupação, Governança/Limpeza e Manutenção)
+export const RoomOccupancyStatusSchema = z.enum([
+  'LIVRE',
+  'RESERVADO',
+  'OCUPADO',
+  'BLOQUEADO'
+]);
+export type RoomOccupancyStatus = z.infer<typeof RoomOccupancyStatusSchema>;
+
+export const RoomHousekeepingStatusSchema = z.enum([
+  'LIMPO',
+  'SUJO',
+  'EM_LIMPEZA',
+  'INSPECAO_PENDENTE'
+]);
+export type RoomHousekeepingStatus = z.infer<typeof RoomHousekeepingStatusSchema>;
+
+export const RoomMaintenanceStatusSchema = z.enum([
+  'DISPONIVEL',
+  'EM_MANUTENCAO',
+  'INTERDITADO'
+]);
+export type RoomMaintenanceStatus = z.infer<typeof RoomMaintenanceStatusSchema>;
+
+export const HotelRoomCategorySchema = z.enum([
+  'STANDARD_SINGLE',
+  'STANDARD_DOUBLE',
+  'LUXO_CASAL',
+  'TRIPLO',
+  'SUITE_MASTER',
+  'FAMILIAR'
+]);
+export type HotelRoomCategory = z.infer<typeof HotelRoomCategorySchema>;
 
 export const HotelRoomStatusSchema = z.enum([
   'AVAILABLE',
@@ -867,14 +920,372 @@ export type HotelRoomStatus = z.infer<typeof HotelRoomStatusSchema>;
 export const HotelRoomSchema = z.object({
   id: z.string().min(1),
   number: z.string().min(1), // Ex: "101", "102", "201"
-  category: z.enum(['STANDARD_SINGLE', 'STANDARD_DOUBLE', 'LUXO_CASAL', 'TRIPLO']),
+  floorSector: z.string().default('Térreo'),
+  category: HotelRoomCategorySchema.default('STANDARD_DOUBLE'),
+  maxGuests: z.number().int().min(1).default(2),
+  bedCount: z.number().int().min(1).default(1),
+  bedConfiguration: z.string().default('1 Cama Casal'),
+  description: z.string().default(''),
+  amenities: z.array(z.string()).default([]),
   dailyRateCents: z.number().int().positive(),
-  status: HotelRoomStatusSchema,
+  status: HotelRoomStatusSchema.default('AVAILABLE'), // Compatibilidade
+  occupancyStatus: RoomOccupancyStatusSchema.default('LIVRE'),
+  housekeepingStatus: RoomHousekeepingStatusSchema.default('LIMPO'),
+  maintenanceStatus: RoomMaintenanceStatusSchema.default('DISPONIVEL'),
+  active: z.boolean().default(true),
   currentGuestName: z.string().nullable().optional(),
+  currentGuestId: z.string().nullable().optional(),
   activeTabId: UuidSchema.nullable().optional(),
+  activeStayId: z.string().nullable().optional(),
+  internalNotes: z.string().default(''),
+  createdAt: IsoDateTimeSchema.optional(),
   updatedAt: IsoDateTimeSchema
 });
 export type HotelRoom = z.infer<typeof HotelRoomSchema>;
+
+// 6.2 Cadastro Seguro de Hóspedes (LGPD e Auditoria)
+export const HotelGuestDocumentTypeSchema = z.enum(['CPF', 'RG', 'PASSAPORTE', 'OUTRO']);
+export type HotelGuestDocumentType = z.infer<typeof HotelGuestDocumentTypeSchema>;
+
+export const HotelGuestAddressSchema = z.object({
+  street: z.string().default(''),
+  number: z.string().default(''),
+  neighborhood: z.string().default(''),
+  city: z.string().default(''),
+  state: z.string().default(''),
+  postalCode: z.string().default('')
+});
+export type HotelGuestAddress = z.infer<typeof HotelGuestAddressSchema>;
+
+export const HotelGuestSchema = z.object({
+  id: z.string().min(1),
+  fullName: z.string().min(2),
+  documentType: HotelGuestDocumentTypeSchema.default('CPF'),
+  documentNumber: z.string().min(3),
+  phone: z.string().default(''),
+  email: z.string().default(''),
+  nationality: z.string().default('Brasileira'),
+  birthDate: z.string().nullable().optional(),
+  address: HotelGuestAddressSchema.optional().default({}),
+  notes: z.string().default(''),
+  totalStaysCount: z.number().int().nonnegative().default(0),
+  createdAt: IsoDateTimeSchema,
+  updatedAt: IsoDateTimeSchema
+});
+export type HotelGuest = z.infer<typeof HotelGuestSchema>;
+
+// 6.3 Reservas com Proteção de Sobreposição de Datas
+export const HotelReservationStatusSchema = z.enum([
+  'PENDENTE',
+  'CONFIRMADA',
+  'CHECK_IN_REALIZADO',
+  'CANCELADA',
+  'NO_SHOW',
+  'CONCLUIDA'
+]);
+export type HotelReservationStatus = z.infer<typeof HotelReservationStatusSchema>;
+
+export const HotelReservationSourceSchema = z.enum([
+  'BALCAO',
+  'WHATSAPP',
+  'TELEFONE',
+  'BOOKING',
+  'SITE',
+  'OUTRO'
+]);
+export type HotelReservationSource = z.infer<typeof HotelReservationSourceSchema>;
+
+export const HotelReservationSchema = z.object({
+  id: z.string().min(1),
+  reservationCode: z.string().min(1),
+  guestId: z.string().min(1),
+  guestName: z.string().min(2),
+  guestPhone: z.string().default(''),
+  roomId: z.string().nullable().optional(),
+  roomNumber: z.string().min(1),
+  roomCategory: HotelRoomCategorySchema.default('STANDARD_DOUBLE'),
+  guestsCount: z.number().int().min(1).default(1),
+  checkInDate: z.string().min(10),  // YYYY-MM-DD
+  checkOutDate: z.string().min(10), // YYYY-MM-DD
+  dailyRateCents: z.number().int().positive(),
+  estimatedTotalCents: z.number().int().positive(),
+  depositCents: z.number().int().nonnegative().default(0),
+  depositPaid: z.boolean().default(false),
+  sourceChannel: HotelReservationSourceSchema.default('BALCAO'),
+  status: HotelReservationStatusSchema.default('CONFIRMADA'),
+  cancellationReason: z.string().nullable().optional(),
+  cancelledAt: IsoDateTimeSchema.nullable().optional(),
+  cancelledByUserId: z.string().nullable().optional(),
+  notes: z.string().default(''),
+  createdByUserId: z.string().min(1),
+  createdAt: IsoDateTimeSchema,
+  updatedAt: IsoDateTimeSchema
+});
+export type HotelReservation = z.infer<typeof HotelReservationSchema>;
+
+// 6.4 Hospedagens / Estadias Ativas (Check-In e Check-Out)
+export const HotelStayStatusSchema = z.enum(['ACTIVE', 'CHECKED_OUT', 'CANCELLED']);
+export type HotelStayStatus = z.infer<typeof HotelStayStatusSchema>;
+
+export const HotelCompanionSchema = z.object({
+  name: z.string().min(2),
+  document: z.string().optional()
+});
+export type HotelCompanion = z.infer<typeof HotelCompanionSchema>;
+
+export const HotelStaySchema = z.object({
+  id: z.string().min(1),
+  stayCode: z.string().min(1),
+  reservationId: z.string().nullable().optional(),
+  roomId: z.string().min(1),
+  roomNumber: z.string().min(1),
+  guestId: z.string().min(1),
+  guestName: z.string().min(2),
+  guestDocument: z.string().min(3),
+  companions: z.array(HotelCompanionSchema).default([]),
+  checkInAt: IsoDateTimeSchema,
+  checkOutScheduledAt: IsoDateTimeSchema,
+  checkOutActualAt: IsoDateTimeSchema.nullable().optional(),
+  dailyRateCents: z.number().int().positive(),
+  nightsCount: z.number().int().min(1).default(1),
+  earlyCheckinCents: z.number().int().nonnegative().default(0),
+  lateCheckoutCents: z.number().int().nonnegative().default(0),
+  extraGuestsCents: z.number().int().nonnegative().default(0),
+  discountCents: z.number().int().nonnegative().default(0),
+  discountReason: z.string().nullable().optional(),
+  tabId: UuidSchema,
+  status: HotelStayStatusSchema.default('ACTIVE'),
+  openedByUserId: z.string().min(1),
+  closedByUserId: z.string().nullable().optional(),
+  notes: z.string().default(''),
+  createdAt: IsoDateTimeSchema,
+  updatedAt: IsoDateTimeSchema
+});
+export type HotelStay = z.infer<typeof HotelStaySchema>;
+
+// 6.5 Extrato / Folio do Quarto (Lançamentos Auditáveis de Diárias, Bar, Restaurante, Frigobar, Serviços e Pagamentos)
+export const HotelFolioEntryTypeSchema = z.enum([
+  'ROOM_RATE',
+  'RESTAURANT_ORDER',
+  'BAR_ORDER',
+  'MINIBAR',
+  'SERVICE',
+  'DISCOUNT',
+  'ADVANCE_PAYMENT',
+  'PAYMENT',
+  'ADJUSTMENT',
+  'REFUND'
+]);
+export type HotelFolioEntryType = z.infer<typeof HotelFolioEntryTypeSchema>;
+
+export const HotelFolioEntrySchema = z.object({
+  id: z.string().min(1),
+  stayId: z.string().min(1),
+  tabId: UuidSchema,
+  roomNumber: z.string().min(1),
+  entryType: HotelFolioEntryTypeSchema,
+  description: z.string().min(1),
+  amountCents: z.number().int(), // Positivo = Débito/Cobrança; Negativo = Crédito/Pagamento/Desconto
+  sourceReferenceType: z.string().nullable().optional(),
+  sourceReferenceId: z.string().nullable().optional(),
+  sourceDetailsJson: z.string().nullable().optional(),
+  operatorUserId: z.string().min(1),
+  operatorName: z.string().min(1),
+  createdAt: IsoDateTimeSchema
+});
+export type HotelFolioEntry = z.infer<typeof HotelFolioEntrySchema>;
+
+// 6.6 Frigobar por Quarto
+export const HotelMinibarItemSchema = z.object({
+  id: z.string().min(1),
+  roomNumber: z.string().min(1),
+  productId: z.string().min(1),
+  productName: z.string().min(1),
+  initialQuantity: z.number().int().nonnegative().default(0),
+  currentQuantity: z.number().int().nonnegative().default(0),
+  unitPriceCents: z.number().int().nonnegative(),
+  updatedAt: IsoDateTimeSchema
+});
+export type HotelMinibarItem = z.infer<typeof HotelMinibarItemSchema>;
+
+export const HotelMinibarMovementTypeSchema = z.enum([
+  'CONSUMPTION',
+  'RESTOCK',
+  'LOSS',
+  'AUDIT_CORRECTION'
+]);
+export type HotelMinibarMovementType = z.infer<typeof HotelMinibarMovementTypeSchema>;
+
+export const HotelMinibarConsumptionSchema = z.object({
+  id: z.string().min(1),
+  stayId: z.string().min(1),
+  roomNumber: z.string().min(1),
+  productId: z.string().min(1),
+  productName: z.string().min(1),
+  quantity: z.number().int().positive(),
+  unitPriceCents: z.number().int().nonnegative(),
+  totalCents: z.number().int().nonnegative(),
+  movementType: HotelMinibarMovementTypeSchema.default('CONSUMPTION'),
+  folioEntryId: z.string().nullable().optional(),
+  recordedByUserId: z.string().min(1),
+  createdAt: IsoDateTimeSchema
+});
+export type HotelMinibarConsumption = z.infer<typeof HotelMinibarConsumptionSchema>;
+
+// 6.7 Serviços Adicionais (Lavanderia, Café, Estacionamento, etc.)
+export const HotelServiceCategorySchema = z.enum([
+  'LAVANDERIA',
+  'CAFE_MANHA',
+  'ESTACIONAMENTO',
+  'CAMA_EXTRA',
+  'GERAL'
+]);
+export type HotelServiceCategory = z.infer<typeof HotelServiceCategorySchema>;
+
+export const HotelServiceSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(2),
+  category: HotelServiceCategorySchema.default('GERAL'),
+  defaultPriceCents: z.number().int().nonnegative(),
+  active: z.boolean().default(true),
+  createdAt: IsoDateTimeSchema
+});
+export type HotelService = z.infer<typeof HotelServiceSchema>;
+
+export const HotelServiceOrderSchema = z.object({
+  id: z.string().min(1),
+  stayId: z.string().min(1),
+  serviceId: z.string().min(1),
+  serviceName: z.string().min(1),
+  quantity: z.number().int().positive().default(1),
+  unitPriceCents: z.number().int().nonnegative(),
+  totalCents: z.number().int().nonnegative(),
+  folioEntryId: z.string().nullable().optional(),
+  status: z.string().default('CONFIRMED'),
+  operatorUserId: z.string().min(1),
+  createdAt: IsoDateTimeSchema
+});
+export type HotelServiceOrder = z.infer<typeof HotelServiceOrderSchema>;
+
+// 6.8 Governança e Limpeza
+export const HotelHousekeepingActionSchema = z.enum([
+  'SET_DIRTY',
+  'START_CLEANING',
+  'FINISH_CLEANING',
+  'REQUEST_INSPECTION',
+  'APPROVE_INSPECTION',
+  'REJECT_INSPECTION'
+]);
+export type HotelHousekeepingAction = z.infer<typeof HotelHousekeepingActionSchema>;
+
+export const HotelHousekeepingLogSchema = z.object({
+  id: z.string().min(1),
+  roomNumber: z.string().min(1),
+  action: HotelHousekeepingActionSchema,
+  previousStatus: z.string(),
+  newStatus: z.string(),
+  attendantUserId: z.string().min(1),
+  attendantName: z.string().min(1),
+  notes: z.string().default(''),
+  createdAt: IsoDateTimeSchema
+});
+export type HotelHousekeepingLog = z.infer<typeof HotelHousekeepingLogSchema>;
+
+// 6.9 Manutenção de Apartamentos
+export const HotelMaintenancePrioritySchema = z.enum(['LOW', 'NORMAL', 'HIGH', 'CRITICAL']);
+export type HotelMaintenancePriority = z.infer<typeof HotelMaintenancePrioritySchema>;
+
+export const HotelMaintenanceStatusSchema = z.enum(['EM_MANUTENCAO', 'INTERDITADO', 'RESOLVED']);
+export type HotelMaintenanceStatus = z.infer<typeof HotelMaintenanceStatusSchema>;
+
+export const HotelMaintenanceRecordSchema = z.object({
+  id: z.string().min(1),
+  roomNumber: z.string().min(1),
+  issueDescription: z.string().min(2),
+  priority: HotelMaintenancePrioritySchema.default('NORMAL'),
+  maintenanceStatus: HotelMaintenanceStatusSchema.default('EM_MANUTENCAO'),
+  reportedByUserId: z.string().min(1),
+  reportedByName: z.string().min(1),
+  assignedTo: z.string().default(''),
+  resolutionNotes: z.string().default(''),
+  resolvedByUserId: z.string().nullable().optional(),
+  resolvedAt: IsoDateTimeSchema.nullable().optional(),
+  createdAt: IsoDateTimeSchema,
+  updatedAt: IsoDateTimeSchema
+});
+export type HotelMaintenanceRecord = z.infer<typeof HotelMaintenanceRecordSchema>;
+
+// 6.10 Métricas do Dashboard Hoteleiro
+export const HotelDashboardMetricsSchema = z.object({
+  totalRooms: z.number().int().nonnegative(),
+  occupiedRooms: z.number().int().nonnegative(),
+  availableRooms: z.number().int().nonnegative(),
+  dirtyCleaningRooms: z.number().int().nonnegative(),
+  maintenanceRooms: z.number().int().nonnegative(),
+  blockedRooms: z.number().int().nonnegative(),
+  occupancyRatePercent: z.number().nonnegative(),
+  adrCents: z.number().int().nonnegative(),
+  revparCents: z.number().int().nonnegative(),
+  expectedCheckInsToday: z.number().int().nonnegative(),
+  expectedCheckOutsToday: z.number().int().nonnegative(),
+  totalFolioRevenueCents: z.number().int().nonnegative(),
+  totalPaymentsReceivedCents: z.number().int().nonnegative(),
+  totalBalancePendingCents: z.number().int().nonnegative()
+});
+export type HotelDashboardMetrics = z.infer<typeof HotelDashboardMetricsSchema>;
+
+/**
+ * Calcula a quantidade de diárias inteiras entre check-in e check-out (mínimo 1 diária).
+ * Regra: entrada inclusiva, saída exclusiva.
+ */
+export function calculateNightsCount(checkInDate: string, checkOutDate: string): number {
+  const dIn = new Date(checkInDate.slice(0, 10) + 'T00:00:00.000Z');
+  const dOut = new Date(checkOutDate.slice(0, 10) + 'T00:00:00.000Z');
+  const diffMs = dOut.getTime() - dIn.getTime();
+  const days = Math.round(diffMs / (1000 * 60 * 60 * 24));
+  return Math.max(1, days);
+}
+
+/**
+ * Valida sobreposição entre dois intervalos com entrada inclusiva e saída exclusiva: [inA, outA) e [inB, outB).
+ * Retorna true se houver sobreposição (conflito).
+ */
+export function areDateIntervalsOverlapping(startA: string, endA: string, startB: string, endB: string): boolean {
+  const sA = startA.slice(0, 10);
+  const eA = endA.slice(0, 10);
+  const sB = startB.slice(0, 10);
+  const eB = endB.slice(0, 10);
+  return sA < eB && eA > sB;
+}
+
+/**
+ * Totalizador financeiro de extrato de quarto (Folio).
+ * Débitos = diárias, consumos restaurante/bar, frigobar, serviços adicionais.
+ * Créditos = adiantamentos, pagamentos, descontos e estornos.
+ */
+export function calculateStayFolioTotals(entries: HotelFolioEntry[]): {
+  totalChargesCents: number;
+  totalPaymentsCents: number;
+  balanceCents: number;
+} {
+  let totalChargesCents = 0;
+  let totalPaymentsCents = 0;
+
+  for (const entry of entries) {
+    if (entry.amountCents > 0) {
+      totalChargesCents += entry.amountCents;
+    } else {
+      totalPaymentsCents += Math.abs(entry.amountCents);
+    }
+  }
+
+  const balanceCents = totalChargesCents - totalPaymentsCents;
+  return {
+    totalChargesCents,
+    totalPaymentsCents,
+    balanceCents
+  };
+}
 
 // ============================================================================
 // 7. SINCRONIZAÇÃO BIDIRECIONAL LOCAL ↔ VPS (OUTBOX & INBOX COM IDEMPOTÊNCIA)
@@ -889,6 +1300,13 @@ export const SyncEntityTypeSchema = z.enum([
   'CATALOG_PRODUCT',
   'PRODUCT_RECIPE',
   'HOTEL_ROOM',
+  'HOTEL_GUEST',
+  'HOTEL_RESERVATION',
+  'HOTEL_STAY',
+  'HOTEL_FOLIO_ENTRY',
+  'HOTEL_MINIBAR',
+  'HOTEL_SERVICE',
+  'HOTEL_MAINTENANCE',
   'FISCAL_CONFIG'
 ]);
 export type SyncEntityType = z.infer<typeof SyncEntityTypeSchema>;

@@ -31,8 +31,20 @@ Durante o desenvolvimento e operação local sem VPS contratada, o sistema utili
    - Índice único parcial `idx_tabs_unique_active_table` impedindo duas comandas abertas simultaneamente para a mesma mesa.
    - Colunas de estágio de cancelamento, SLA e transferência de itens em `orders` e `order_items`.
    - Tabelas `cash_register_movements`, `operational_notifications` e `kds_sla_config`.
+4. **`0004_stage5_hotel_pms.sql`**:
+   - Expansão de `hotel_rooms` (colunas `floor_sector`, `bed_count`, `bed_configuration`, `amenities_json`, `occupancy_status`, `housekeeping_status`, `maintenance_status`, `active_stay_id`).
+   - Tabela `hotel_guests`: cadastro com LGPD, nome, tipo e número de documento, telefone, e-mail, nacionalidade, data de nascimento, endereço JSON e notas.
+   - Tabela `hotel_reservations`: reservas com código localizador, período [check_in, check_out), hóspedes, diária, sinal e status.
+   - Tabela `hotel_stays`: estadias ativas/encerradas com hóspede, acompanhantes JSON, comanda de quarto vinculada (`tab_id`), diária congelada, early check-in, late check-out e notas.
+   - Tabela `hotel_folio_entries`: razão contábil da estadia para débitos (diárias, restaurante, bar, frigobar, serviços) e créditos (sinal, pagamentos, estornos).
+   - Tabelas de frigobar: `hotel_minibar_items` e `hotel_minibar_consumptions`.
+   - Tabelas de serviços de hotelaria: `hotel_services` e `hotel_service_orders`.
+   - Tabela de governança: `hotel_housekeeping_logs`.
+   - Tabela de manutenção predial: `hotel_maintenance_records`.
 
 ### Migrações de Nuvem (`packages/contracts/migrations/cloud/`)
 1. **`0001_initial_cloud_schema.sql`**
 2. **`0002_stage3_cloud_catalog_recipes_qr.sql`**
 3. **`0003_stage4_cloud_tables_tabs_kds_cashier.sql`**
+4. **`0004_stage5_cloud_hotel_pms.sql`**:
+   - Compatibilidade total PostgreSQL 16 com tipos UUID, TIMESTAMP WITH TIME ZONE, JSONB e índices de busca para o módulo hoteleiro.
