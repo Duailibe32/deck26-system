@@ -1,0 +1,29 @@
+{
+  "name": "deck26-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "DECK 26 — Sistema Profissional de Gestão Integrada para Bar, Restaurante e Hotel (Hotel Auto Posto Milla)",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "dev:local-server": "npm --workspace=@deck26/local-server run dev",
+    "dev:desktop": "npm --workspace=@deck26/desktop run dev",
+    "dev:web": "npm --workspace=@deck26/web run dev",
+    "dev:cloud-api": "npm --workspace=@deck26/cloud-api run dev"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

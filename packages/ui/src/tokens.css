@@ -1,0 +1,197 @@
+/**
+ * DECK 26 — DESIGN SYSTEM OFICIAL
+ * Identidade Visual extraída da logomarca oficial "DECK 26" e do Cardápio Digital (Hotel Auto Posto Milla).
+ * Paleta: Rosa Vibrante (#E6005C / #FF1675), Preto Profundo (#09090B / #121216), Branco Puro (#FFFFFF) e Cinzas Neutros.
+ */
+
+:root {
+  /* Paleta Principal — Rosa Vibrante Deck 26 */
+  --d26-pink-600: #C8004E;
+  --d26-pink-500: #E6005C;
+  --d26-pink-400: #FF1F78;
+  --d26-pink-300: #FF5C9E;
+  --d26-pink-glow: rgba(230, 0, 92, 0.22);
+  --d26-pink-surface: rgba(230, 0, 92, 0.10);
+
+  /* Superfícies Escuras Premium (Baixo cansaço visual para PDV/Cozinha/Salão) */
+  --d26-black-950: #070709;
+  --d26-black-900: #0C0C10;
+  --d26-black-850: #121218;
+  --d26-black-800: #181820;
+  --d26-black-750: #20202B;
+
+  /* Branco e Cinzas de Alto Contraste */
+  --d26-white: #FFFFFF;
+  --d26-gray-100: #F4F4F6;
+  --d26-gray-200: #E4E4E9;
+  --d26-gray-300: #CBCBD4;
+  --d26-gray-400: #9E9EA9;
+  --d26-gray-500: #6E6E7A;
+  --d26-gray-600: #454552;
+  --d26-gray-700: #2C2C37;
+  --d26-gray-800: #1F1F29;
+
+  /* Cores Semânticas Operacionais */
+  --d26-success: #10B981;
+  --d26-success-bg: rgba(16, 185, 129, 0.14);
+  --d26-warning: #F59E0B;
+  --d26-warning-bg: rgba(245, 158, 11, 0.14);
+  --d26-danger: #EF4444;
+  --d26-danger-bg: rgba(239, 68, 68, 0.15);
+  --d26-info: #3B82F6;
+  --d26-info-bg: rgba(59, 130, 246, 0.14);
+
+  /* Tipografia e Geometria */
+  --d26-font-sans: 'Inter', 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --d26-font-display: 'Oswald', 'Impact', 'Inter', sans-serif;
+  --d26-font-mono: 'JetBrains Mono', 'Cascadia Code', Consolas, monospace;
+
+  --d26-radius-sm: 6px;
+  --d26-radius-md: 10px;
+  --d26-radius-lg: 14px;
+  --d26-radius-pill: 9999px;
+
+  --d26-border-subtle: 1px solid rgba(255, 255, 255, 0.08);
+  --d26-border-pink: 1px solid rgba(230, 0, 92, 0.55);
+  --d26-shadow-card: 0 8px 24px rgba(0, 0, 0, 0.42);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background-color: var(--d26-black-950);
+  color: var(--d26-white);
+  font-family: var(--d26-font-sans);
+  -webkit-font-smoothing: antialiased;
+  line-height: 1.45;
+}
+
+/* Utilitários do Design System Deck 26 */
+.d26-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: var(--d26-radius-pill);
+  font-size: 0.74rem;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.d26-badge-pink {
+  background: var(--d26-pink-500);
+  color: var(--d26-white);
+}
+
+.d26-badge-outline-pink {
+  background: var(--d26-pink-surface);
+  color: var(--d26-pink-400);
+  border: 1px solid rgba(230, 0, 92, 0.45);
+}
+
+.d26-badge-success {
+  background: var(--d26-success-bg);
+  color: #34D399;
+  border: 1px solid rgba(16, 185, 129, 0.35);
+}
+
+.d26-badge-warning {
+  background: var(--d26-warning-bg);
+  color: #FBBF24;
+  border: 1px solid rgba(245, 158, 11, 0.35);
+}
+
+.d26-badge-danger {
+  background: var(--d26-danger-bg);
+  color: #F87171;
+  border: 1px solid rgba(239, 68, 68, 0.35);
+}
+
+.d26-price-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--d26-pink-500);
+  color: var(--d26-white);
+  font-weight: 800;
+  padding: 4px 10px;
+  border-radius: var(--d26-radius-sm);
+  font-size: 0.88rem;
+  letter-spacing: 0.02em;
+  box-shadow: 0 2px 8px var(--d26-pink-glow);
+}
+
+.d26-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 9px 16px;
+  border-radius: var(--d26-radius-md);
+  font-weight: 600;
+  font-size: 0.875rem;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background-color 0.15s ease, border-color 0.15s ease, transform 0.08s ease;
+  font-family: inherit;
+}
+
+.d26-btn:active {
+  transform: translateY(1px);
+}
+
+.d26-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.d26-btn-primary {
+  background: var(--d26-pink-500);
+  color: var(--d26-white);
+  box-shadow: 0 4px 14px var(--d26-pink-glow);
+}
+
+.d26-btn-primary:hover:not(:disabled) {
+  background: var(--d26-pink-400);
+}
+
+.d26-btn-secondary {
+  background: var(--d26-black-800);
+  color: var(--d26-gray-100);
+  border-color: var(--d26-gray-700);
+}
+
+.d26-btn-secondary:hover:not(:disabled) {
+  background: var(--d26-black-750);
+  border-color: var(--d26-gray-500);
+}
+
+.d26-card {
+  background: var(--d26-black-850);
+  border: var(--d26-border-subtle);
+  border-radius: var(--d26-radius-lg);
+  padding: 18px;
+  box-shadow: var(--d26-shadow-card);
+}
+
+.d26-input, .d26-select {
+  width: 100%;
+  background: var(--d26-black-900);
+  color: var(--d26-white);
+  border: 1px solid var(--d26-gray-700);
+  border-radius: var(--d26-radius-md);
+  padding: 9px 12px;
+  font-size: 0.88rem;
+  font-family: inherit;
+}
+
+.d26-input:focus, .d26-select:focus {
+  outline: none;
+  border-color: var(--d26-pink-400);
+  box-shadow: 0 0 0 2px var(--d26-pink-glow);
+}
