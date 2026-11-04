@@ -443,15 +443,38 @@ export const ProductRecipeSchema = z.object({
 export type ProductRecipe = z.infer<typeof ProductRecipeSchema>;
 
 /**
- * 4.2 IDENTIFICADOR CRIPTOGRÁFICO DE MESA PARA QR CODE
+ * 4.2 GESTÃO FÍSICA DE MESAS E IDENTIFICADOR CRIPTOGRÁFICO DE QR CODE (SEÇÃO 3 E 4)
+ * Diferencia estritamente o estado físico da mesa (LIVRE, OCUPADA, LIMPEZA, etc.)
+ * do estado financeiro da comanda (OPEN, PARTIALLY_PAID, CLOSED).
  */
+export const TablePhysicalStatusSchema = z.enum([
+  'LIVRE',
+  'OCUPADA',
+  'AGUARDANDO_PEDIDO',
+  'EM_ATENDIMENTO',
+  'AGUARDANDO_PAGAMENTO',
+  'LIMPEZA',
+  'INDISPONIVEL'
+]);
+export type TablePhysicalStatus = z.infer<typeof TablePhysicalStatusSchema>;
+
 export const DiningTableQrSchema = z.object({
   tableNumber: z.number().int().positive(),
   qrToken: z.string().min(16),
   label: z.string().min(1),
   requiresOperatorApproval: z.boolean().default(false),
   active: z.boolean().default(true),
-  createdAt: IsoDateTimeSchema
+  physicalStatus: TablePhysicalStatusSchema.optional(),
+  activeTabId: z.string().nullable().optional(),
+  primaryTableNumber: z.number().int().positive().nullable().optional(),
+  joinedGroupId: z.string().nullable().optional(),
+  assignedWaiterUserId: z.string().nullable().optional(),
+  assignedWaiterName: z.string().nullable().optional(),
+  guestsCount: z.number().int().nonnegative().optional(),
+  openedAt: IsoDateTimeSchema.nullable().optional(),
+  notes: z.string().nullable().optional(),
+  createdAt: IsoDateTimeSchema,
+  updatedAt: IsoDateTimeSchema.optional()
 });
 export type DiningTableQr = z.infer<typeof DiningTableQrSchema>;
 
@@ -471,25 +494,69 @@ export type TabType = z.infer<typeof TabTypeSchema>;
 export const TabStatusSchema = z.enum(['OPEN', 'BILL_REQUESTED', 'PARTIALLY_PAID', 'CLOSED', 'CANCELLED']);
 export type TabStatus = z.infer<typeof TabStatusSchema>;
 
+export const DiscountTypeSchema = z.enum(['NONE', 'FIXED_CENTS', 'PERCENTAGE', 'COURTESY']);
+export type DiscountType = z.infer<typeof DiscountTypeSchema>;
+
+export const BillSplitModeSchema = z.enum([
+  'NONE',
+  'FREE_AMOUNT',
+  'EQUAL_SHARES',
+  'BY_ITEMS',
+  'MIXED'
+]);
+export type BillSplitMode = z.infer<typeof BillSplitModeSchema>;
+
+export const BillSplitItemAllocationSchema = z.object({
+  orderItemId: z.string().min(1),
+  productName: z.string().optional(),
+  quantity: z.number().positive(),
+  amountCents: z.number().int().nonnegative(),
+  payerLabel: z.string().min(1),
+  paid: z.boolean().optional()
+});
+export type BillSplitItemAllocation = z.infer<typeof BillSplitItemAllocationSchema>;
+
+export const BillSplitPlanSchema = z.object({
+  mode: BillSplitModeSchema,
+  sharesCount: z.number().int().positive().optional(),
+  perShareCents: z.number().int().nonnegative().optional(),
+  itemAllocations: z.array(BillSplitItemAllocationSchema).optional(),
+  updatedAt: IsoDateTimeSchema.optional()
+});
+export type BillSplitPlan = z.infer<typeof BillSplitPlanSchema>;
+
 export const TabSchema = z.object({
   id: UuidSchema,
   code: z.string().min(1), // Ex: "MESA-04", "CMD-102", "APTO-201"
   type: TabTypeSchema,
   status: TabStatusSchema,
   tableNumber: z.number().int().positive().nullable().optional(),
+  joinedTables: z.array(z.number().int().positive()).optional(),
   hotelReservationId: UuidSchema.nullable().optional(),
   customerName: z.string().nullable().optional(),
   guestsCount: z.number().int().min(1).default(1),
-  serviceFeeEnabled: z.boolean().default(true), // Taxa de serviço 10%
-  serviceFeeBasisPoints: z.number().int().min(0).max(3000).default(1000), // 1000 bps = 10.00%
+  waiterUserId: z.string().nullable().optional(),
+  waiterName: z.string().nullable().optional(),
+  notes: z.string().nullable().optional(),
+  serviceFeeEnabled: z.boolean().default(true), // Taxa de serviço configurável
+  serviceFeeBasisPoints: z.number().int().min(0).max(5000).default(1000), // 1000 bps = 10.00%
   subtotalCents: z.number().int().nonnegative(),
   serviceFeeCents: z.number().int().nonnegative(),
   discountCents: z.number().int().nonnegative().default(0),
+  discountType: DiscountTypeSchema.nullable().optional(),
+  discountBasisPoints: z.number().int().nonnegative().optional(),
+  discountValue: z.number().int().nonnegative().optional(),
+  discountReason: z.string().nullable().optional(),
+  discountByUserId: z.string().nullable().optional(),
+  discountAuthorizedByUserId: z.string().nullable().optional(),
+  splitPlan: BillSplitPlanSchema.nullable().optional(),
   totalCents: z.number().int().nonnegative(),
   paidCents: z.number().int().nonnegative().default(0),
   openedByUserId: z.string().min(1),
   openedAt: IsoDateTimeSchema,
+  closedByUserId: z.string().nullable().optional(),
   closedAt: IsoDateTimeSchema.nullable().optional(),
+  updatedAt: IsoDateTimeSchema.optional(),
   version: z.number().int().positive().default(1)
 });
 export type Tab = z.infer<typeof TabSchema>;
@@ -501,13 +568,19 @@ export type Tab = z.infer<typeof TabSchema>;
  */
 export const OrderStatusSchema = z.enum([
   'PENDING_APPROVAL', // Aguardando aprovação operacional (quando política de mesa QR exige confirmação)
-  'RECEIVED',         // Registrado localmente ou aprovado para produção
-  'IN_PREPARATION',   // Em preparo na cozinha / bar
-  'READY',            // Pronto para entrega pelo garçom
-  'DELIVERED',        // Entregue na mesa / cliente
-  'CANCELLED'         // Cancelado com justificativa auditada
+  'RECEIVED',         // Registrado localmente ou aprovado para produção (RECEBIDO)
+  'IN_PREPARATION',   // Em preparo na cozinha / bar (EM_PREPARO)
+  'READY',            // Pronto para entrega pelo garçom (PRONTO)
+  'DELIVERED',        // Entregue na mesa / cliente (ENTREGUE)
+  'CANCELLED'         // Cancelado com justificativa auditada (CANCELADO)
 ]);
 export type OrderStatus = z.infer<typeof OrderStatusSchema>;
+
+export const OrderPrioritySchema = z.enum(['NORMAL', 'HIGH', 'RUSH']);
+export type OrderPriority = z.infer<typeof OrderPrioritySchema>;
+
+export const OrderCancelStageSchema = z.enum(['BEFORE_PREP', 'DURING_PREP', 'AFTER_DELIVERY']);
+export type OrderCancelStage = z.infer<typeof OrderCancelStageSchema>;
 
 export const OrderItemModifierSelectionSchema = z.object({
   groupId: z.string().min(1),
@@ -529,23 +602,40 @@ export const OrderItemSchema = z.object({
   totalItemCents: z.number().int().nonnegative(),
   notes: z.string().max(280).optional(),
   modifiers: z.array(OrderItemModifierSelectionSchema).default([]),
-  status: OrderStatusSchema.default('RECEIVED')
+  status: OrderStatusSchema.default('RECEIVED'),
+  transferredFromTabId: z.string().nullable().optional(),
+  transferredFromOrderId: z.string().nullable().optional(),
+  transferredToTabId: z.string().nullable().optional(),
+  transferredAt: IsoDateTimeSchema.nullable().optional(),
+  transferredByUserId: z.string().nullable().optional(),
+  paidQuantity: z.number().nonnegative().optional()
 });
 export type OrderItem = z.infer<typeof OrderItemSchema>;
 
 export const OrderSchema = z.object({
   id: UuidSchema,
-  tabId: UuidSchema.nullable(), // Obrigatório para salão/quarto, opcional para delivery pré-pago sem comanda
+  tabId: UuidSchema.nullable(),
   channel: SalesChannelSchema,
   originNode: OriginNodeSchema,
-  idempotencyKey: z.string().min(8), // Garante que reenvio por Wi-Fi instável nunca duplique o pedido
+  idempotencyKey: z.string().min(8),
   status: OrderStatusSchema,
+  priority: OrderPrioritySchema.optional(),
   waiterUserId: z.string().nullable().optional(),
   waiterName: z.string().nullable().optional(),
   tableNumber: z.number().int().positive().nullable().optional(),
   customerNotes: z.string().max(500).optional(),
   items: z.array(OrderItemSchema).min(1),
   totalOrderCents: z.number().int().nonnegative(),
+  prepStartedAt: IsoDateTimeSchema.nullable().optional(),
+  readyAt: IsoDateTimeSchema.nullable().optional(),
+  deliveredAt: IsoDateTimeSchema.nullable().optional(),
+  deliveredByUserId: z.string().nullable().optional(),
+  cancelledAt: IsoDateTimeSchema.nullable().optional(),
+  cancelledByUserId: z.string().nullable().optional(),
+  cancelledAuthorizedByUserId: z.string().nullable().optional(),
+  cancelReason: z.string().nullable().optional(),
+  cancelStage: OrderCancelStageSchema.nullable().optional(),
+  waiterNotifiedAt: IsoDateTimeSchema.nullable().optional(),
   createdAt: IsoDateTimeSchema,
   updatedAt: IsoDateTimeSchema,
   version: z.number().int().positive().default(1)
@@ -568,18 +658,30 @@ export type PaymentMethod = z.infer<typeof PaymentMethodSchema>;
 
 export const PaymentStatusSchema = z.enum(['CONFIRMED', 'REFUNDED', 'PENDING']);
 
+export const PaymentConfirmationModeSchema = z.enum([
+  'MANUAL_DECLARED',              // Registrado manualmente pelo operador no caixa
+  'ELECTRONIC_PROVIDER_CONFIRMED' // Confirmado eletronicamente por provedor homologado
+]);
+export type PaymentConfirmationMode = z.infer<typeof PaymentConfirmationModeSchema>;
+
 export const PaymentSchema = z.object({
   id: UuidSchema,
   tabId: UuidSchema,
   cashRegisterSessionId: z.string().min(1),
   method: PaymentMethodSchema,
   status: PaymentStatusSchema,
+  confirmationMode: PaymentConfirmationModeSchema.optional(),
+  payerLabel: z.string().nullable().optional(),
+  allocatedItems: z.array(BillSplitItemAllocationSchema).optional(),
   amountCents: z.number().int().positive(),
   receivedCashCents: z.number().int().nonnegative().optional(),
   changeCents: z.number().int().nonnegative().default(0),
-  nsuOrTxId: z.string().optional(), // NSU da maquininha ou EndToEndId do PIX
+  nsuOrTxId: z.string().optional(),
   idempotencyKey: z.string().min(8),
   operatorUserId: z.string().min(1),
+  refundedAt: IsoDateTimeSchema.nullable().optional(),
+  refundedByUserId: z.string().nullable().optional(),
+  refundReason: z.string().nullable().optional(),
   createdAt: IsoDateTimeSchema
 });
 export type Payment = z.infer<typeof PaymentSchema>;
@@ -607,10 +709,15 @@ export const PrintJobTypeSchema = z.enum([
 
 export const PrintJobStatusSchema = z.enum([
   'QUEUED',
+  'PENDING',
   'PRINTING',
+  'SENDING',
   'PRINTED',
-  'FAILED'
+  'FAILED',
+  'UNKNOWN_OUTCOME',
+  'CANCELLED'
 ]);
+export type PrintJobStatus = z.infer<typeof PrintJobStatusSchema>;
 
 export const PrintJobSchema = z.object({
   id: UuidSchema,
@@ -619,13 +726,96 @@ export const PrintJobSchema = z.object({
   status: PrintJobStatusSchema,
   referenceEntityType: z.enum(['ORDER', 'TAB', 'PAYMENT', 'CASH_SESSION']),
   referenceEntityId: z.string().min(1),
-  payloadText: z.string().min(1), // Layout formatado para bobina 80mm / 48 colunas
+  payloadText: z.string().min(1),
   attempts: z.number().int().nonnegative().default(0),
   lastError: z.string().nullable().optional(),
+  isReprint: z.boolean().optional(),
+  copyNumber: z.number().int().positive().optional(),
+  reprintAuthorizedByUserId: z.string().nullable().optional(),
   createdAt: IsoDateTimeSchema,
+  updatedAt: IsoDateTimeSchema.optional(),
   printedAt: IsoDateTimeSchema.nullable().optional()
 });
 export type PrintJob = z.infer<typeof PrintJobSchema>;
+
+/**
+ * 5.4.1 TURNO DE CAIXA, SANGRIA, SUPRIMENTO E NOTIFICAÇÕES KDS/GARÇOM (SEÇÕES 14, 15, 16, 20)
+ */
+export const CashRegisterMovementTypeSchema = z.enum([
+  'SANGRIA',
+  'SUPRIMENTO',
+  'AUTHORIZED_OUTFLOW',
+  'MANUAL_INFLOW'
+]);
+export type CashRegisterMovementType = z.infer<typeof CashRegisterMovementTypeSchema>;
+
+export const CashRegisterMovementSchema = z.object({
+  id: UuidSchema,
+  sessionId: z.string().min(1),
+  movementType: CashRegisterMovementTypeSchema,
+  amountCents: z.number().int().positive(),
+  reason: z.string().min(2),
+  createdByUserId: z.string().min(1),
+  authorizedByUserId: z.string().nullable().optional(),
+  createdAt: IsoDateTimeSchema
+});
+export type CashRegisterMovement = z.infer<typeof CashRegisterMovementSchema>;
+
+export const CashRegisterSessionSchema = z.object({
+  id: z.string().min(1),
+  openedByUserId: z.string().min(1),
+  openedAt: IsoDateTimeSchema,
+  openingBalanceCents: z.number().int().nonnegative(),
+  closedByUserId: z.string().nullable().optional(),
+  closedAt: IsoDateTimeSchema.nullable().optional(),
+  expectedCashCents: z.number().int(),
+  countedCashCents: z.number().int().nullable().optional(),
+  differenceCents: z.number().int().nullable().optional(),
+  notes: z.string().nullable().optional(),
+  status: z.enum(['OPEN', 'CLOSED'])
+});
+export type CashRegisterSession = z.infer<typeof CashRegisterSessionSchema>;
+
+export const OperationalNotificationSchema = z.object({
+  id: UuidSchema,
+  cursorId: z.number().int().positive().optional(),
+  eventType: z.enum([
+    'TABLE_OPENED',
+    'TABLE_TRANSFERRED',
+    'TABLES_JOINED',
+    'TAB_ITEM_TRANSFERRED',
+    'ORDER_CREATED',
+    'ORDER_IN_PREP',
+    'ORDER_READY',
+    'ORDER_DELIVERED',
+    'ORDER_CANCELLED',
+    'BILL_REQUESTED',
+    'PAYMENT_CONFIRMED',
+    'PAYMENT_REFUNDED',
+    'TAB_CLOSED',
+    'PRINT_FAILED',
+    'CASH_MOVEMENT'
+  ]),
+  targetRole: RoleSchema.nullable().optional(),
+  targetUserId: z.string().nullable().optional(),
+  tableNumber: z.number().int().positive().nullable().optional(),
+  orderId: z.string().nullable().optional(),
+  tabId: z.string().nullable().optional(),
+  title: z.string(),
+  message: z.string(),
+  payloadJson: z.string().default('{}'),
+  acknowledgedByUserId: z.string().nullable().optional(),
+  acknowledgedAt: IsoDateTimeSchema.nullable().optional(),
+  createdAt: IsoDateTimeSchema
+});
+export type OperationalNotification = z.infer<typeof OperationalNotificationSchema>;
+
+export const KdsSlaConfigSchema = z.object({
+  warningThresholdMinutes: z.number().int().positive().default(10),
+  delayedThresholdMinutes: z.number().int().positive().default(20),
+  updatedAt: IsoDateTimeSchema
+});
+export type KdsSlaConfig = z.infer<typeof KdsSlaConfigSchema>;
 
 /**
  * 5.5 MOVIMENTAÇÃO DE ESTOQUE (StockMovement)
@@ -1394,6 +1584,29 @@ export function formatBrlCents(cents: number): string {
   return `R$ ${reais}`;
 }
 
+export function evaluateKdsOrderSla(
+  createdAtIso: string,
+  nowMs: number = Date.now(),
+  config?: { warningThresholdMinutes: number; delayedThresholdMinutes: number }
+): {
+  elapsedMinutes: number;
+  slaStatus: 'NORMAL' | 'WARNING' | 'DELAYED';
+} {
+  const createdMs = Date.parse(createdAtIso);
+  const elapsedMinutes = Number.isNaN(createdMs)
+    ? 0
+    : Math.max(0, Math.floor((nowMs - createdMs) / 60000));
+  const warnMin = config?.warningThresholdMinutes ?? 10;
+  const delayMin = config?.delayedThresholdMinutes ?? 20;
+  const slaStatus =
+    elapsedMinutes >= delayMin
+      ? 'DELAYED'
+      : elapsedMinutes >= warnMin
+        ? 'WARNING'
+        : 'NORMAL';
+  return { elapsedMinutes, slaStatus };
+}
+
 export function calculateTabTotals(params: {
   orders: Order[];
   serviceFeeEnabled: boolean;
@@ -1426,17 +1639,29 @@ export function calculateTabTotals(params: {
   };
 }
 
-export function buildEscPosProductionTicket(order: Order, tabCode?: string): string {
+export function buildEscPosProductionTicket(
+  order: Order,
+  tabCode?: string,
+  options?: { isReprint?: boolean; copyNumber?: number }
+): string {
   const lines: string[] = [
     '================================================',
     '            DECK 26 - PRODUCAO LOCAL            ',
-    '================================================',
+    '================================================'
+  ];
+
+  if (options?.isReprint || (options?.copyNumber && options.copyNumber > 1)) {
+    lines.push(`*** 2a VIA / REIMPRESSAO AUTORIZADA (COPIA #${options?.copyNumber ?? 2}) ***`);
+    lines.push('------------------------------------------------');
+  }
+
+  lines.push(
     `PEDIDO: ${order.id.slice(0, 8).toUpperCase()}   CANAL: ${order.channel}`,
     `COMANDA/MESA: ${tabCode ?? (order.tableNumber ? `MESA ${order.tableNumber}` : 'BALCAO')}`,
     `GARCOM: ${order.waiterName ?? 'OPERADOR PDV'}`,
     `HORA: ${new Date(order.createdAt).toLocaleTimeString('pt-BR')}`,
     '------------------------------------------------'
-  ];
+  );
 
   for (const item of order.items) {
     lines.push(`${item.quantity}x ${item.productName.toUpperCase()} [${item.prepStation}]`);

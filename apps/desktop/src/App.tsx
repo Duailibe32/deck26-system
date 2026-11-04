@@ -1,11 +1,17 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
+  BillSplitMode,
+  CashRegisterMovement,
+  CashRegisterSession,
   CatalogCategory,
   CatalogProduct,
   DECK26_INITIAL_CATEGORIES,
   DECK26_INITIAL_PRODUCTS,
   DiningTableQr,
+  DiscountType,
   HotelRoom,
+  KdsSlaConfig,
+  OperationalNotification,
   Order,
   OrderStatus,
   OutOfStockPolicy,
@@ -21,13 +27,34 @@ import {
   SyncOutboxEvent,
   SystemModuleId,
   Tab,
+  TablePhysicalStatus,
   UserRole,
   calculateGrossMarginPercent,
+  evaluateKdsOrderSla,
   formatBrlCents,
   hasPermission,
   resolveChannelPriceCents
 } from '@deck26/contracts';
 import { Deck26Logo, MenuPriceBadge } from '@deck26/ui';
+
+interface CashierOperationalSummary {
+  activeSession: CashRegisterSession | null;
+  recentSessions: CashRegisterSession[];
+  movements: CashRegisterMovement[];
+  financialSummary: {
+    registeredSalesCents: number;
+    actualReceivedTotalCents: number;
+    receivedByMethod: Record<PaymentMethod, number>;
+    totalChangeGivenCents: number;
+    totalRefundedCents: number;
+    totalDiscountsCents: number;
+    totalServiceFeesCents: number;
+    pendingReceivablesCents: number;
+    openTabsCount: number;
+    partiallyPaidTabsCount: number;
+    closedTabsCount: number;
+  };
+}
 
 interface ServerStateSnapshot {
   lanAddresses: string[];
@@ -58,6 +85,9 @@ interface ServerStateSnapshot {
   };
   hotelRooms: HotelRoom[];
   syncEvents: SyncOutboxEvent[];
+  notifications?: OperationalNotification[];
+  kdsSlaConfig?: KdsSlaConfig;
+  cashierSummary?: CashierOperationalSummary;
 }
 
 interface AuthSessionInfo {
@@ -197,6 +227,24 @@ export const DesktopApp: React.FC = () => {
   const [stockUnitCostReais, setStockUnitCostReais] = useState<string>('');
   const [stockReason, setStockReason] = useState<string>('Entrada de mercadoria cfe. nota de compra');
 
+  // Estados da Etapa 4: Gestão Visual de Mesas, KDS, Turno de Caixa e Operações de Comanda
+  const [tablesViewMode, setTablesViewMode] = useState<'GRID' | 'LIST'>('GRID');
+  const [tablesStatusFilter, setTablesStatusFilter] = useState<'ALL' | TablePhysicalStatus>('ALL');
+  const [tablesWaiterFilter, setTablesWaiterFilter] = useState<string>('ALL');
+  const [tablesSearch, setTablesSearch] = useState<string>('');
+  const [openTableGuests, setOpenTableGuests] = useState<number>(2);
+  const [transferFromTable, setTransferFromTable] = useState<number>(3);
+  const [transferToTable, setTransferToTable] = useState<number>(8);
+  const [joinPrimaryTable, setJoinPrimaryTable] = useState<number>(4);
+  const [joinAdditionalTable, setJoinAdditionalTable] = useState<number>(5);
+  const [kdsStationFilter, setKdsStationFilter] = useState<'ALL' | PrepStation>('ALL');
+  const [receivedCashInput, setReceivedCashInput] = useState<Record<string, string>>({});
+  const [cashShiftOpeningReais, setCashShiftOpeningReais] = useState<string>('200,00');
+  const [cashShiftMovementType, setCashShiftMovementType] = useState<'SANGRIA' | 'SUPRIMENTO'>('SANGRIA');
+  const [cashShiftMovementReais, setCashShiftMovementReais] = useState<string>('50,00');
+  const [cashShiftMovementReason, setCashShiftMovementReason] = useState<string>('Sangria para cofre');
+  const [cashShiftCountedReais, setCashShiftCountedReais] = useState<string>('');
+
   const activeRole: UserRole = authSession?.role ?? 'OWNER';
 
   function getAuthHeaders(): Record<string, string> {
@@ -249,7 +297,22 @@ export const DesktopApp: React.FC = () => {
     refreshState();
     authenticateWithPin('2626');
     const timer = setInterval(refreshState, 4000);
-    return () => clearInterval(timer);
+
+    // Conexão SSE em tempo real (Etapa 4 — Seção 16)
+    let eventSource: EventSource | null = null;
+    try {
+      eventSource = new EventSource(`${localApiBase}/api/events/stream`);
+      eventSource.addEventListener('operational_event', () => {
+        refreshState();
+      });
+    } catch {
+      // Fallback para polling caso SSE não esteja disponível
+    }
+
+    return () => {
+      clearInterval(timer);
+      if (eventSource) eventSource.close();
+    };
   }, [localApiBase]);
 
   useEffect(() => {
@@ -426,6 +489,11 @@ export const DesktopApp: React.FC = () => {
 
     const customStr = partialAmountsInput[tab.id];
     const amountCentsToPay = parseReaisToCents(customStr ?? '', remainingCents);
+    const cashStr = receivedCashInput[tab.id];
+    const receivedCashCents =
+      paymentMethod === 'CASH' && cashStr?.trim()
+        ? parseReaisToCents(cashStr, amountCentsToPay)
+        : amountCentsToPay;
 
     const res = await fetch(`${localApiBase}/api/payments`, {
       method: 'POST',
@@ -435,7 +503,7 @@ export const DesktopApp: React.FC = () => {
         tabId: tab.id,
         method: paymentMethod,
         amountCents: amountCentsToPay,
-        receivedCashCents: amountCentsToPay
+        receivedCashCents
       })
     });
 
@@ -446,11 +514,329 @@ export const DesktopApp: React.FC = () => {
     }
 
     setPartialAmountsInput((prev) => ({ ...prev, [tab.id]: '' }));
+    setReceivedCashInput((prev) => ({ ...prev, [tab.id]: '' }));
     await refreshState();
     const newRemaining = Math.max(0, data.tab.totalCents - data.tab.paidCents);
+    const changeMsg =
+      data.payment?.changeCents > 0 ? ` | Troco: ${formatBrlCents(data.payment.changeCents)}` : '';
     notify(
-      `Pagamento de ${formatBrlCents(amountCentsToPay)} (${paymentMethod}) confirmado para ${tab.code}. Status: ${data.tab.status} | Restante: ${formatBrlCents(newRemaining)}`
+      `Pagamento de ${formatBrlCents(amountCentsToPay)} (${paymentMethod}) confirmado para ${tab.code}${changeMsg}. Status: ${data.tab.status} | Restante: ${formatBrlCents(newRemaining)}`
     );
+  }
+
+  // =========================================================================
+  // HANDLERS DA ETAPA 4: MESAS, COMANDAS, GARÇONS, KDS E TURNO DE CAIXA
+  // =========================================================================
+
+  async function handleOpenTable(tableNum: number) {
+    const res = await fetch(`${localApiBase}/api/tables/open`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({
+        tableNumber: tableNum,
+        guestsCount: openTableGuests,
+        assignedWaiterId: authSession?.userId ?? 'usr-waiter-01',
+        assignedWaiterName: waiterName,
+        notes: `Abertura operacional Mesa ${String(tableNum).padStart(2, '0')}`
+      })
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      notify(data.error ?? 'Não foi possível abrir a mesa.');
+      return;
+    }
+    setSelectedTableNumber(tableNum);
+    await refreshState();
+    notify(
+      `Mesa ${String(tableNum).padStart(2, '0')} aberta (${openTableGuests} pessoas) • Comanda ${data.tab.code}`
+    );
+  }
+
+  async function handleUpdateTableStatus(tableNum: number, status: TablePhysicalStatus, reason: string) {
+    const res = await fetch(`${localApiBase}/api/tables/${tableNum}/status`, {
+      method: 'PATCH',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ physicalStatus: status, reason })
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      notify(data.error ?? 'Não foi possível alterar o estado físico da mesa.');
+      return;
+    }
+    await refreshState();
+    notify(`Mesa ${String(tableNum).padStart(2, '0')} atualizada para ${status}.`);
+  }
+
+  async function handleTransferTable(fromNum: number, toNum: number) {
+    const res = await fetch(`${localApiBase}/api/tables/transfer`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({
+        fromTableNumber: fromNum,
+        toTableNumber: toNum,
+        reason: `Transferência operacional da Mesa ${fromNum} para Mesa ${toNum}`
+      })
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      notify(data.error ?? 'Não foi possível transferir a mesa.');
+      return;
+    }
+    setSelectedTableNumber(toNum);
+    await refreshState();
+    notify(`Comanda ${data.tab.code} transferida da Mesa ${fromNum} para a Mesa ${toNum}.`);
+  }
+
+  async function handleJoinTables(primaryNum: number, additionalNum: number) {
+    const res = await fetch(`${localApiBase}/api/tables/join`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({
+        primaryTableNumber: primaryNum,
+        additionalTableNumbers: [additionalNum],
+        reason: `União de mesas ${primaryNum} + ${additionalNum}`
+      })
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      notify(data.error ?? 'Não foi possível unir as mesas.');
+      return;
+    }
+    await refreshState();
+    notify(`Mesas ${primaryNum} e ${additionalNum} unidas na Comanda ${data.tab.code}.`);
+  }
+
+  async function handleUnjoinTable(primaryNum: number, tableToSeparate: number) {
+    const res = await fetch(`${localApiBase}/api/tables/unjoin`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({
+        primaryTableNumber: primaryNum,
+        tableNumbersToSeparate: [tableToSeparate],
+        reason: `Separação operacional da Mesa ${tableToSeparate}`
+      })
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      notify(data.error ?? 'Não foi possível separar a mesa.');
+      return;
+    }
+    await refreshState();
+    notify(`Mesa ${tableToSeparate} desvinculada da Mesa ${primaryNum}.`);
+  }
+
+  async function handleRequestBill(tabId: string) {
+    const res = await fetch(`${localApiBase}/api/tabs/${tabId}/request-bill`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({ notes: 'Fechamento de conta solicitado pelo atendimento' })
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      notify(data.error ?? 'Não foi possível solicitar fechamento.');
+      return;
+    }
+    await refreshState();
+    notify(`Conta solicitada para ${data.tab.code} (AGUARDANDO_PAGAMENTO).`);
+  }
+
+  async function handleApplyDiscount(tabId: string, discountType: DiscountType, valueNum: number) {
+    const payload =
+      discountType === 'PERCENTAGE'
+        ? {
+            discountType: 'PERCENTAGE',
+            discountBasisPoints: valueNum,
+            discountReason: 'Desconto percentual gerencial autorizado'
+          }
+        : {
+            discountType,
+            discountCents: valueNum,
+            discountReason: 'Desconto em valor autorizado pela gerência'
+          };
+    const res = await fetch(`${localApiBase}/api/tabs/${tabId}/discount`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      notify(data.error ?? 'Permissão insuficiente ou valor inválido para desconto.');
+      return;
+    }
+    await refreshState();
+    notify(`Desconto aplicado na comanda ${data.tab.code}. Novo total: ${formatBrlCents(data.tab.totalCents)}.`);
+  }
+
+  async function handleToggleServiceFee(tab: Tab) {
+    const nextEnabled = !(tab.serviceFeeEnabled ?? true);
+    const res = await fetch(`${localApiBase}/api/tabs/${tab.id}/service-fee`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({
+        serviceFeeEnabled: nextEnabled,
+        serviceFeeBasisPoints: tab.serviceFeeBasisPoints ?? 1000,
+        reason: nextEnabled ? 'Reativação da taxa de serviço 10%' : 'Isenção da taxa de serviço 10% a pedido do cliente'
+      })
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      notify(data.error ?? 'Não foi possível alterar a taxa de serviço.');
+      return;
+    }
+    await refreshState();
+    notify(
+      `Taxa de serviço ${nextEnabled ? 'ativada (10%)' : 'removida (0%)'} em ${data.tab.code}. Total: ${formatBrlCents(data.tab.totalCents)}`
+    );
+  }
+
+  async function handleSplitTab(tab: Tab, mode: BillSplitMode, sharesCount: number) {
+    const res = await fetch(`${localApiBase}/api/tabs/${tab.id}/split`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({
+        mode,
+        sharesCount: Math.max(2, sharesCount)
+      })
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      notify(data.error ?? 'Não foi possível calcular a divisão da conta.');
+      return;
+    }
+    await refreshState();
+    const shareCents = data.splitSummary?.shareAmountCents;
+    if (typeof shareCents === 'number' && shareCents > 0) {
+      setPartialAmountsInput((prev) => ({
+        ...prev,
+        [tab.id]: (shareCents / 100).toFixed(2).replace('.', ',')
+      }));
+    }
+    notify(
+      `Conta ${tab.code} dividida em ${sharesCount} cotas (${typeof shareCents === 'number' ? formatBrlCents(shareCents) : ''} por pessoa preenchida no caixa).`
+    );
+  }
+
+  async function handleCloseTabAndReleaseTable(tabId: string, markForCleaning = false) {
+    const res = await fetch(`${localApiBase}/api/tabs/${tabId}/close`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({
+        markTableForCleaning: markForCleaning,
+        notes: 'Encerramento de comanda e liberação de mesa no Caixa'
+      })
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      notify(data.error ?? 'Não foi possível encerrar a comanda.');
+      return;
+    }
+    await refreshState();
+    notify(
+      `Comanda ${data.tab.code} encerrada! Mesa(s) liberada(s): ${(data.releasedTables ?? []).join(', ')}.`
+    );
+  }
+
+  async function handleRefundPayment(paymentId: string) {
+    const res = await fetch(`${localApiBase}/api/payments/${paymentId}/refund`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({
+        reason: 'Estorno operacional autorizado no Caixa PDV'
+      })
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      notify(data.error ?? 'Não foi possível estornar o pagamento.');
+      return;
+    }
+    await refreshState();
+    notify(`Pagamento estornado com sucesso! Saldo recalculado na comanda ${data.tab.code}.`);
+  }
+
+  async function handleOpenCashSession(e: React.FormEvent) {
+    e.preventDefault();
+    const openingCents = parseReaisToCents(cashShiftOpeningReais, 20000);
+    const res = await fetch(`${localApiBase}/api/cash-sessions/open`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({
+        openingBalanceCents: openingCents,
+        notes: 'Abertura de turno de caixa operacional'
+      })
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      notify(data.error ?? 'Não foi possível abrir o turno de caixa.');
+      return;
+    }
+    await refreshState();
+    notify(`Turno de Caixa aberto com troco inicial de ${formatBrlCents(openingCents)}.`);
+  }
+
+  async function handleRecordCashMovement(e: React.FormEvent) {
+    e.preventDefault();
+    const activeSessionId = snapshot.cashierSummary?.activeSession?.id;
+    if (!activeSessionId) {
+      notify('Abra um turno de caixa antes de registrar sangria ou suprimento.');
+      return;
+    }
+    const amountCents = parseReaisToCents(cashShiftMovementReais, 0);
+    const res = await fetch(`${localApiBase}/api/cash-sessions/movements`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({
+        sessionId: activeSessionId,
+        movementType: cashShiftMovementType,
+        amountCents,
+        reason: cashShiftMovementReason
+      })
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      notify(data.error ?? 'Falha ao registrar movimentação de caixa.');
+      return;
+    }
+    await refreshState();
+    notify(
+      `${cashShiftMovementType} de ${formatBrlCents(amountCents)} registrada no caixa. Saldo esperado em espécie: ${formatBrlCents(data.session.expectedCashCents)}`
+    );
+  }
+
+  async function handleCloseCashSession(e: React.FormEvent) {
+    e.preventDefault();
+    const activeSession = snapshot.cashierSummary?.activeSession;
+    if (!activeSession) return;
+    const countedCents = parseReaisToCents(
+      cashShiftCountedReais,
+      activeSession.expectedCashCents
+    );
+    const res = await fetch(`${localApiBase}/api/cash-sessions/close`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+      body: JSON.stringify({
+        sessionId: activeSession.id,
+        countedCashCents: countedCents,
+        notes: 'Fechamento e conferência de turno de caixa'
+      })
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      notify(data.error ?? 'Falha ao fechar turno de caixa.');
+      return;
+    }
+    setCashShiftCountedReais('');
+    await refreshState();
+    notify(
+      `Turno de Caixa encerrado! Esperado: ${formatBrlCents(data.cashSession.expectedCashCents)} | Contado: ${formatBrlCents(data.cashSession.countedCashCents)} | Diferença: ${formatBrlCents(data.cashSession.differenceCents)}`
+    );
+  }
+
+  async function handleAcknowledgeNotification(notificationId: string) {
+    await fetch(`${localApiBase}/api/notifications/${notificationId}/ack`, {
+      method: 'POST',
+      headers: getAuthHeaders()
+    });
+    await refreshState();
   }
 
   // Funções de Cadastro e Edição de Produtos (Seções 3, 4, 6)
@@ -2031,456 +2417,1157 @@ export const DesktopApp: React.FC = () => {
             MÓDULOS DE LANÇAMENTO DE PEDIDOS E CAIXA (PDV E GARÇONS)
            ===================================================================== */}
         {(activeModule === 'caixa-pdv' || activeModule === 'garcons') && (
-          <div className="d26-split-2">
-            <div className="d26-card">
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
-                <h2 style={{ fontSize: '1.05rem' }}>Catálogo Compartilhado — Lançamento Rápido</h2>
-                <input
-                  type="text"
-                  className="d26-input"
-                  style={{ width: '240px' }}
-                  placeholder="🔍 Buscar item ou SKU..."
-                  value={posSearchQuery}
-                  onChange={(e) => setPosSearchQuery(e.target.value)}
-                />
-              </div>
-
-              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '12px' }}>
-                <button
-                  className={`d26-btn ${selectedCategoryId === 'ALL' ? 'd26-btn-primary' : 'd26-btn-secondary'}`}
-                  style={{ padding: '5px 10px', fontSize: '0.76rem' }}
-                  onClick={() => setSelectedCategoryId('ALL')}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            {/* BANNER DE NOTIFICAÇÕES EM TEMPO REAL PARA O GARÇOM (ETAPA 4 — SEÇÃO 16) */}
+            {activeModule === 'garcons' &&
+              (snapshot.notifications ?? []).filter(
+                (n) => !n.acknowledgedAt && n.eventType === 'ORDER_READY'
+              ).length > 0 && (
+                <div
+                  className="d26-card"
+                  style={{
+                    borderLeft: '4px solid #34D399',
+                    background: 'rgba(16, 185, 129, 0.12)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '8px'
+                  }}
                 >
-                  Todos ({posActiveProducts.length})
-                </button>
-                {snapshot.catalog.categories
-                  .filter((c) => c.active)
-                  .map((cat) => (
-                    <button
-                      key={cat.id}
-                      className={`d26-btn ${selectedCategoryId === cat.id ? 'd26-btn-tertiary' : 'd26-btn-secondary'}`}
-                      style={{ padding: '5px 10px', fontSize: '0.76rem' }}
-                      onClick={() => setSelectedCategoryId(cat.id)}
-                    >
-                      {cat.name}
-                    </button>
-                  ))}
-              </div>
-
-              <div className="d26-product-grid">
-                {posActiveProducts.map((product) => {
-                  const effectiveCh: SalesChannel =
-                    activeModule === 'garcons' ? 'DINE_IN' : selectedChannel;
-                  const channelPrice = resolveChannelPriceCents(product, effectiveCh);
-                  const stockQty = stockBalanceByProductId.get(product.id) ?? 0;
-                  const outOfStockBlocked =
-                    product.trackStock &&
-                    product.outOfStockPolicy === 'BLOCK_SALE' &&
-                    stockQty <= 0;
-
-                  return (
-                    <div key={product.id} className="d26-product-card">
-                      <div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px' }}>
-                          <strong style={{ fontSize: '0.92rem' }}>{product.name}</strong>
-                          <MenuPriceBadge cents={channelPrice} />
+                  <strong style={{ color: '#34D399', fontSize: '0.92rem' }}>
+                    🔔 Avisos da Cozinha — Pedidos Prontos para Retirada
+                  </strong>
+                  {(snapshot.notifications ?? [])
+                    .filter((n) => !n.acknowledgedAt && n.eventType === 'ORDER_READY')
+                    .map((n) => (
+                      <div
+                        key={n.id}
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          background: 'var(--d26-black-900)',
+                          padding: '8px 12px',
+                          borderRadius: '8px'
+                        }}
+                      >
+                        <div>
+                          <strong>{n.title}</strong> — {n.message}
                         </div>
-                        <p style={{ fontSize: '0.75rem', color: 'var(--d26-gray-400)', marginTop: '4px' }}>
-                          {product.description}
-                        </p>
-                      </div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px' }}>
-                        <span className="d26-badge d26-badge-outline-purple" style={{ fontSize: '0.65rem' }}>
-                          {product.prepStation} • Est: {stockQty}
-                        </span>
-                        <button
-                          className="d26-btn d26-btn-primary"
-                          style={{ padding: '5px 12px', fontSize: '0.78rem' }}
-                          disabled={outOfStockBlocked}
-                          onClick={() => handleProductClickForPos(product)}
-                        >
-                          {outOfStockBlocked
-                            ? 'Esgotado'
-                            : product.modifierGroups.length > 0
-                              ? '+ Opções'
-                              : '+ Adicionar'}
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* COLUNA DIREITA: DISPARO DE PEDIDO INCREMENTAL E PAGAMENTO PARCIAL */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-              <div className="d26-card">
-                <h2 style={{ fontSize: '1.05rem', marginBottom: '12px' }}>
-                  Novo Pedido Incremental ({activeModule === 'garcons' ? 'Terminal Garçom' : 'Caixa / PDV Windows'})
-                </h2>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px', marginBottom: '12px' }}>
-                  <div>
-                    <label style={{ fontSize: '0.75rem', color: 'var(--d26-gray-300)' }}>Canal de Venda</label>
-                    <select
-                      className="d26-select"
-                      value={activeModule === 'garcons' ? 'DINE_IN' : selectedChannel}
-                      disabled={activeModule === 'garcons'}
-                      onChange={(e) => setSelectedChannel(e.target.value as SalesChannel)}
-                    >
-                      <option value="DINE_IN">Mesa / Salão</option>
-                      <option value="COUNTER_PDV">Balcão PDV</option>
-                      <option value="DELIVERY">Delivery</option>
-                      <option value="PICKUP">Retirada</option>
-                      <option value="HOTEL_ROOM">Consumo Hotel</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label style={{ fontSize: '0.75rem', color: 'var(--d26-gray-300)' }}>Mesa Destino</label>
-                    <input
-                      type="number"
-                      min={1}
-                      max={60}
-                      className="d26-input"
-                      value={selectedTableNumber}
-                      onChange={(e) => setSelectedTableNumber(Number(e.target.value) || 1)}
-                    />
-                  </div>
-                  <div>
-                    <label style={{ fontSize: '0.75rem', color: 'var(--d26-gray-300)' }}>Garçom / Operador</label>
-                    <select
-                      className="d26-select"
-                      value={waiterName}
-                      onChange={(e) => setWaiterName(e.target.value)}
-                    >
-                      <option value="Garçom 01 (Wi-Fi)">Garçom 01 (Wi-Fi)</option>
-                      <option value="Garçom 02 (Wi-Fi)">Garçom 02 (Wi-Fi)</option>
-                      <option value="Garçom 03 (Wi-Fi)">Garçom 03 (Wi-Fi)</option>
-                      <option value="Garçom 04 (Wi-Fi)">Garçom 04 (Wi-Fi)</option>
-                      <option value="Garçom 05 (Wi-Fi)">Garçom 05 (Wi-Fi)</option>
-                      <option value="Operador Caixa Windows">Operador Caixa Windows</option>
-                    </select>
-                  </div>
-                </div>
-
-                {cart.length === 0 ? (
-                  <p style={{ color: 'var(--d26-gray-400)', fontSize: '0.84rem', padding: '12px 0' }}>
-                    Selecione itens do cardápio ao lado para compor o pedido da Mesa {selectedTableNumber}.
-                  </p>
-                ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '14px' }}>
-                    {cart.map((item) => {
-                      const effectiveCh: SalesChannel =
-                        activeModule === 'garcons' ? 'DINE_IN' : selectedChannel;
-                      const unitCents = resolveChannelPriceCents(item.product, effectiveCh);
-                      const modCents = item.modifiers.reduce((a, m) => a + m.priceDeltaCents, 0);
-                      const lineTotal = (unitCents + modCents) * item.quantity;
-                      return (
-                        <div
-                          key={item.cartItemId}
-                          style={{
-                            display: 'flex',
-                            justifyContent: 'space-between',
-                            alignItems: 'center',
-                            background: 'var(--d26-black-900)',
-                            padding: '8px 12px',
-                            borderRadius: '8px'
-                          }}
-                        >
-                          <div>
-                            <strong>
-                              {item.quantity}x {item.product.name}
-                            </strong>
-                            {item.modifiers.length > 0 && (
-                              <div style={{ fontSize: '0.73rem', color: '#FFAFCC' }}>
-                                + {item.modifiers.map((m) => m.optionName).join(', ')}
-                              </div>
-                            )}
-                            {item.notes && (
-                              <div style={{ fontSize: '0.72rem', color: '#D8B4FE' }}>
-                                Obs: {item.notes}
-                              </div>
-                            )}
-                            <div style={{ fontSize: '0.75rem', color: 'var(--d26-gray-400)' }}>
-                              {formatBrlCents(lineTotal)}
-                            </div>
-                          </div>
+                        <div style={{ display: 'flex', gap: '6px' }}>
+                          {n.orderId && (
+                            <button
+                              className="d26-btn d26-btn-primary"
+                              style={{ padding: '4px 10px', fontSize: '0.75rem' }}
+                              onClick={async () => {
+                                await handleAdvanceOrder(n.orderId!, 'DELIVERED');
+                                await handleAcknowledgeNotification(n.id);
+                              }}
+                            >
+                              ✓ Confirmar Entrega na Mesa
+                            </button>
+                          )}
                           <button
                             className="d26-btn d26-btn-secondary"
-                            style={{ padding: '4px 8px', fontSize: '0.75rem' }}
-                            onClick={() =>
-                              setCart((prev) => prev.filter((p) => p.cartItemId !== item.cartItemId))
-                            }
+                            style={{ padding: '4px 10px', fontSize: '0.75rem' }}
+                            onClick={() => handleAcknowledgeNotification(n.id)}
                           >
-                            Remover
+                            Ciente
                           </button>
                         </div>
-                      );
-                    })}
-                  </div>
-                )}
+                      </div>
+                    ))}
+                </div>
+              )}
 
+            {/* RESUMO OPERACIONAL E TURNO DE CAIXA (ETAPA 4 — SEÇÕES 19 E 20) */}
+            {activeModule === 'caixa-pdv' && snapshot.cashierSummary && (
+              <div className="d26-card" style={{ borderLeft: '4px solid #F72585' }}>
                 <div
                   style={{
                     display: 'flex',
                     justifyContent: 'space-between',
                     alignItems: 'center',
-                    borderTop: 'var(--d26-border-subtle)',
-                    paddingTop: '12px'
+                    marginBottom: '12px',
+                    flexWrap: 'wrap',
+                    gap: '8px'
                   }}
                 >
-                  <div>
-                    <span style={{ fontSize: '0.75rem', color: 'var(--d26-gray-400)' }}>
-                      Total deste Pedido:
-                    </span>
-                    <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#F72585' }}>
+                  <h2 style={{ fontSize: '1rem' }}>
+                    Controle de Turno de Caixa, Sangria, Suprimento e Conciliação Financeira
+                  </h2>
+                  <span
+                    className={`d26-badge ${
+                      snapshot.cashierSummary.activeSession ? 'd26-badge-success' : 'd26-badge-warning'
+                    }`}
+                  >
+                    {snapshot.cashierSummary.activeSession
+                      ? `Turno Aberto (${snapshot.cashierSummary.activeSession.openedByUserId})`
+                      : 'Caixa Fechado'}
+                  </span>
+                </div>
+
+                <div
+                  style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(155px, 1fr))',
+                    gap: '10px',
+                    marginBottom: '12px'
+                  }}
+                >
+                  <div style={{ background: 'var(--d26-black-900)', padding: '10px', borderRadius: '8px' }}>
+                    <div style={{ fontSize: '0.72rem', color: 'var(--d26-gray-400)' }}>
+                      Vendas Registradas
+                    </div>
+                    <strong style={{ fontSize: '1.05rem', color: '#F72585' }}>
+                      {formatBrlCents(snapshot.cashierSummary.financialSummary.registeredSalesCents)}
+                    </strong>
+                  </div>
+                  <div style={{ background: 'var(--d26-black-900)', padding: '10px', borderRadius: '8px' }}>
+                    <div style={{ fontSize: '0.72rem', color: 'var(--d26-gray-400)' }}>
+                      Recebido Líquido
+                    </div>
+                    <strong style={{ fontSize: '1.05rem', color: '#34D399' }}>
+                      {formatBrlCents(snapshot.cashierSummary.financialSummary.actualReceivedTotalCents)}
+                    </strong>
+                  </div>
+                  <div style={{ background: 'var(--d26-black-900)', padding: '10px', borderRadius: '8px' }}>
+                    <div style={{ fontSize: '0.72rem', color: 'var(--d26-gray-400)' }}>
+                      Saldo Espécie na Gaveta
+                    </div>
+                    <strong style={{ fontSize: '1.05rem', color: '#FFAFCC' }}>
                       {formatBrlCents(
-                        cart.reduce((acc, c) => {
-                          const effectiveCh: SalesChannel =
-                            activeModule === 'garcons' ? 'DINE_IN' : selectedChannel;
-                          const u = resolveChannelPriceCents(c.product, effectiveCh);
-                          const m = c.modifiers.reduce((s, mod) => s + mod.priceDeltaCents, 0);
-                          return acc + (u + m) * c.quantity;
-                        }, 0)
+                        snapshot.cashierSummary.activeSession?.expectedCashCents ?? 0
                       )}
+                    </strong>
+                  </div>
+                  <div style={{ background: 'var(--d26-black-900)', padding: '10px', borderRadius: '8px' }}>
+                    <div style={{ fontSize: '0.72rem', color: 'var(--d26-gray-400)' }}>
+                      Pendente em Comandas
+                    </div>
+                    <strong style={{ fontSize: '1.05rem', color: '#FBBF24' }}>
+                      {formatBrlCents(snapshot.cashierSummary.financialSummary.pendingReceivablesCents)}
+                    </strong>
+                  </div>
+                  <div style={{ background: 'var(--d26-black-900)', padding: '10px', borderRadius: '8px' }}>
+                    <div style={{ fontSize: '0.72rem', color: 'var(--d26-gray-400)' }}>
+                      Descontos / Estornos
+                    </div>
+                    <strong style={{ fontSize: '0.92rem' }}>
+                      {formatBrlCents(snapshot.cashierSummary.financialSummary.totalDiscountsCents)} /{' '}
+                      {formatBrlCents(snapshot.cashierSummary.financialSummary.totalRefundedCents)}
+                    </strong>
+                  </div>
+                </div>
+
+                {!snapshot.cashierSummary.activeSession ? (
+                  <form
+                    onSubmit={handleOpenCashSession}
+                    style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}
+                  >
+                    <input
+                      type="text"
+                      className="d26-input"
+                      style={{ width: '180px' }}
+                      placeholder="Troco inicial (R$)"
+                      value={cashShiftOpeningReais}
+                      onChange={(e) => setCashShiftOpeningReais(e.target.value)}
+                    />
+                    <button type="submit" className="d26-btn d26-btn-primary">
+                      Abrir Turno de Caixa
+                    </button>
+                  </form>
+                ) : (
+                  <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', alignItems: 'center' }}>
+                    <form
+                      onSubmit={handleRecordCashMovement}
+                      style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}
+                    >
+                      <select
+                        className="d26-select"
+                        style={{ width: '145px' }}
+                        value={cashShiftMovementType}
+                        onChange={(e) =>
+                          setCashShiftMovementType(e.target.value as 'SANGRIA' | 'SUPRIMENTO')
+                        }
+                      >
+                        <option value="SANGRIA">Sangria (-)</option>
+                        <option value="SUPRIMENTO">Suprimento (+)</option>
+                      </select>
+                      <input
+                        type="text"
+                        className="d26-input"
+                        style={{ width: '110px' }}
+                        placeholder="Valor R$"
+                        value={cashShiftMovementReais}
+                        onChange={(e) => setCashShiftMovementReais(e.target.value)}
+                      />
+                      <input
+                        type="text"
+                        className="d26-input"
+                        style={{ width: '200px' }}
+                        placeholder="Motivo auditável"
+                        value={cashShiftMovementReason}
+                        onChange={(e) => setCashShiftMovementReason(e.target.value)}
+                      />
+                      <button type="submit" className="d26-btn d26-btn-secondary">
+                        Registrar Movimento
+                      </button>
+                    </form>
+
+                    <form
+                      onSubmit={handleCloseCashSession}
+                      style={{ display: 'flex', gap: '8px', alignItems: 'center', marginLeft: 'auto' }}
+                    >
+                      <input
+                        type="text"
+                        className="d26-input"
+                        style={{ width: '165px' }}
+                        placeholder="Espécie contado (R$)"
+                        value={cashShiftCountedReais}
+                        onChange={(e) => setCashShiftCountedReais(e.target.value)}
+                      />
+                      <button type="submit" className="d26-btn d26-btn-tertiary">
+                        Fechar Turno de Caixa
+                      </button>
+                    </form>
+                  </div>
+                )}
+              </div>
+            )}
+
+            <div className="d26-split-2">
+              <div className="d26-card">
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
+                  <h2 style={{ fontSize: '1.05rem' }}>Catálogo Compartilhado — Lançamento Rápido</h2>
+                  <input
+                    type="text"
+                    className="d26-input"
+                    style={{ width: '240px' }}
+                    placeholder="🔍 Buscar item ou SKU..."
+                    value={posSearchQuery}
+                    onChange={(e) => setPosSearchQuery(e.target.value)}
+                  />
+                </div>
+
+                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '12px' }}>
+                  <button
+                    className={`d26-btn ${selectedCategoryId === 'ALL' ? 'd26-btn-primary' : 'd26-btn-secondary'}`}
+                    style={{ padding: '5px 10px', fontSize: '0.76rem' }}
+                    onClick={() => setSelectedCategoryId('ALL')}
+                  >
+                    Todos ({posActiveProducts.length})
+                  </button>
+                  {snapshot.catalog.categories
+                    .filter((c) => c.active)
+                    .map((cat) => (
+                      <button
+                        key={cat.id}
+                        className={`d26-btn ${selectedCategoryId === cat.id ? 'd26-btn-tertiary' : 'd26-btn-secondary'}`}
+                        style={{ padding: '5px 10px', fontSize: '0.76rem' }}
+                        onClick={() => setSelectedCategoryId(cat.id)}
+                      >
+                        {cat.name}
+                      </button>
+                    ))}
+                </div>
+
+                <div className="d26-product-grid">
+                  {posActiveProducts.map((product) => {
+                    const effectiveCh: SalesChannel =
+                      activeModule === 'garcons' ? 'DINE_IN' : selectedChannel;
+                    const channelPrice = resolveChannelPriceCents(product, effectiveCh);
+                    const stockQty = stockBalanceByProductId.get(product.id) ?? 0;
+                    const outOfStockBlocked =
+                      product.trackStock &&
+                      product.outOfStockPolicy === 'BLOCK_SALE' &&
+                      stockQty <= 0;
+
+                    return (
+                      <div key={product.id} className="d26-product-card">
+                        <div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px' }}>
+                            <strong style={{ fontSize: '0.92rem' }}>{product.name}</strong>
+                            <MenuPriceBadge cents={channelPrice} />
+                          </div>
+                          <p style={{ fontSize: '0.75rem', color: 'var(--d26-gray-400)', marginTop: '4px' }}>
+                            {product.description}
+                          </p>
+                        </div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px' }}>
+                          <span className="d26-badge d26-badge-outline-purple" style={{ fontSize: '0.65rem' }}>
+                            {product.prepStation} • Est: {stockQty}
+                          </span>
+                          <button
+                            className="d26-btn d26-btn-primary"
+                            style={{ padding: '5px 12px', fontSize: '0.78rem' }}
+                            disabled={outOfStockBlocked}
+                            onClick={() => handleProductClickForPos(product)}
+                          >
+                            {outOfStockBlocked
+                              ? 'Esgotado'
+                              : product.modifierGroups.length > 0
+                                ? '+ Opções'
+                                : '+ Adicionar'}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* COLUNA DIREITA: DISPARO DE PEDIDO INCREMENTAL E PAGAMENTO PARCIAL */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                <div className="d26-card">
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
+                    <h2 style={{ fontSize: '1.05rem' }}>
+                      Novo Pedido Incremental ({activeModule === 'garcons' ? 'Terminal Garçom' : 'Caixa / PDV Windows'})
+                    </h2>
+                    <div style={{ display: 'flex', gap: '6px' }}>
+                      <button
+                        className="d26-btn d26-btn-secondary"
+                        style={{ padding: '4px 10px', fontSize: '0.74rem' }}
+                        onClick={() => handleOpenTable(selectedTableNumber)}
+                      >
+                        + Abrir Mesa {String(selectedTableNumber).padStart(2, '0')}
+                      </button>
                     </div>
                   </div>
-                  <button
-                    className="d26-btn d26-btn-primary"
-                    disabled={cart.length === 0}
-                    onClick={() =>
-                      submitOrder(activeModule === 'garcons' ? 'WAITER_MOBILE' : 'WINDOWS_PDV')
-                    }
-                  >
-                    Disparar Pedido Incremental
-                  </button>
-                </div>
-              </div>
-
-              {/* CONSULTA DE PEDIDOS ANTERIORES DA MESA SELECIONADA (SEÇÃO 13) */}
-              <div className="d26-card">
-                <h3 style={{ fontSize: '0.94rem', marginBottom: '8px' }}>
-                  Histórico da Mesa {selectedTableNumber} neste Turno
-                </h3>
-                {snapshot.orders.filter((o) => o.tableNumber === selectedTableNumber).length === 0 ? (
-                  <p style={{ fontSize: '0.78rem', color: 'var(--d26-gray-400)' }}>
-                    Nenhum pedido lançado para a Mesa {selectedTableNumber} ainda.
-                  </p>
-                ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    {snapshot.orders
-                      .filter((o) => o.tableNumber === selectedTableNumber)
-                      .map((ord) => (
-                        <div
-                          key={ord.id}
-                          style={{
-                            fontSize: '0.78rem',
-                            padding: '6px 10px',
-                            background: 'var(--d26-black-900)',
-                            borderRadius: '6px',
-                            display: 'flex',
-                            justifyContent: 'space-between'
-                          }}
-                        >
-                          <span>
-                            <strong>#{ord.id.slice(0, 6)}</strong>:{' '}
-                            {ord.items.map((i) => `${i.quantity}x ${i.productName}`).join(', ')}
-                          </span>
-                          <span className="d26-badge d26-badge-outline-purple">{ord.status}</span>
-                        </div>
-                      ))}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px', marginBottom: '12px' }}>
+                    <div>
+                      <label style={{ fontSize: '0.75rem', color: 'var(--d26-gray-300)' }}>Canal de Venda</label>
+                      <select
+                        className="d26-select"
+                        value={activeModule === 'garcons' ? 'DINE_IN' : selectedChannel}
+                        disabled={activeModule === 'garcons'}
+                        onChange={(e) => setSelectedChannel(e.target.value as SalesChannel)}
+                      >
+                        <option value="DINE_IN">Mesa / Salão</option>
+                        <option value="COUNTER_PDV">Balcão PDV</option>
+                        <option value="DELIVERY">Delivery</option>
+                        <option value="PICKUP">Retirada</option>
+                        <option value="HOTEL_ROOM">Consumo Hotel</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '0.75rem', color: 'var(--d26-gray-300)' }}>Mesa Destino</label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={60}
+                        className="d26-input"
+                        value={selectedTableNumber}
+                        onChange={(e) => setSelectedTableNumber(Number(e.target.value) || 1)}
+                      />
+                    </div>
+                    <div>
+                      <label style={{ fontSize: '0.75rem', color: 'var(--d26-gray-300)' }}>Garçom / Operador</label>
+                      <select
+                        className="d26-select"
+                        value={waiterName}
+                        onChange={(e) => setWaiterName(e.target.value)}
+                      >
+                        <option value="Garçom 01 (Wi-Fi)">Garçom 01 (Wi-Fi)</option>
+                        <option value="Garçom 02 (Wi-Fi)">Garçom 02 (Wi-Fi)</option>
+                        <option value="Garçom 03 (Wi-Fi)">Garçom 03 (Wi-Fi)</option>
+                        <option value="Garçom 04 (Wi-Fi)">Garçom 04 (Wi-Fi)</option>
+                        <option value="Garçom 05 (Wi-Fi)">Garçom 05 (Wi-Fi)</option>
+                        <option value="Operador Caixa Windows">Operador Caixa Windows</option>
+                      </select>
+                    </div>
                   </div>
-                )}
-              </div>
 
-              {/* LIQUIDAÇÃO PARCIAL OU TOTAL DE COMANDAS ABERTAS NO CAIXA */}
-              <div className="d26-card">
-                <h3 style={{ fontSize: '0.96rem', marginBottom: '6px' }}>
-                  Recebimento Parcial ou Total de Comandas (Caixa)
-                </h3>
-                <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
-                  <select
-                    className="d26-select"
-                    value={paymentMethod}
-                    onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod)}
-                  >
-                    <option value="PIX">Método: PIX</option>
-                    <option value="CASH">Método: Dinheiro em Espécie</option>
-                    <option value="DEBIT_CARD">Método: Cartão de Débito</option>
-                    <option value="CREDIT_CARD">Método: Cartão de Crédito</option>
-                    <option value="ROOM_CHARGE">Método: Transferir p/ Quarto Hotel Milla</option>
-                  </select>
-                </div>
-
-                {openTabs.length === 0 ? (
-                  <p style={{ fontSize: '0.82rem', color: 'var(--d26-gray-400)' }}>
-                    Nenhuma comanda aberta no momento.
-                  </p>
-                ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                    {openTabs.map((t) => {
-                      const remaining = Math.max(0, t.totalCents - t.paidCents);
-                      return (
-                        <div
-                          key={t.id}
-                          style={{
-                            display: 'flex',
-                            flexDirection: 'column',
-                            gap: '8px',
-                            padding: '12px',
-                            background: 'var(--d26-black-900)',
-                            borderRadius: '10px',
-                            border: '1px solid rgba(114, 9, 183, 0.45)'
-                          }}
-                        >
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  {cart.length === 0 ? (
+                    <p style={{ color: 'var(--d26-gray-400)', fontSize: '0.84rem', padding: '12px 0' }}>
+                      Selecione itens do cardápio ao lado para compor o pedido da Mesa {selectedTableNumber}.
+                    </p>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '14px' }}>
+                      {cart.map((item) => {
+                        const effectiveCh: SalesChannel =
+                          activeModule === 'garcons' ? 'DINE_IN' : selectedChannel;
+                        const unitCents = resolveChannelPriceCents(item.product, effectiveCh);
+                        const modCents = item.modifiers.reduce((a, m) => a + m.priceDeltaCents, 0);
+                        const lineTotal = (unitCents + modCents) * item.quantity;
+                        return (
+                          <div
+                            key={item.cartItemId}
+                            style={{
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              alignItems: 'center',
+                              background: 'var(--d26-black-900)',
+                              padding: '8px 12px',
+                              borderRadius: '8px'
+                            }}
+                          >
                             <div>
-                              <strong>{t.code}</strong>{' '}
-                              <span className="d26-badge d26-badge-outline-purple">{t.status}</span>
+                              <strong>
+                                {item.quantity}x {item.product.name}
+                              </strong>
+                              {item.modifiers.length > 0 && (
+                                <div style={{ fontSize: '0.73rem', color: '#FFAFCC' }}>
+                                  + {item.modifiers.map((m) => m.optionName).join(', ')}
+                                </div>
+                              )}
+                              {item.notes && (
+                                <div style={{ fontSize: '0.72rem', color: '#D8B4FE' }}>
+                                  Obs: {item.notes}
+                                </div>
+                              )}
+                              <div style={{ fontSize: '0.75rem', color: 'var(--d26-gray-400)' }}>
+                                {formatBrlCents(lineTotal)}
+                              </div>
                             </div>
-                            <span style={{ fontSize: '0.8rem', color: '#34D399' }}>
-                              Já Pago: {formatBrlCents(t.paidCents)}
-                            </span>
-                          </div>
-
-                          <div style={{ fontSize: '0.78rem', color: 'var(--d26-gray-300)' }}>
-                            Subtotal: {formatBrlCents(t.subtotalCents)} | Taxa 10%:{' '}
-                            {formatBrlCents(t.serviceFeeCents)} | Total:{' '}
-                            <strong>{formatBrlCents(t.totalCents)}</strong> |{' '}
-                            <strong style={{ color: '#F72585' }}>
-                              Falta Pagar: {formatBrlCents(remaining)}
-                            </strong>
-                          </div>
-
-                          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                            <input
-                              type="text"
-                              className="d26-input"
-                              placeholder={`Valor em R$ (ex: ${(remaining / 100).toFixed(2).replace('.', ',')})`}
-                              value={partialAmountsInput[t.id] ?? ''}
-                              onChange={(e) =>
-                                setPartialAmountsInput((prev) => ({
-                                  ...prev,
-                                  [t.id]: e.target.value
-                                }))
-                              }
-                            />
                             <button
-                              className="d26-btn d26-btn-primary"
-                              style={{ whiteSpace: 'nowrap' }}
-                              onClick={() => handleSettleTab(t)}
+                              className="d26-btn d26-btn-secondary"
+                              style={{ padding: '4px 8px', fontSize: '0.75rem' }}
+                              onClick={() =>
+                                setCart((prev) => prev.filter((p) => p.cartItemId !== item.cartItemId))
+                              }
                             >
-                              Confirmar Recebimento
+                              Remover
                             </button>
                           </div>
-                        </div>
-                      );
-                    })}
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      borderTop: 'var(--d26-border-subtle)',
+                      paddingTop: '12px'
+                    }}
+                  >
+                    <div>
+                      <span style={{ fontSize: '0.75rem', color: 'var(--d26-gray-400)' }}>
+                        Total deste Pedido:
+                      </span>
+                      <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#F72585' }}>
+                        {formatBrlCents(
+                          cart.reduce((acc, c) => {
+                            const effectiveCh: SalesChannel =
+                              activeModule === 'garcons' ? 'DINE_IN' : selectedChannel;
+                            const u = resolveChannelPriceCents(c.product, effectiveCh);
+                            const m = c.modifiers.reduce((s, mod) => s + mod.priceDeltaCents, 0);
+                            return acc + (u + m) * c.quantity;
+                          }, 0)
+                        )}
+                      </div>
+                    </div>
+                    <button
+                      className="d26-btn d26-btn-primary"
+                      disabled={cart.length === 0}
+                      onClick={() =>
+                        submitOrder(activeModule === 'garcons' ? 'WAITER_MOBILE' : 'WINDOWS_PDV')
+                      }
+                    >
+                      Disparar Pedido Incremental
+                    </button>
                   </div>
-                )}
+                </div>
+
+                {/* CONSULTA DE PEDIDOS ANTERIORES DA MESA SELECIONADA (SEÇÃO 13) */}
+                <div className="d26-card">
+                  <h3 style={{ fontSize: '0.94rem', marginBottom: '8px' }}>
+                    Histórico da Mesa {selectedTableNumber} neste Turno
+                  </h3>
+                  {snapshot.orders.filter((o) => o.tableNumber === selectedTableNumber).length === 0 ? (
+                    <p style={{ fontSize: '0.78rem', color: 'var(--d26-gray-400)' }}>
+                      Nenhum pedido lançado para a Mesa {selectedTableNumber} ainda.
+                    </p>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      {snapshot.orders
+                        .filter((o) => o.tableNumber === selectedTableNumber)
+                        .map((ord) => (
+                          <div
+                            key={ord.id}
+                            style={{
+                              fontSize: '0.78rem',
+                              padding: '6px 10px',
+                              background: 'var(--d26-black-900)',
+                              borderRadius: '6px',
+                              display: 'flex',
+                              justifyContent: 'space-between'
+                            }}
+                          >
+                            <span>
+                              <strong>#{ord.id.slice(0, 6)}</strong>:{' '}
+                              {ord.items.map((i) => `${i.quantity}x ${i.productName}`).join(', ')}
+                            </span>
+                            <span className="d26-badge d26-badge-outline-purple">{ord.status}</span>
+                          </div>
+                        ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* LIQUIDAÇÃO PARCIAL OU TOTAL, DIVISÃO, DESCONTO E LIBERAÇÃO DE COMANDAS */}
+                <div className="d26-card">
+                  <h3 style={{ fontSize: '0.96rem', marginBottom: '6px' }}>
+                    Comandas Abertas — Divisão, Desconto, Pagamento Parcial/Misto e Liberação
+                  </h3>
+                  <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
+                    <select
+                      className="d26-select"
+                      value={paymentMethod}
+                      onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod)}
+                    >
+                      <option value="PIX">Método: PIX</option>
+                      <option value="CASH">Método: Dinheiro em Espécie (Calcula Troco)</option>
+                      <option value="DEBIT_CARD">Método: Cartão de Débito</option>
+                      <option value="CREDIT_CARD">Método: Cartão de Crédito</option>
+                      <option value="ROOM_CHARGE">Método: Transferir p/ Quarto Hotel Milla</option>
+                    </select>
+                  </div>
+
+                  {openTabs.length === 0 ? (
+                    <p style={{ fontSize: '0.82rem', color: 'var(--d26-gray-400)' }}>
+                      Nenhuma comanda aberta no momento.
+                    </p>
+                  ) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                      {openTabs.map((t) => {
+                        const remaining = Math.max(0, t.totalCents - t.paidCents);
+                        const tabPayments = snapshot.payments.filter(
+                          (p) => p.tabId === t.id && p.status === 'CONFIRMED'
+                        );
+                        return (
+                          <div
+                            key={t.id}
+                            style={{
+                              display: 'flex',
+                              flexDirection: 'column',
+                              gap: '8px',
+                              padding: '12px',
+                              background: 'var(--d26-black-900)',
+                              borderRadius: '10px',
+                              border: '1px solid rgba(114, 9, 183, 0.45)'
+                            }}
+                          >
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '6px' }}>
+                              <div>
+                                <strong>{t.code}</strong>{' '}
+                                <span className="d26-badge d26-badge-outline-purple">{t.status}</span>
+                                {t.joinedTables && t.joinedTables.length > 1 && (
+                                  <span className="d26-badge d26-badge-pink" style={{ marginLeft: '6px' }}>
+                                    Mesas Unidas: {t.joinedTables.join(', ')}
+                                  </span>
+                                )}
+                              </div>
+                              <span style={{ fontSize: '0.8rem', color: '#34D399' }}>
+                                Já Pago: {formatBrlCents(t.paidCents)}
+                              </span>
+                            </div>
+
+                            <div style={{ fontSize: '0.78rem', color: 'var(--d26-gray-300)' }}>
+                              Subtotal: {formatBrlCents(t.subtotalCents)} | Desconto:{' '}
+                              {formatBrlCents(t.discountCents ?? 0)} | Taxa 10%:{' '}
+                              {formatBrlCents(t.serviceFeeCents)} | Total:{' '}
+                              <strong>{formatBrlCents(t.totalCents)}</strong> |{' '}
+                              <strong style={{ color: '#F72585' }}>
+                                Falta Pagar: {formatBrlCents(remaining)}
+                              </strong>
+                            </div>
+
+                            {/* AÇÕES OPERACIONAIS DA COMANDA (DIVISÃO, CONTA, TAXA 10%, DESCONTO) */}
+                            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                              <button
+                                className="d26-btn d26-btn-secondary"
+                                style={{ padding: '3px 8px', fontSize: '0.72rem' }}
+                                onClick={() => handleRequestBill(t.id)}
+                              >
+                                Pedir Conta
+                              </button>
+                              <button
+                                className="d26-btn d26-btn-secondary"
+                                style={{ padding: '3px 8px', fontSize: '0.72rem' }}
+                                onClick={() => handleSplitTab(t, 'EQUAL_SHARES', Math.max(2, t.guestsCount || 2))}
+                              >
+                                Dividir Igual ({Math.max(2, t.guestsCount || 2)} pessoas)
+                              </button>
+                              <button
+                                className="d26-btn d26-btn-secondary"
+                                style={{ padding: '3px 8px', fontSize: '0.72rem' }}
+                                onClick={() => handleToggleServiceFee(t)}
+                              >
+                                {(t.serviceFeeEnabled ?? true) ? 'Isentar Taxa 10%' : 'Ativar Taxa 10%'}
+                              </button>
+                              <button
+                                className="d26-btn d26-btn-secondary"
+                                style={{ padding: '3px 8px', fontSize: '0.72rem' }}
+                                onClick={() => handleApplyDiscount(t.id, 'PERCENTAGE', 1000)}
+                              >
+                                Desconto 10%
+                              </button>
+                            </div>
+
+                            {remaining > 0 ? (
+                              <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                                <input
+                                  type="text"
+                                  className="d26-input"
+                                  style={{ flex: 1, minWidth: '140px' }}
+                                  placeholder={`Valor em R$ (ex: ${(remaining / 100).toFixed(2).replace('.', ',')})`}
+                                  value={partialAmountsInput[t.id] ?? ''}
+                                  onChange={(e) =>
+                                    setPartialAmountsInput((prev) => ({
+                                      ...prev,
+                                      [t.id]: e.target.value
+                                    }))
+                                  }
+                                />
+                                {paymentMethod === 'CASH' && (
+                                  <input
+                                    type="text"
+                                    className="d26-input"
+                                    style={{ width: '145px' }}
+                                    placeholder="Recebido R$ (Troco)"
+                                    value={receivedCashInput[t.id] ?? ''}
+                                    onChange={(e) =>
+                                      setReceivedCashInput((prev) => ({
+                                        ...prev,
+                                        [t.id]: e.target.value
+                                      }))
+                                    }
+                                  />
+                                )}
+                                <button
+                                  className="d26-btn d26-btn-primary"
+                                  style={{ whiteSpace: 'nowrap' }}
+                                  onClick={() => handleSettleTab(t)}
+                                >
+                                  Confirmar Recebimento
+                                </button>
+                              </div>
+                            ) : (
+                              <div style={{ display: 'flex', gap: '8px' }}>
+                                <button
+                                  className="d26-btn d26-btn-primary"
+                                  style={{ flex: 1 }}
+                                  onClick={() => handleCloseTabAndReleaseTable(t.id, false)}
+                                >
+                                  ✓ Encerrar Comanda e Liberar Mesa (LIVRE)
+                                </button>
+                                <button
+                                  className="d26-btn d26-btn-secondary"
+                                  onClick={() => handleCloseTabAndReleaseTable(t.id, true)}
+                                >
+                                  Enviar p/ Limpeza
+                                </button>
+                              </div>
+                            )}
+
+                            {tabPayments.length > 0 && (
+                              <div style={{ fontSize: '0.73rem', color: 'var(--d26-gray-400)', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                {tabPayments.map((pay) => (
+                                  <div key={pay.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                    <span>
+                                      • {pay.method}: {formatBrlCents(pay.amountCents)}
+                                      {pay.changeCents ? ` (Troco: ${formatBrlCents(pay.changeCents)})` : ''}
+                                    </span>
+                                    <button
+                                      className="d26-btn d26-btn-secondary"
+                                      style={{ padding: '2px 6px', fontSize: '0.68rem' }}
+                                      onClick={() => handleRefundPayment(pay.id)}
+                                    >
+                                      Estornar
+                                    </button>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           </div>
         )}
 
         {/* =====================================================================
-            MÓDULO: COZINHA E BAR (KDS)
+            MÓDULO: COZINHA E BAR (KDS PROFISSIONAL COM SLA E ESTAÇÃO — SEÇÕES 14, 15, 17)
            ===================================================================== */}
         {activeModule === 'cozinha' && (
           <div className="d26-card">
-            <h2 style={{ fontSize: '1.05rem', marginBottom: '12px' }}>
-              Fila de Produção KDS (Cozinha Quente, Cozinha Fria, Chapa de Tapiocas/Cuscuz e Bar)
-            </h2>
-            {snapshot.orders.length === 0 ? (
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '10px' }}>
+              <div>
+                <h2 style={{ fontSize: '1.05rem' }}>
+                  Fila de Produção KDS (Cozinha Quente, Cozinha Fria, Chapa de Tapiocas/Cuscuz e Bar)
+                </h2>
+                <p style={{ fontSize: '0.76rem', color: 'var(--d26-gray-400)' }}>
+                  SLA Configurado: Normal até {snapshot.kdsSlaConfig?.warningThresholdMinutes ?? 10} min • Atenção até {snapshot.kdsSlaConfig?.delayedThresholdMinutes ?? 20} min • Acima disso Atrasado
+                </p>
+              </div>
+              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                {(
+                  [
+                    ['ALL', 'Todas as Estações'],
+                    ['KITCHEN_HOT', '🔥 Cozinha Quente'],
+                    ['GRIDDLE_TAPIOCA', '🥞 Chapa (Tapioca/Cuscuz)'],
+                    ['KITCHEN_COLD', '🥗 Cozinha Fria'],
+                    ['BAR_DRINKS', '🍹 Bar & Drinks']
+                  ] as const
+                ).map(([st, label]) => (
+                  <button
+                    key={st}
+                    className={`d26-btn ${kdsStationFilter === st ? 'd26-btn-primary' : 'd26-btn-secondary'}`}
+                    style={{ padding: '5px 10px', fontSize: '0.75rem' }}
+                    onClick={() => setKdsStationFilter(st)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {snapshot.orders.filter((ord) =>
+              kdsStationFilter === 'ALL'
+                ? true
+                : ord.items.some((it) => it.prepStation === kdsStationFilter)
+            ).length === 0 ? (
               <p style={{ color: 'var(--d26-gray-400)' }}>
-                Nenhum pedido na fila da cozinha no momento.
+                Nenhum pedido na fila para a estação selecionada no momento.
               </p>
             ) : (
               <div className="d26-product-grid">
-                {snapshot.orders.map((ord) => (
-                  <div key={ord.id} className="d26-product-card">
-                    <div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
-                        <span className="d26-badge d26-badge-pink">
-                          {ord.tableNumber ? `MESA ${ord.tableNumber}` : ord.channel}
-                        </span>
-                        <span className="d26-badge d26-badge-purple">{ord.status}</span>
-                      </div>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--d26-gray-400)', marginBottom: '8px' }}>
-                        Pedido #{ord.id.slice(0, 8)} • Origem: {ord.originNode}
-                      </div>
-                      <ul style={{ paddingLeft: '16px', fontSize: '0.86rem', marginBottom: '10px' }}>
-                        {ord.items.map((it) => (
-                          <li key={it.id}>
-                            <strong>
-                              {it.quantity}x {it.productName}
-                            </strong>{' '}
-                            <span style={{ color: 'var(--d26-gray-400)', fontSize: '0.73rem' }}>
-                              [{it.prepStation}]
+                {snapshot.orders
+                  .filter((ord) =>
+                    kdsStationFilter === 'ALL'
+                      ? true
+                      : ord.items.some((it) => it.prepStation === kdsStationFilter)
+                  )
+                  .map((ord) => {
+                    const sla = evaluateKdsOrderSla(
+                      ord.createdAt,
+                      Date.now(),
+                      snapshot.kdsSlaConfig ?? {
+                        warningThresholdMinutes: 10,
+                        delayedThresholdMinutes: 20,
+                        updatedAt: new Date().toISOString()
+                      }
+                    );
+                    const slaBadgeClass =
+                      sla.slaStatus === 'DELAYED'
+                        ? 'd26-badge-warning'
+                        : sla.slaStatus === 'WARNING'
+                          ? 'd26-badge-outline-pink'
+                          : 'd26-badge-success';
+
+                    return (
+                      <div key={ord.id} className="d26-product-card">
+                        <div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', flexWrap: 'wrap', gap: '4px' }}>
+                            <span className="d26-badge d26-badge-pink">
+                              {ord.tableNumber ? `MESA ${ord.tableNumber}` : ord.channel}
                             </span>
-                            {it.modifiers && it.modifiers.length > 0 && (
-                              <div style={{ fontSize: '0.74rem', color: '#FFAFCC' }}>
-                                + {it.modifiers.map((m) => m.optionName).join(', ')}
-                              </div>
-                            )}
-                            {it.notes && (
-                              <div style={{ fontSize: '0.74rem', color: '#D8B4FE' }}>
-                                Obs: {it.notes}
-                              </div>
-                            )}
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                      {ord.status === 'PENDING_APPROVAL' && (
-                        <button
-                          className="d26-btn d26-btn-primary"
-                          style={{ flex: 1 }}
-                          onClick={() => handleAdvanceOrder(ord.id, 'RECEIVED')}
-                        >
-                          Aprovar Pedido QR
-                        </button>
-                      )}
-                      {ord.status === 'RECEIVED' && (
-                        <button
-                          className="d26-btn d26-btn-primary"
-                          style={{ flex: 1 }}
-                          onClick={() => handleAdvanceOrder(ord.id, 'IN_PREPARATION')}
-                        >
-                          Iniciar Preparo
-                        </button>
-                      )}
-                      {ord.status === 'IN_PREPARATION' && (
-                        <button
-                          className="d26-btn d26-btn-tertiary"
-                          style={{ flex: 1 }}
-                          onClick={() => handleAdvanceOrder(ord.id, 'READY')}
-                        >
-                          Marcar Pronto
-                        </button>
-                      )}
-                      {ord.status === 'READY' && (
-                        <button
-                          className="d26-btn d26-btn-secondary"
-                          style={{ flex: 1 }}
-                          onClick={() => handleAdvanceOrder(ord.id, 'DELIVERED')}
-                        >
-                          Entregue na Mesa
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                ))}
+                            <div style={{ display: 'flex', gap: '4px' }}>
+                              {ord.status !== 'DELIVERED' && ord.status !== 'CANCELLED' && (
+                                <span className={`d26-badge ${slaBadgeClass}`} style={{ fontSize: '0.68rem' }}>
+                                  ⏱ {sla.elapsedMinutes} min ({sla.slaStatus})
+                                </span>
+                              )}
+                              <span className="d26-badge d26-badge-purple">{ord.status}</span>
+                            </div>
+                          </div>
+                          <div style={{ fontSize: '0.75rem', color: 'var(--d26-gray-400)', marginBottom: '8px' }}>
+                            Pedido #{ord.id.slice(0, 8)} • Origem: {ord.originNode}
+                            {ord.waiterName ? ` • ${ord.waiterName}` : ''}
+                          </div>
+                          <ul style={{ paddingLeft: '16px', fontSize: '0.86rem', marginBottom: '10px' }}>
+                            {ord.items.map((it) => (
+                              <li key={it.id}>
+                                <strong>
+                                  {it.quantity}x {it.productName}
+                                </strong>{' '}
+                                <span style={{ color: 'var(--d26-gray-400)', fontSize: '0.73rem' }}>
+                                  [{it.prepStation}]
+                                </span>
+                                {it.modifiers && it.modifiers.length > 0 && (
+                                  <div style={{ fontSize: '0.74rem', color: '#FFAFCC' }}>
+                                    + {it.modifiers.map((m) => m.optionName).join(', ')}
+                                  </div>
+                                )}
+                                {it.notes && (
+                                  <div style={{ fontSize: '0.74rem', color: '#D8B4FE' }}>
+                                    Obs: {it.notes}
+                                  </div>
+                                )}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                          {ord.status === 'PENDING_APPROVAL' && (
+                            <button
+                              className="d26-btn d26-btn-primary"
+                              style={{ flex: 1 }}
+                              onClick={() => handleAdvanceOrder(ord.id, 'RECEIVED')}
+                            >
+                              Aprovar Pedido QR
+                            </button>
+                          )}
+                          {ord.status === 'RECEIVED' && (
+                            <button
+                              className="d26-btn d26-btn-primary"
+                              style={{ flex: 1 }}
+                              onClick={() => handleAdvanceOrder(ord.id, 'IN_PREPARATION')}
+                            >
+                              Iniciar Preparo
+                            </button>
+                          )}
+                          {ord.status === 'IN_PREPARATION' && (
+                            <button
+                              className="d26-btn d26-btn-tertiary"
+                              style={{ flex: 1 }}
+                              onClick={() => handleAdvanceOrder(ord.id, 'READY')}
+                            >
+                              Marcar Pronto (Notificar Garçom)
+                            </button>
+                          )}
+                          {ord.status === 'READY' && (
+                            <button
+                              className="d26-btn d26-btn-secondary"
+                              style={{ flex: 1 }}
+                              onClick={() => handleAdvanceOrder(ord.id, 'DELIVERED')}
+                            >
+                              Entregue na Mesa
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
               </div>
             )}
           </div>
         )}
 
         {/* =====================================================================
-            MÓDULO: MESAS, COMANDAS, PEDIDOS E QR CODES SEGUROS (SEÇÃO 12)
+            MÓDULO: GESTÃO VISUAL DE MESAS, COMANDAS, PEDIDOS E QR CODES (ETAPA 4 — SEÇÕES 3 A 10)
            ===================================================================== */}
         {(activeModule === 'mesas-comandas' || activeModule === 'pedidos') && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            {/* PAINEL OPERACIONAL DE MESAS DO SALÃO (SEÇÕES 3, 4, 8, 9, 21) */}
+            <div className="d26-card">
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap', gap: '10px' }}>
+                <div>
+                  <h2 style={{ fontSize: '1.05rem' }}>
+                    Mapa Operacional de Mesas em Tempo Real (Estado Físico × Estado Financeiro)
+                  </h2>
+                  <p style={{ fontSize: '0.78rem', color: 'var(--d26-gray-400)' }}>
+                    Proteção transacional contra abertura duplicada, transferência auditada, junção/separação de mesas e liberação controlada.
+                  </p>
+                </div>
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                  <input
+                    type="text"
+                    className="d26-input"
+                    style={{ width: '190px' }}
+                    placeholder="🔍 Buscar mesa ou garçom..."
+                    value={tablesSearch}
+                    onChange={(e) => setTablesSearch(e.target.value)}
+                  />
+                  <select
+                    className="d26-select"
+                    style={{ width: '190px' }}
+                    value={tablesStatusFilter}
+                    onChange={(e) => setTablesStatusFilter(e.target.value as 'ALL' | TablePhysicalStatus)}
+                  >
+                    <option value="ALL">Todos os Estados</option>
+                    <option value="LIVRE">LIVRE</option>
+                    <option value="AGUARDANDO_PEDIDO">AGUARDANDO_PEDIDO</option>
+                    <option value="EM_ATENDIMENTO">EM_ATENDIMENTO</option>
+                    <option value="AGUARDANDO_PAGAMENTO">AGUARDANDO_PAGAMENTO</option>
+                    <option value="LIMPEZA">LIMPEZA</option>
+                    <option value="INDISPONIVEL">INDISPONIVEL</option>
+                  </select>
+                  <select
+                    className="d26-select"
+                    style={{ width: '175px' }}
+                    value={tablesWaiterFilter}
+                    onChange={(e) => setTablesWaiterFilter(e.target.value)}
+                  >
+                    <option value="ALL">Todos os Garçons</option>
+                    <option value="Garçom 01 (Wi-Fi)">Garçom 01 (Wi-Fi)</option>
+                    <option value="Garçom 02 (Wi-Fi)">Garçom 02 (Wi-Fi)</option>
+                    <option value="Garçom 03 (Wi-Fi)">Garçom 03 (Wi-Fi)</option>
+                  </select>
+                  <button
+                    className="d26-btn d26-btn-secondary"
+                    onClick={() => setTablesViewMode((m) => (m === 'GRID' ? 'LIST' : 'GRID'))}
+                  >
+                    {tablesViewMode === 'GRID' ? '☰ Lista' : '⊞ Grade'}
+                  </button>
+                </div>
+              </div>
+
+              {/* BARRA DE OPERAÇÕES RÁPIDAS DE SALÃO: TRANSFERIR E UNIR MESAS (SEÇÕES 8 E 9) */}
+              <div
+                style={{
+                  display: 'flex',
+                  gap: '16px',
+                  flexWrap: 'wrap',
+                  padding: '10px 12px',
+                  background: 'var(--d26-black-900)',
+                  borderRadius: '8px',
+                  marginBottom: '14px',
+                  alignItems: 'center'
+                }}
+              >
+                <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                  <span style={{ fontSize: '0.76rem', color: 'var(--d26-gray-300)' }}>Pessoas na Abertura:</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={30}
+                    className="d26-input"
+                    style={{ width: '68px' }}
+                    value={openTableGuests}
+                    onChange={(e) => setOpenTableGuests(Number(e.target.value) || 2)}
+                  />
+                </div>
+
+                <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                  <span style={{ fontSize: '0.76rem', color: 'var(--d26-gray-300)' }}>Transferir Mesa:</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={60}
+                    className="d26-input"
+                    style={{ width: '64px' }}
+                    value={transferFromTable}
+                    onChange={(e) => setTransferFromTable(Number(e.target.value) || 1)}
+                  />
+                  <span>→</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={60}
+                    className="d26-input"
+                    style={{ width: '64px' }}
+                    value={transferToTable}
+                    onChange={(e) => setTransferToTable(Number(e.target.value) || 1)}
+                  />
+                  <button
+                    className="d26-btn d26-btn-secondary"
+                    style={{ padding: '4px 10px', fontSize: '0.75rem' }}
+                    onClick={() => handleTransferTable(transferFromTable, transferToTable)}
+                  >
+                    Transferir
+                  </button>
+                </div>
+
+                <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                  <span style={{ fontSize: '0.76rem', color: 'var(--d26-gray-300)' }}>Unir Mesas:</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={60}
+                    className="d26-input"
+                    style={{ width: '64px' }}
+                    value={joinPrimaryTable}
+                    onChange={(e) => setJoinPrimaryTable(Number(e.target.value) || 1)}
+                  />
+                  <span>+</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={60}
+                    className="d26-input"
+                    style={{ width: '64px' }}
+                    value={joinAdditionalTable}
+                    onChange={(e) => setJoinAdditionalTable(Number(e.target.value) || 1)}
+                  />
+                  <button
+                    className="d26-btn d26-btn-secondary"
+                    style={{ padding: '4px 10px', fontSize: '0.75rem' }}
+                    onClick={() => handleJoinTables(joinPrimaryTable, joinAdditionalTable)}
+                  >
+                    Unir Mesas
+                  </button>
+                  <button
+                    className="d26-btn d26-btn-secondary"
+                    style={{ padding: '4px 10px', fontSize: '0.75rem' }}
+                    onClick={() => handleUnjoinTable(joinPrimaryTable, joinAdditionalTable)}
+                  >
+                    Separar
+                  </button>
+                </div>
+              </div>
+
+              {/* GRADE VISUAL DE MESAS */}
+              <div className="d26-product-grid">
+                {(snapshot.qrTables ?? [])
+                  .filter((qt) => {
+                    const st = qt.physicalStatus ?? 'LIVRE';
+                    if (tablesStatusFilter !== 'ALL' && st !== tablesStatusFilter) return false;
+                    if (
+                      tablesWaiterFilter !== 'ALL' &&
+                      (qt.assignedWaiterName ?? '') !== tablesWaiterFilter
+                    ) {
+                      return false;
+                    }
+                    if (tablesSearch.trim()) {
+                      const q = tablesSearch.trim().toLowerCase();
+                      const matchNum = String(qt.tableNumber).includes(q);
+                      const matchWaiter = (qt.assignedWaiterName ?? '').toLowerCase().includes(q);
+                      if (!matchNum && !matchWaiter) return false;
+                    }
+                    return true;
+                  })
+                  .map((qt) => {
+                    const phys = qt.physicalStatus ?? 'LIVRE';
+                    const linkedTab = snapshot.tabs.find((t) => t.id === qt.activeTabId);
+                    const remaining = linkedTab
+                      ? Math.max(0, linkedTab.totalCents - linkedTab.paidCents)
+                      : 0;
+                    const occupiedMinutes = qt.openedAt
+                      ? Math.max(0, Math.floor((Date.now() - Date.parse(qt.openedAt)) / 60000))
+                      : 0;
+                    const prepOrdersCount = snapshot.orders.filter(
+                      (o) =>
+                        o.tableNumber === qt.tableNumber &&
+                        (o.status === 'RECEIVED' || o.status === 'IN_PREPARATION')
+                    ).length;
+
+                    return (
+                      <div
+                        key={qt.tableNumber}
+                        className="d26-product-card"
+                        style={{
+                          borderLeft:
+                            phys === 'LIVRE'
+                              ? '4px solid #34D399'
+                              : phys === 'AGUARDANDO_PAGAMENTO'
+                                ? '4px solid #FBBF24'
+                                : phys === 'LIMPEZA'
+                                  ? '4px solid #60A5FA'
+                                  : '4px solid #F72585'
+                        }}
+                      >
+                        <div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                            <strong style={{ fontSize: '1.02rem' }}>
+                              Mesa {String(qt.tableNumber).padStart(2, '0')}
+                            </strong>
+                            <span
+                              className={`d26-badge ${
+                                phys === 'LIVRE'
+                                  ? 'd26-badge-success'
+                                  : phys === 'AGUARDANDO_PAGAMENTO'
+                                    ? 'd26-badge-warning'
+                                    : 'd26-badge-pink'
+                              }`}
+                            >
+                              {phys}
+                            </span>
+                          </div>
+
+                          {linkedTab ? (
+                            <div style={{ fontSize: '0.76rem', color: 'var(--d26-gray-300)', display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                              <div>
+                                Comanda: <strong>{linkedTab.code}</strong> ({linkedTab.status})
+                              </div>
+                              <div>
+                                Pessoas: <strong>{qt.guestsCount ?? linkedTab.guestsCount ?? 1}</strong> • Tempo:{' '}
+                                <strong>{occupiedMinutes} min</strong>
+                              </div>
+                              <div>
+                                Garçom: <strong>{qt.assignedWaiterName ?? linkedTab.waiterName ?? 'Salão'}</strong>
+                              </div>
+                              <div>
+                                Consumido: <strong>{formatBrlCents(linkedTab.totalCents)}</strong> • Pago:{' '}
+                                <span style={{ color: '#34D399' }}>{formatBrlCents(linkedTab.paidCents)}</span>
+                              </div>
+                              <div style={{ color: '#F72585', fontWeight: 700 }}>
+                                Restante: {formatBrlCents(remaining)}
+                              </div>
+                              {prepOrdersCount > 0 && (
+                                <div style={{ color: '#FFAFCC' }}>
+                                  🍳 {prepOrdersCount} pedido(s) em preparo no KDS
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <p style={{ fontSize: '0.76rem', color: 'var(--d26-gray-400)', margin: '6px 0' }}>
+                              {phys === 'LIMPEZA'
+                                ? 'Mesa em higienização aguardando liberação.'
+                                : 'Mesa disponível para abertura imediata.'}
+                            </p>
+                          )}
+                        </div>
+
+                        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '8px' }}>
+                          {phys === 'LIVRE' && (
+                            <button
+                              className="d26-btn d26-btn-primary"
+                              style={{ flex: 1, padding: '5px 8px', fontSize: '0.75rem' }}
+                              onClick={() => handleOpenTable(qt.tableNumber)}
+                            >
+                              Abrir Mesa
+                            </button>
+                          )}
+                          {phys === 'LIMPEZA' && (
+                            <button
+                              className="d26-btn d26-btn-primary"
+                              style={{ flex: 1, padding: '5px 8px', fontSize: '0.75rem' }}
+                              onClick={() =>
+                                handleUpdateTableStatus(
+                                  qt.tableNumber,
+                                  'LIVRE',
+                                  'Mesa higienizada e liberada para novos clientes'
+                                )
+                              }
+                            >
+                              Liberar Mesa (LIVRE)
+                            </button>
+                          )}
+                          {linkedTab && (
+                            <>
+                              <button
+                                className="d26-btn d26-btn-primary"
+                                style={{ padding: '4px 8px', fontSize: '0.73rem' }}
+                                onClick={() => {
+                                  setSelectedTableNumber(qt.tableNumber);
+                                  setActiveModule('garcons');
+                                }}
+                              >
+                                + Pedido
+                              </button>
+                              <button
+                                className="d26-btn d26-btn-secondary"
+                                style={{ padding: '4px 8px', fontSize: '0.73rem' }}
+                                onClick={() => handleRequestBill(linkedTab.id)}
+                              >
+                                Pedir Conta
+                              </button>
+                              {remaining === 0 && (
+                                <button
+                                  className="d26-btn d26-btn-tertiary"
+                                  style={{ padding: '4px 8px', fontSize: '0.73rem' }}
+                                  onClick={() => handleCloseTabAndReleaseTable(linkedTab.id, false)}
+                                >
+                                  Encerrar
+                                </button>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+              </div>
+            </div>
+
             <div className="d26-split-2">
               <div className="d26-card">
                 <h2 style={{ fontSize: '1rem', marginBottom: '12px' }}>
@@ -2524,7 +3611,7 @@ export const DesktopApp: React.FC = () => {
 
               <div className="d26-card">
                 <h2 style={{ fontSize: '1rem', marginBottom: '12px' }}>
-                  Pedidos Incrementais & Cancelamento Auditável (Entidade Order)
+                  Pedidos Incrementais & Cancelamento por Estágio (Seção 17)
                 </h2>
                 <table className="d26-table">
                   <thead>
@@ -2557,13 +3644,21 @@ export const DesktopApp: React.FC = () => {
                               Aprovar QR
                             </button>
                           )}
-                          {o.status !== 'CANCELLED' && o.status !== 'DELIVERED' && (
+                          {o.status !== 'CANCELLED' && (
                             <button
                               className="d26-btn d26-btn-secondary"
                               style={{ padding: '3px 8px', fontSize: '0.72rem' }}
-                              onClick={() => handleAdvanceOrder(o.id, 'CANCELLED', true)}
+                              onClick={() =>
+                                handleAdvanceOrder(
+                                  o.id,
+                                  'CANCELLED',
+                                  o.status === 'RECEIVED' || o.status === 'PENDING_APPROVAL'
+                                )
+                              }
                             >
-                              Cancelar + Estornar Estoque
+                              {o.status === 'RECEIVED' || o.status === 'PENDING_APPROVAL'
+                                ? 'Cancelar (Estorna Estoque)'
+                                : 'Cancelar c/ Perda (Gerência)'}
                             </button>
                           )}
                         </td>
@@ -2902,8 +3997,13 @@ export const DesktopApp: React.FC = () => {
               >
                 {snapshot.printJobs.map((job) => (
                   <div key={job.id} className="d26-product-card">
-                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                      <span className="d26-badge d26-badge-purple">{job.targetPrinter}</span>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: '4px' }}>
+                      <div style={{ display: 'flex', gap: '4px' }}>
+                        <span className="d26-badge d26-badge-purple">{job.targetPrinter}</span>
+                        <span className="d26-badge d26-badge-outline-pink">
+                          {job.isReprint ? `2ª VIA #${job.copyNumber ?? 2}` : '1ª VIA ORIGINAL'}
+                        </span>
+                      </div>
                       <span
                         className={`d26-badge ${
                           job.status === 'PRINTED' ? 'd26-badge-success' : 'd26-badge-warning'
@@ -2925,7 +4025,7 @@ export const DesktopApp: React.FC = () => {
                     >
                       {job.payloadText}
                     </pre>
-                    <div style={{ display: 'flex', gap: '8px' }}>
+                    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                       {job.status !== 'PRINTED' && (
                         <button
                           className="d26-btn d26-btn-primary"
@@ -2941,6 +4041,27 @@ export const DesktopApp: React.FC = () => {
                           Confirmar Impressão
                         </button>
                       )}
+                      {job.status !== 'UNKNOWN_OUTCOME' && job.status !== 'PRINTED' && (
+                        <button
+                          className="d26-btn d26-btn-secondary"
+                          onClick={async () => {
+                            await fetch(`${localApiBase}/api/print-jobs/${job.id}/status`, {
+                              method: 'PATCH',
+                              headers: getAuthHeaders(),
+                              body: JSON.stringify({
+                                status: 'UNKNOWN_OUTCOME',
+                                lastError: 'Timeout de resposta da impressora térmica'
+                              })
+                            });
+                            await refreshState();
+                            notify(
+                              'Trabalho marcado como UNKNOWN_OUTCOME (bloqueia reenvio cego automático).'
+                            );
+                          }}
+                        >
+                          Simular Timeout
+                        </button>
+                      )}
                       <button
                         className="d26-btn d26-btn-secondary"
                         style={{ flex: 1 }}
@@ -2950,10 +4071,10 @@ export const DesktopApp: React.FC = () => {
                             headers: getAuthHeaders()
                           });
                           await refreshState();
-                          notify('Reimpressão autorizada reenfileirada no spooler.');
+                          notify('Reimpressão autorizada (2ª Via) reenfileirada no spooler.');
                         }}
                       >
-                        Reimprimir Autorizado
+                        Reimprimir (2ª Via)
                       </button>
                     </div>
                   </div>

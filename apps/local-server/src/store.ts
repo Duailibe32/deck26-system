@@ -24,22 +24,32 @@ const require = createRequire(import.meta.url);
 const { DatabaseSync } = require('node:sqlite') as { DatabaseSync: typeof DatabaseSyncType };
 
 import {
+  BillSplitPlan,
+  CashRegisterMovement,
+  CashRegisterSession,
   CatalogCategory,
   CatalogProduct,
   DECK26_INITIAL_CATEGORIES,
   DECK26_INITIAL_PRODUCTS,
   DECK26_INITIAL_STAFF,
   DiningTableQr,
+  DiscountType,
   HotelRoom,
+  KdsSlaConfig,
   ModifierGroup,
+  OperationalNotification,
   Order,
+  OrderCancelStage,
   OrderItem,
+  OrderPriority,
   OrderStatus,
   OriginNode,
   OutOfStockPolicy,
   Payment,
+  PaymentConfirmationMode,
   PaymentMethod,
   PrintJob,
+  PrintJobStatus,
   PrintJobTarget,
   ProductRecipe,
   SalesChannel,
@@ -47,17 +57,30 @@ import {
   SyncOutboxEvent,
   Tab,
   TabType,
+  TablePhysicalStatus,
   UserRole,
   buildEscPosProductionTicket,
   calculateTabTotals,
+  hasPermission,
   resolveChannelPriceCents
 } from '@deck26/contracts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+export interface AuditLogEntry {
+  id: string;
+  actorUserId: string;
+  action: string;
+  entityType: string;
+  entityId: string;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+}
+
 export class LocalOperationalStore {
   public readonly db: DatabaseSyncType;
+  private readonly eventListeners = new Set<(notification: OperationalNotification) => void>();
 
   constructor(dbFilePath: string = ':memory:') {
     if (dbFilePath !== ':memory:') {
@@ -67,8 +90,42 @@ export class LocalOperationalStore {
       }
     }
     this.db = new DatabaseSync(dbFilePath);
-    this.runMigrations();
-    this.seedBaseCatalogAndInfrastructure();
+    try {
+      this.runMigrations();
+      this.seedBaseCatalogAndInfrastructure();
+    } catch (err) {
+      try {
+        this.db.close();
+      } catch {
+        // Ignore close error
+      }
+      throw err;
+    }
+  }
+
+  private applySqlStatementsIdempotently(sqlContent: string): void {
+    const statements = sqlContent
+      .split(';')
+      .map((s) => {
+        const withoutCommentLines = s
+          .split(/\r?\n/)
+          .filter((line) => !line.trim().startsWith('--'))
+          .join('\n')
+          .trim();
+        return withoutCommentLines;
+      })
+      .filter((s) => s.length > 0);
+
+    for (const stmt of statements) {
+      try {
+        this.db.exec(`${stmt};`);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : '';
+        if (!msg.includes('duplicate column name')) {
+          throw err;
+        }
+      }
+    }
   }
 
   private runMigrations(): void {
@@ -99,36 +156,31 @@ export class LocalOperationalStore {
         '../../../packages/contracts/migrations/local/0002_stage3_catalog_stock_recipes_qr.sql'
       );
       const sql0002 = fs.readFileSync(migration0002Path, 'utf-8');
-      // Executa comando por comando para tolerar caso alguma coluna já exista em banco prévio
-      const statements = sql0002
-        .split(';')
-        .map((s) => {
-          const withoutCommentLines = s
-            .split(/\r?\n/)
-            .filter((line) => !line.trim().startsWith('--'))
-            .join('\n')
-            .trim();
-          return withoutCommentLines;
-        })
-        .filter((s) => s.length > 0);
-
-      for (const stmt of statements) {
-        try {
-          this.db.exec(`${stmt};`);
-        } catch (err) {
-          const msg = err instanceof Error ? err.message : '';
-          if (!msg.includes('duplicate column name')) {
-            throw err;
-          }
-        }
-      }
+      this.applySqlStatementsIdempotently(sql0002);
 
       this.db
         .prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)')
         .run('0002_stage3_catalog_stock_recipes_qr', new Date().toISOString());
     }
 
-    // Garante compatibilidade de bancos criados na Etapa 2 com novos status da Etapa 3 (PENDING_APPROVAL / REVERSAL_ENTRY)
+    const existing0003 = this.db
+      .prepare('SELECT version FROM schema_migrations WHERE version = ?')
+      .get('0003_stage4_tables_tabs_kds_cashier') as { version?: string } | undefined;
+
+    if (!existing0003) {
+      const migration0003Path = path.resolve(
+        __dirname,
+        '../../../packages/contracts/migrations/local/0003_stage4_tables_tabs_kds_cashier.sql'
+      );
+      const sql0003 = fs.readFileSync(migration0003Path, 'utf-8');
+      this.applySqlStatementsIdempotently(sql0003);
+
+      this.db
+        .prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)')
+        .run('0003_stage4_tables_tabs_kds_cashier', new Date().toISOString());
+    }
+
+    // Garante compatibilidade de bancos criados na Etapa 2 com novos status das Etapas 3 e 4
     this.db.exec('PRAGMA ignore_check_constraints = ON;');
   }
 
@@ -287,10 +339,218 @@ export class LocalOperationalStore {
       const token = `d26qr_m${String(t).padStart(2, '0')}_${deterministicSecret}`;
       insertQrTable.run(t, token, `Mesa ${String(t).padStart(2, '0')} — Salão Deck 26`, now);
     }
+
+    // 8. Configuração Inicial de SLA da Cozinha / KDS (Seção 15)
+    this.db
+      .prepare(`
+        INSERT OR IGNORE INTO kds_sla_config (id, warning_threshold_minutes, delayed_threshold_minutes, updated_at)
+        VALUES (1, 10, 20, ?)
+      `)
+      .run(now);
   }
 
   public close(): void {
     this.db.close();
+  }
+
+  public onOperationalEvent(listener: (notification: OperationalNotification) => void): () => void {
+    this.eventListeners.add(listener);
+    return () => {
+      this.eventListeners.delete(listener);
+    };
+  }
+
+  public recordAuditLog(params: {
+    actorUserId: string;
+    action: string;
+    entityType: string;
+    entityId: string;
+    metadata?: Record<string, unknown>;
+  }): AuditLogEntry {
+    const id = crypto.randomUUID();
+    const createdAt = new Date().toISOString();
+    const metadata = params.metadata ?? {};
+    this.db
+      .prepare(`
+        INSERT INTO audit_logs (id, actor_user_id, action, entity_type, entity_id, metadata_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `)
+      .run(
+        id,
+        params.actorUserId,
+        params.action,
+        params.entityType,
+        params.entityId,
+        JSON.stringify(metadata),
+        createdAt
+      );
+
+    return {
+      id,
+      actorUserId: params.actorUserId,
+      action: params.action,
+      entityType: params.entityType,
+      entityId: params.entityId,
+      metadata,
+      createdAt
+    };
+  }
+
+  public listAuditLogs(entityId?: string, limit: number = 100): AuditLogEntry[] {
+    const rows = entityId
+      ? (this.db
+          .prepare('SELECT * FROM audit_logs WHERE entity_id = ? ORDER BY created_at DESC LIMIT ?')
+          .all(entityId, limit) as Array<Record<string, unknown>>)
+      : (this.db
+          .prepare('SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT ?')
+          .all(limit) as Array<Record<string, unknown>>);
+
+    return rows.map((r) => ({
+      id: String(r.id),
+      actorUserId: String(r.actor_user_id),
+      action: String(r.action),
+      entityType: String(r.entity_type),
+      entityId: String(r.entity_id),
+      metadata: r.metadata_json ? JSON.parse(String(r.metadata_json)) : {},
+      createdAt: String(r.created_at)
+    }));
+  }
+
+  public createNotification(params: {
+    eventType: OperationalNotification['eventType'];
+    targetRole?: UserRole | null;
+    targetUserId?: string | null;
+    tableNumber?: number | null;
+    tabId?: string | null;
+    orderId?: string | null;
+    title: string;
+    message: string;
+    payload?: unknown;
+  }): OperationalNotification {
+    const id = crypto.randomUUID();
+    const createdAt = new Date().toISOString();
+    const payloadJson = JSON.stringify(params.payload ?? {});
+
+    this.db
+      .prepare(`
+        INSERT INTO operational_notifications (
+          id, event_type, target_role, target_user_id, table_number, tab_id, order_id,
+          title, message, payload_json, acknowledged_at, acknowledged_by_user_id, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?)
+      `)
+      .run(
+        id,
+        params.eventType,
+        params.targetRole ?? null,
+        params.targetUserId ?? null,
+        params.tableNumber ?? null,
+        params.tabId ?? null,
+        params.orderId ?? null,
+        params.title,
+        params.message,
+        payloadJson,
+        createdAt
+      );
+
+    const row = this.db
+      .prepare('SELECT * FROM operational_notifications WHERE id = ?')
+      .get(id) as Record<string, unknown>;
+    const notification = this.mapNotificationRow(row);
+
+    for (const listener of this.eventListeners) {
+      try {
+        listener(notification);
+      } catch {
+        // Isola falhas de ouvintes SSE
+      }
+    }
+
+    return notification;
+  }
+
+  public listNotifications(options?: {
+    sinceCursorId?: number;
+    unacknowledgedOnly?: boolean;
+    targetUserId?: string;
+    limit?: number;
+  }): OperationalNotification[] {
+    const sinceCursor = options?.sinceCursorId ?? 0;
+    const limit = options?.limit ?? 100;
+    let sql = 'SELECT * FROM operational_notifications WHERE cursor_id > ?';
+    const args: Array<string | number> = [sinceCursor];
+
+    if (options?.unacknowledgedOnly) {
+      sql += ' AND acknowledged_at IS NULL';
+    }
+    if (options?.targetUserId) {
+      sql += ' AND (target_user_id IS NULL OR target_user_id = ?)';
+      args.push(options.targetUserId);
+    }
+
+    sql += ' ORDER BY cursor_id DESC LIMIT ?';
+    args.push(limit);
+
+    const rows = this.db.prepare(sql).all(...args) as Array<Record<string, unknown>>;
+    return rows.map((r) => this.mapNotificationRow(r));
+  }
+
+  public acknowledgeNotification(notificationId: string, actorUserId: string): OperationalNotification {
+    const now = new Date().toISOString();
+    this.db
+      .prepare(`
+        UPDATE operational_notifications
+        SET acknowledged_at = COALESCE(acknowledged_at, ?),
+            acknowledged_by_user_id = COALESCE(acknowledged_by_user_id, ?)
+        WHERE id = ?
+      `)
+      .run(now, actorUserId, notificationId);
+
+    const row = this.db
+      .prepare('SELECT * FROM operational_notifications WHERE id = ?')
+      .get(notificationId) as Record<string, unknown> | undefined;
+    if (!row) {
+      throw new Error(`Notificação '${notificationId}' não encontrada.`);
+    }
+    return this.mapNotificationRow(row);
+  }
+
+  public getKdsSlaConfig(): KdsSlaConfig {
+    const row = this.db
+      .prepare('SELECT * FROM kds_sla_config WHERE id = 1')
+      .get() as Record<string, unknown> | undefined;
+
+    if (!row) {
+      return {
+        warningThresholdMinutes: 10,
+        delayedThresholdMinutes: 20,
+        updatedAt: new Date().toISOString()
+      };
+    }
+
+    return {
+      warningThresholdMinutes: Number(row.warning_threshold_minutes ?? 10),
+      delayedThresholdMinutes: Number(row.delayed_threshold_minutes ?? 20),
+      updatedAt: String(row.updated_at)
+    };
+  }
+
+  public updateKdsSlaConfig(input: {
+    warningThresholdMinutes: number;
+    delayedThresholdMinutes: number;
+  }): KdsSlaConfig {
+    if (input.delayedThresholdMinutes <= input.warningThresholdMinutes) {
+      throw new Error('O limite de atraso deve ser maior que o limite de atenção.');
+    }
+    const now = new Date().toISOString();
+    this.db
+      .prepare(`
+        UPDATE kds_sla_config
+        SET warning_threshold_minutes = ?, delayed_threshold_minutes = ?, updated_at = ?
+        WHERE id = 1
+      `)
+      .run(input.warningThresholdMinutes, input.delayedThresholdMinutes, now);
+
+    return this.getKdsSlaConfig();
   }
 
   public authenticateByPin(pin: string): { id: string; name: string; role: UserRole } | null {
@@ -842,7 +1102,7 @@ export class LocalOperationalStore {
   }
 
   // ============================================================================
-  // QR CODES POR MESA COM TOKENS CRIPTOGRÁFICOS NÃO-PREVISÍVEIS (SEÇÃO 12)
+  // QR CODES E GESTÃO OPERACIONAL DE MESAS (SEÇÕES 3, 4, 8, 9, 12, 22)
   // ============================================================================
 
   public listDiningTablesQr(): DiningTableQr[] {
@@ -850,14 +1110,15 @@ export class LocalOperationalStore {
       .prepare('SELECT * FROM dining_tables_qr ORDER BY table_number ASC')
       .all() as Array<Record<string, unknown>>;
 
-    return rows.map((r) => ({
-      tableNumber: Number(r.table_number),
-      qrToken: String(r.qr_token),
-      label: String(r.label),
-      requiresOperatorApproval: Boolean(r.requires_operator_approval),
-      active: Boolean(r.active),
-      createdAt: String(r.created_at)
-    }));
+    return rows.map((r) => this.mapDiningTableRow(r));
+  }
+
+  public getDiningTableByNumber(tableNumber: number): DiningTableQr | null {
+    const row = this.db
+      .prepare('SELECT * FROM dining_tables_qr WHERE table_number = ? LIMIT 1')
+      .get(tableNumber) as Record<string, unknown> | undefined;
+
+    return row ? this.mapDiningTableRow(row) : null;
   }
 
   public getDiningTableByQrToken(qrToken: string): DiningTableQr | null {
@@ -866,14 +1127,7 @@ export class LocalOperationalStore {
       .get(qrToken.trim()) as Record<string, unknown> | undefined;
 
     if (!row) return null;
-    return {
-      tableNumber: Number(row.table_number),
-      qrToken: String(row.qr_token),
-      label: String(row.label),
-      requiresOperatorApproval: Boolean(row.requires_operator_approval),
-      active: Boolean(row.active),
-      createdAt: String(row.created_at)
-    };
+    return this.mapDiningTableRow(row);
   }
 
   public configureDiningTableQrPolicy(tableNumber: number, requiresOperatorApproval: boolean): DiningTableQr {
@@ -881,11 +1135,705 @@ export class LocalOperationalStore {
       .prepare('UPDATE dining_tables_qr SET requires_operator_approval = ? WHERE table_number = ?')
       .run(requiresOperatorApproval ? 1 : 0, tableNumber);
 
-    const updated = this.listDiningTablesQr().find((t) => t.tableNumber === tableNumber);
+    const updated = this.getDiningTableByNumber(tableNumber);
     if (!updated) {
       throw new Error(`Mesa ${tableNumber} não encontrada.`);
     }
     return updated;
+  }
+
+  /**
+   * Abertura explícita de mesa com proteção transacional de concorrência (Seções 4 e 22).
+   * Impede que dois terminais abram simultaneamente duas comandas ativas na mesma mesa.
+   */
+  public openTable(input: {
+    tableNumber: number;
+    guestsCount?: number;
+    waiterUserId?: string;
+    waiterName?: string;
+    customerName?: string | null;
+    notes?: string;
+    originNode?: OriginNode;
+  }): { table: DiningTableQr; tab: Tab } {
+    const now = new Date().toISOString();
+    const guestsCount = Math.max(1, input.guestsCount ?? 1);
+    const waiterUserId = input.waiterUserId ?? 'usr-waiter-01';
+    const waiterName = input.waiterName ?? 'Garçom Deck 26';
+
+    this.db.exec('BEGIN IMMEDIATE TRANSACTION');
+    try {
+      const tableRow = this.db
+        .prepare('SELECT * FROM dining_tables_qr WHERE table_number = ?')
+        .get(input.tableNumber) as Record<string, unknown> | undefined;
+
+      if (!tableRow) {
+        throw new Error(`Mesa ${input.tableNumber} não cadastrada no salão.`);
+      }
+
+      const currentStatus = (tableRow.physical_status as TablePhysicalStatus) ?? 'LIVRE';
+      if (currentStatus !== 'LIVRE' || tableRow.active_tab_id) {
+        throw new Error(
+          `Mesa ${input.tableNumber} não está disponível para abertura (Estado atual: ${currentStatus}). Abertura duplicada bloqueada.`
+        );
+      }
+
+      const existingActiveTab = this.db
+        .prepare(
+          "SELECT id FROM tabs WHERE table_number = ? AND status IN ('OPEN', 'BILL_REQUESTED', 'PARTIALLY_PAID') LIMIT 1"
+        )
+        .get(input.tableNumber) as { id?: string } | undefined;
+
+      if (existingActiveTab) {
+        throw new Error(
+          `Mesa ${input.tableNumber} já possui uma comanda ativa (${existingActiveTab.id}). Abertura concorrente bloqueada.`
+        );
+      }
+
+      const tabId = crypto.randomUUID();
+      const tabCode = `MESA-${String(input.tableNumber).padStart(2, '0')}`;
+
+      this.db
+        .prepare(`
+          INSERT INTO tabs (
+            id, code, type, status, table_number, hotel_reservation_id, customer_name,
+            guests_count, waiter_user_id, waiter_name, notes, joined_tables_json,
+            service_fee_enabled, service_fee_bps, subtotal_cents,
+            service_fee_cents, discount_type, discount_cents, discount_bps,
+            total_cents, paid_cents, opened_by_user_id, opened_at, closed_at, version
+          ) VALUES (?, ?, 'TABLE', 'OPEN', ?, NULL, ?, ?, ?, ?, ?, ?, 1, 1000, 0, 0, 'NONE', 0, 0, 0, 0, ?, ?, NULL, 1)
+        `)
+        .run(
+          tabId,
+          tabCode,
+          input.tableNumber,
+          input.customerName ?? null,
+          guestsCount,
+          waiterUserId,
+          waiterName,
+          input.notes ?? null,
+          JSON.stringify([input.tableNumber]),
+          waiterUserId,
+          now
+        );
+
+      this.db
+        .prepare(`
+          UPDATE dining_tables_qr
+          SET physical_status = 'AGUARDANDO_PEDIDO',
+              active_tab_id = ?,
+              primary_table_number = NULL,
+              joined_group_id = NULL,
+              assigned_waiter_user_id = ?,
+              assigned_waiter_name = ?,
+              guests_count = ?,
+              opened_at = ?,
+              notes = ?
+          WHERE table_number = ?
+        `)
+        .run(
+          tabId,
+          waiterUserId,
+          waiterName,
+          guestsCount,
+          now,
+          input.notes ?? null,
+          input.tableNumber
+        );
+
+      const tab = this.getTabById(tabId)!;
+      const table = this.getDiningTableByNumber(input.tableNumber)!;
+
+      this.recordAuditLog({
+        actorUserId: waiterUserId,
+        action: 'TABLE_OPENED',
+        entityType: 'DINING_TABLE',
+        entityId: String(input.tableNumber),
+        metadata: {
+          tableNumber: input.tableNumber,
+          tabId: tab.id,
+          tabCode: tab.code,
+          guestsCount,
+          waiterName
+        }
+      });
+
+      this.appendOutboxEvent({
+        idempotencyKey: `tab-open-${tab.id}-v1`,
+        originNode: input.originNode ?? 'WINDOWS_PDV',
+        entityType: 'TAB',
+        entityId: tab.id,
+        operation: 'UPSERT',
+        entityVersion: tab.version,
+        payload: tab
+      });
+
+      this.db.exec('COMMIT');
+
+      this.createNotification({
+        eventType: 'TABLE_OPENED',
+        tableNumber: input.tableNumber,
+        tabId: tab.id,
+        title: `Mesa ${String(input.tableNumber).padStart(2, '0')} Aberta`,
+        message: `${waiterName} abriu a Mesa ${String(input.tableNumber).padStart(2, '0')} (${guestsCount} pessoa(s)).`
+      });
+
+      return { table, tab };
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
+  public updateTablePhysicalStatus(input: {
+    tableNumber: number;
+    physicalStatus: TablePhysicalStatus;
+    actorUserId: string;
+    notes?: string;
+  }): DiningTableQr {
+    const table = this.getDiningTableByNumber(input.tableNumber);
+    if (!table) {
+      throw new Error(`Mesa ${input.tableNumber} não encontrada.`);
+    }
+
+    if (input.physicalStatus === 'LIVRE' && table.activeTabId) {
+      const activeTab = this.getTabById(table.activeTabId);
+      if (activeTab && activeTab.status !== 'CLOSED' && activeTab.status !== 'CANCELLED') {
+        const remaining = Math.max(0, activeTab.totalCents - activeTab.paidCents);
+        if (remaining > 0 || activeTab.totalCents > 0) {
+          throw new Error(
+            `Não é permitido liberar a Mesa ${input.tableNumber} com comanda ativa (${activeTab.code}) não encerrada.`
+          );
+        }
+      }
+    }
+
+    if (input.physicalStatus === 'LIVRE') {
+      this.db
+        .prepare(`
+          UPDATE dining_tables_qr
+          SET physical_status = 'LIVRE',
+              active_tab_id = NULL,
+              primary_table_number = NULL,
+              joined_group_id = NULL,
+              assigned_waiter_user_id = NULL,
+              assigned_waiter_name = NULL,
+              guests_count = 0,
+              opened_at = NULL,
+              notes = NULL
+          WHERE table_number = ?
+        `)
+        .run(input.tableNumber);
+    } else {
+      this.db
+        .prepare(`
+          UPDATE dining_tables_qr
+          SET physical_status = ?,
+              notes = COALESCE(?, notes)
+          WHERE table_number = ?
+        `)
+        .run(input.physicalStatus, input.notes ?? null, input.tableNumber);
+    }
+
+    this.recordAuditLog({
+      actorUserId: input.actorUserId,
+      action: 'TABLE_STATUS_CHANGED',
+      entityType: 'DINING_TABLE',
+      entityId: String(input.tableNumber),
+      metadata: {
+        previousStatus: table.physicalStatus,
+        newStatus: input.physicalStatus
+      }
+    });
+
+    return this.getDiningTableByNumber(input.tableNumber)!;
+  }
+
+  /**
+   * Transferência de Mesa (Ex.: Mesa 03 -> Mesa 08) — Seção 8
+   * - Valida se a mesa de destino está LIVRE (bloqueia transferência para mesa ocupada sem junção).
+   * - Transfere comanda, pedidos, pagamentos e histórico preservando integridade.
+   * - Libera a mesa de origem e registra auditoria.
+   */
+  public transferTable(input: {
+    fromTableNumber: number;
+    toTableNumber: number;
+    actorUserId: string;
+    reason?: string;
+    originNode?: OriginNode;
+  }): { fromTable: DiningTableQr; toTable: DiningTableQr; tab: Tab } {
+    if (input.fromTableNumber === input.toTableNumber) {
+      throw new Error('A mesa de destino deve ser diferente da mesa de origem.');
+    }
+
+    this.db.exec('BEGIN IMMEDIATE TRANSACTION');
+    try {
+      const fromTable = this.getDiningTableByNumber(input.fromTableNumber);
+      const toTable = this.getDiningTableByNumber(input.toTableNumber);
+
+      if (!fromTable) throw new Error(`Mesa de origem ${input.fromTableNumber} não encontrada.`);
+      if (!toTable) throw new Error(`Mesa de destino ${input.toTableNumber} não encontrada.`);
+
+      const activeTabRow = fromTable.activeTabId
+        ? (this.db.prepare('SELECT * FROM tabs WHERE id = ?').get(fromTable.activeTabId) as
+            | Record<string, unknown>
+            | undefined)
+        : (this.db
+            .prepare(
+              "SELECT * FROM tabs WHERE table_number = ? AND status IN ('OPEN', 'BILL_REQUESTED', 'PARTIALLY_PAID') LIMIT 1"
+            )
+            .get(input.fromTableNumber) as Record<string, unknown> | undefined);
+
+      if (!activeTabRow) {
+        throw new Error(`A Mesa ${input.fromTableNumber} não possui comanda ativa para transferir.`);
+      }
+
+      const toTableActiveTab = this.db
+        .prepare(
+          "SELECT id FROM tabs WHERE table_number = ? AND status IN ('OPEN', 'BILL_REQUESTED', 'PARTIALLY_PAID') LIMIT 1"
+        )
+        .get(input.toTableNumber) as { id?: string } | undefined;
+
+      if (toTable.physicalStatus !== 'LIVRE' || toTable.activeTabId || toTableActiveTab) {
+        throw new Error(
+          `A Mesa de destino ${input.toTableNumber} está ocupada (${toTable.physicalStatus}). Utilize a operação de Junção de Mesas se desejar unificar o atendimento.`
+        );
+      }
+
+      const tab = this.mapTabRow(activeTabRow);
+      const newCode = `MESA-${String(input.toTableNumber).padStart(2, '0')}`;
+      const currentJoined = tab.joinedTables && tab.joinedTables.length > 0 ? tab.joinedTables : [input.fromTableNumber];
+      const updatedJoined = Array.from(
+        new Set(currentJoined.map((t) => (t === input.fromTableNumber ? input.toTableNumber : t)))
+      );
+
+      this.db
+        .prepare(`
+          UPDATE tabs
+          SET table_number = ?,
+              code = ?,
+              joined_tables_json = ?,
+              version = version + 1
+          WHERE id = ?
+        `)
+        .run(input.toTableNumber, newCode, JSON.stringify(updatedJoined), tab.id);
+
+      this.db
+        .prepare('UPDATE orders SET table_number = ? WHERE tab_id = ? AND table_number = ?')
+        .run(input.toTableNumber, tab.id, input.fromTableNumber);
+
+      this.db
+        .prepare(`
+          UPDATE dining_tables_qr
+          SET physical_status = ?,
+              active_tab_id = ?,
+              primary_table_number = NULL,
+              joined_group_id = ?,
+              assigned_waiter_user_id = ?,
+              assigned_waiter_name = ?,
+              guests_count = ?,
+              opened_at = ?,
+              notes = ?
+          WHERE table_number = ?
+        `)
+        .run(
+          fromTable.physicalStatus === 'LIVRE' || !fromTable.physicalStatus
+            ? 'EM_ATENDIMENTO'
+            : fromTable.physicalStatus,
+          tab.id,
+          fromTable.joinedGroupId ?? null,
+          fromTable.assignedWaiterUserId ?? tab.waiterUserId ?? null,
+          fromTable.assignedWaiterName ?? tab.waiterName ?? null,
+          fromTable.guestsCount ?? tab.guestsCount,
+          fromTable.openedAt ?? tab.openedAt,
+          fromTable.notes ?? tab.notes ?? null,
+          input.toTableNumber
+        );
+
+      // Atualiza eventuais mesas secundárias que apontavam para a mesa antiga
+      this.db
+        .prepare('UPDATE dining_tables_qr SET primary_table_number = ? WHERE primary_table_number = ?')
+        .run(input.toTableNumber, input.fromTableNumber);
+
+      // Libera a mesa de origem
+      this.db
+        .prepare(`
+          UPDATE dining_tables_qr
+          SET physical_status = 'LIVRE',
+              active_tab_id = NULL,
+              primary_table_number = NULL,
+              joined_group_id = NULL,
+              assigned_waiter_user_id = NULL,
+              assigned_waiter_name = NULL,
+              guests_count = 0,
+              opened_at = NULL,
+              notes = NULL
+          WHERE table_number = ?
+        `)
+        .run(input.fromTableNumber);
+
+      const updatedTab = this.getTabById(tab.id)!;
+      const updatedFrom = this.getDiningTableByNumber(input.fromTableNumber)!;
+      const updatedTo = this.getDiningTableByNumber(input.toTableNumber)!;
+
+      this.recordAuditLog({
+        actorUserId: input.actorUserId,
+        action: 'TABLE_TRANSFERRED',
+        entityType: 'TAB',
+        entityId: tab.id,
+        metadata: {
+          fromTableNumber: input.fromTableNumber,
+          toTableNumber: input.toTableNumber,
+          reason: input.reason ?? 'Transferência operacional de mesa'
+        }
+      });
+
+      this.appendOutboxEvent({
+        idempotencyKey: `tab-transfer-${updatedTab.id}-v${updatedTab.version}`,
+        originNode: input.originNode ?? 'WINDOWS_PDV',
+        entityType: 'TAB',
+        entityId: updatedTab.id,
+        operation: 'UPSERT',
+        entityVersion: updatedTab.version,
+        payload: updatedTab
+      });
+
+      this.db.exec('COMMIT');
+
+      this.createNotification({
+        eventType: 'TABLE_TRANSFERRED',
+        tableNumber: input.toTableNumber,
+        tabId: updatedTab.id,
+        title: `Transferência: Mesa ${input.fromTableNumber} → Mesa ${input.toTableNumber}`,
+        message: `Comanda ${updatedTab.code} transferida da Mesa ${input.fromTableNumber} para a Mesa ${input.toTableNumber}.`
+      });
+
+      return { fromTable: updatedFrom, toTable: updatedTo, tab: updatedTab };
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
+  /**
+   * Junção de Mesas (Ex.: Mesas 04 e 05 atendem o mesmo grupo) — Seção 9
+   * - Vincula as mesas secundárias à comanda principal sem duplicar cobrança.
+   * - Preserva em cada pedido qual mesa originou o lançamento (`order.tableNumber`).
+   */
+  public joinTables(input: {
+    primaryTableNumber: number;
+    tableNumbersToJoin: number[];
+    actorUserId: string;
+    reason?: string;
+    originNode?: OriginNode;
+  }): { primaryTable: DiningTableQr; joinedTables: DiningTableQr[]; tab: Tab } {
+    const cleanJoinList = Array.from(
+      new Set(input.tableNumbersToJoin.filter((n) => n !== input.primaryTableNumber))
+    );
+    if (cleanJoinList.length === 0) {
+      throw new Error('Informe pelo menos uma mesa secundária distinta para unir à mesa principal.');
+    }
+
+    this.db.exec('BEGIN IMMEDIATE TRANSACTION');
+    try {
+      const primaryTable = this.getDiningTableByNumber(input.primaryTableNumber);
+      if (!primaryTable) {
+        throw new Error(`Mesa principal ${input.primaryTableNumber} não encontrada.`);
+      }
+
+      let primaryTab = primaryTable.activeTabId
+        ? this.getTabById(primaryTable.activeTabId)
+        : null;
+
+      if (!primaryTab) {
+        const existingTabRow = this.db
+          .prepare(
+            "SELECT * FROM tabs WHERE table_number = ? AND status IN ('OPEN', 'BILL_REQUESTED', 'PARTIALLY_PAID') LIMIT 1"
+          )
+          .get(input.primaryTableNumber) as Record<string, unknown> | undefined;
+
+        if (existingTabRow) {
+          primaryTab = this.mapTabRow(existingTabRow);
+        } else {
+          primaryTab = this.openOrGetTab({
+            code: `MESA-${String(input.primaryTableNumber).padStart(2, '0')}`,
+            type: 'TABLE',
+            tableNumber: input.primaryTableNumber,
+            openedByUserId: input.actorUserId,
+            originNode: input.originNode
+          });
+        }
+      }
+
+      const groupId = primaryTable.joinedGroupId ?? `GRP-M${String(input.primaryTableNumber).padStart(2, '0')}-${Date.now().toString(36).slice(-4).toUpperCase()}`;
+      const existingJoined = primaryTab.joinedTables && primaryTab.joinedTables.length > 0
+        ? primaryTab.joinedTables
+        : [input.primaryTableNumber];
+      const allJoinedNumbers = Array.from(
+        new Set([input.primaryTableNumber, ...existingJoined, ...cleanJoinList])
+      ).sort((a, b) => a - b);
+
+      let extraGuests = 0;
+
+      for (const secNum of cleanJoinList) {
+        const secTable = this.getDiningTableByNumber(secNum);
+        if (!secTable) {
+          throw new Error(`Mesa secundária ${secNum} não encontrada.`);
+        }
+
+        // Verifica se a mesa secundária possuía comanda própria para consolidar pedidos/pagamentos sem duplicar
+        const secTabRow = secTable.activeTabId
+          ? (this.db.prepare('SELECT * FROM tabs WHERE id = ?').get(secTable.activeTabId) as
+              | Record<string, unknown>
+              | undefined)
+          : (this.db
+              .prepare(
+                "SELECT * FROM tabs WHERE table_number = ? AND status IN ('OPEN', 'BILL_REQUESTED', 'PARTIALLY_PAID') LIMIT 1"
+              )
+              .get(secNum) as Record<string, unknown> | undefined);
+
+        if (secTabRow && String(secTabRow.id) !== primaryTab.id) {
+          const secTabId = String(secTabRow.id);
+          extraGuests += Number(secTabRow.guests_count ?? 0);
+
+          // Move os pedidos mantendo `table_number = secNum` para rastreabilidade de origem
+          this.db
+            .prepare('UPDATE orders SET tab_id = ? WHERE tab_id = ?')
+            .run(primaryTab.id, secTabId);
+
+          // Move eventuais pagamentos já realizados
+          this.db
+            .prepare('UPDATE payments SET tab_id = ? WHERE tab_id = ?')
+            .run(primaryTab.id, secTabId);
+
+          // Cancela/consolida a comanda secundária esvaziada e libera o índice único de table_number
+          this.db
+            .prepare(`
+              UPDATE tabs
+              SET status = 'CANCELLED',
+                  table_number = NULL,
+                  notes = ?,
+                  closed_at = ?,
+                  version = version + 1
+              WHERE id = ?
+            `)
+            .run(
+              `Consolidada por junção na comanda ${primaryTab.code} (Mesa ${input.primaryTableNumber})`,
+              new Date().toISOString(),
+              secTabId
+            );
+        } else {
+          extraGuests += Math.max(1, secTable.guestsCount || 2);
+        }
+
+        this.db
+          .prepare(`
+            UPDATE dining_tables_qr
+            SET physical_status = 'EM_ATENDIMENTO',
+                active_tab_id = ?,
+                primary_table_number = ?,
+                joined_group_id = ?,
+                assigned_waiter_user_id = COALESCE(assigned_waiter_user_id, ?),
+                assigned_waiter_name = COALESCE(assigned_waiter_name, ?),
+                opened_at = COALESCE(opened_at, ?)
+            WHERE table_number = ?
+          `)
+          .run(
+            primaryTab.id,
+            input.primaryTableNumber,
+            groupId,
+            primaryTab.waiterUserId ?? input.actorUserId,
+            primaryTab.waiterName ?? 'Garçom Deck 26',
+            primaryTab.openedAt,
+            secNum
+          );
+      }
+
+      this.db
+        .prepare(`
+          UPDATE dining_tables_qr
+          SET physical_status = CASE WHEN physical_status = 'LIVRE' THEN 'EM_ATENDIMENTO' ELSE physical_status END,
+              active_tab_id = ?,
+              primary_table_number = NULL,
+              joined_group_id = ?,
+              guests_count = guests_count + ?
+          WHERE table_number = ?
+        `)
+        .run(primaryTab.id, groupId, extraGuests, input.primaryTableNumber);
+
+      this.db
+        .prepare(`
+          UPDATE tabs
+          SET joined_tables_json = ?,
+              guests_count = guests_count + ?
+          WHERE id = ?
+        `)
+        .run(JSON.stringify(allJoinedNumbers), extraGuests, primaryTab.id);
+
+      const recalculatedTab = this.recalculateTabInTx(primaryTab.id, input.originNode ?? 'WINDOWS_PDV');
+
+      this.recordAuditLog({
+        actorUserId: input.actorUserId,
+        action: 'TABLES_JOINED',
+        entityType: 'TAB',
+        entityId: recalculatedTab.id,
+        metadata: {
+          primaryTableNumber: input.primaryTableNumber,
+          joinedTables: allJoinedNumbers,
+          groupId,
+          reason: input.reason ?? 'Junção operacional de mesas'
+        }
+      });
+
+      this.db.exec('COMMIT');
+
+      this.createNotification({
+        eventType: 'TABLES_JOINED',
+        tableNumber: input.primaryTableNumber,
+        tabId: recalculatedTab.id,
+        title: `Mesas Unidas (${allJoinedNumbers.join(', ')})`,
+        message: `Mesas ${allJoinedNumbers.join(', ')} vinculadas à comanda principal ${recalculatedTab.code}.`
+      });
+
+      return {
+        primaryTable: this.getDiningTableByNumber(input.primaryTableNumber)!,
+        joinedTables: allJoinedNumbers.map((n) => this.getDiningTableByNumber(n)!),
+        tab: recalculatedTab
+      };
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
+  /**
+   * Separação posterior de mesa unida (Seção 9).
+   */
+  public unjoinTable(input: {
+    tableNumberToSeparate: number;
+    actorUserId: string;
+    reason?: string;
+    originNode?: OriginNode;
+  }): { separatedTable: DiningTableQr; primaryTab: Tab; separatedTab: Tab | null } {
+    this.db.exec('BEGIN IMMEDIATE TRANSACTION');
+    try {
+      const secTable = this.getDiningTableByNumber(input.tableNumberToSeparate);
+      if (!secTable || !secTable.primaryTableNumber || !secTable.activeTabId) {
+        throw new Error(`A Mesa ${input.tableNumberToSeparate} não está vinculada a uma junção ativa.`);
+      }
+
+      const primaryTab = this.getTabById(secTable.activeTabId);
+      if (!primaryTab) {
+        throw new Error('Comanda principal da junção não encontrada.');
+      }
+
+      const remainingJoined = (primaryTab.joinedTables ?? [secTable.primaryTableNumber]).filter(
+        (n) => n !== input.tableNumberToSeparate
+      );
+
+      this.db
+        .prepare('UPDATE tabs SET joined_tables_json = ? WHERE id = ?')
+        .run(JSON.stringify(remainingJoined), primaryTab.id);
+
+      if (remainingJoined.length <= 1) {
+        this.db
+          .prepare('UPDATE dining_tables_qr SET joined_group_id = NULL WHERE table_number = ?')
+          .run(secTable.primaryTableNumber);
+      }
+
+      // Verifica se há pedidos ativos originados especificamente nesta mesa secundária
+      const tableOrders = this.listOrdersByTab(primaryTab.id).filter(
+        (o) => o.tableNumber === input.tableNumberToSeparate && o.status !== 'CANCELLED'
+      );
+
+      let separatedTab: Tab | null = null;
+
+      if (tableOrders.length > 0 && primaryTab.paidCents === 0) {
+        // Abre uma nova comanda dedicada para a mesa separada e move os pedidos originados nela
+        const now = new Date().toISOString();
+        const newTabId = crypto.randomUUID();
+        const newTabCode = `MESA-${String(input.tableNumberToSeparate).padStart(2, '0')}`;
+
+        this.db
+          .prepare(`
+            INSERT INTO tabs (
+              id, code, type, status, table_number, guests_count, waiter_user_id, waiter_name,
+              joined_tables_json, service_fee_enabled, service_fee_bps, subtotal_cents,
+              service_fee_cents, discount_type, discount_cents, discount_bps, total_cents, paid_cents,
+              opened_by_user_id, opened_at, version
+            ) VALUES (?, ?, 'TABLE', 'OPEN', ?, ?, ?, ?, ?, 1, 1000, 0, 0, 'NONE', 0, 0, 0, 0, ?, ?, 1)
+          `)
+          .run(
+            newTabId,
+            newTabCode,
+            input.tableNumberToSeparate,
+            Math.max(1, secTable.guestsCount || 1),
+            secTable.assignedWaiterUserId ?? primaryTab.waiterUserId ?? input.actorUserId,
+            secTable.assignedWaiterName ?? primaryTab.waiterName ?? 'Garçom Deck 26',
+            JSON.stringify([input.tableNumberToSeparate]),
+            input.actorUserId,
+            now
+          );
+
+        for (const ord of tableOrders) {
+          this.db.prepare('UPDATE orders SET tab_id = ? WHERE id = ?').run(newTabId, ord.id);
+        }
+
+        this.db
+          .prepare(`
+            UPDATE dining_tables_qr
+            SET physical_status = 'EM_ATENDIMENTO',
+                active_tab_id = ?,
+                primary_table_number = NULL,
+                joined_group_id = NULL
+            WHERE table_number = ?
+          `)
+          .run(newTabId, input.tableNumberToSeparate);
+
+        separatedTab = this.recalculateTabInTx(newTabId, input.originNode ?? 'WINDOWS_PDV');
+      } else {
+        // Libera a mesa secundária de volta para LIVRE
+        this.db
+          .prepare(`
+            UPDATE dining_tables_qr
+            SET physical_status = 'LIVRE',
+                active_tab_id = NULL,
+                primary_table_number = NULL,
+                joined_group_id = NULL,
+                assigned_waiter_user_id = NULL,
+                assigned_waiter_name = NULL,
+                guests_count = 0,
+                opened_at = NULL,
+                notes = NULL
+            WHERE table_number = ?
+          `)
+          .run(input.tableNumberToSeparate);
+      }
+
+      const updatedPrimaryTab = this.recalculateTabInTx(primaryTab.id, input.originNode ?? 'WINDOWS_PDV');
+
+      this.recordAuditLog({
+        actorUserId: input.actorUserId,
+        action: 'TABLE_UNJOINED',
+        entityType: 'TAB',
+        entityId: updatedPrimaryTab.id,
+        metadata: {
+          separatedTableNumber: input.tableNumberToSeparate,
+          separatedTabId: separatedTab?.id ?? null,
+          reason: input.reason ?? 'Separação operacional de mesa'
+        }
+      });
+
+      this.db.exec('COMMIT');
+
+      return {
+        separatedTable: this.getDiningTableByNumber(input.tableNumberToSeparate)!,
+        primaryTab: updatedPrimaryTab,
+        separatedTab
+      };
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
   }
 
   // ============================================================================
@@ -898,9 +1846,36 @@ export class LocalOperationalStore {
     tableNumber?: number | null;
     customerName?: string | null;
     guestsCount?: number;
+    waiterUserId?: string | null;
+    waiterName?: string | null;
+    notes?: string | null;
     openedByUserId?: string;
     originNode?: OriginNode;
   }): Tab {
+    // Se for mesa e a mesa estiver unida a uma mesa principal, retorna a comanda principal da junção
+    if (input.tableNumber) {
+      const tableMeta = this.db
+        .prepare('SELECT active_tab_id, primary_table_number FROM dining_tables_qr WHERE table_number = ?')
+        .get(input.tableNumber) as { active_tab_id?: string | null; primary_table_number?: number | null } | undefined;
+
+      if (tableMeta?.active_tab_id) {
+        const linkedTab = this.db
+          .prepare("SELECT * FROM tabs WHERE id = ? AND status IN ('OPEN', 'BILL_REQUESTED', 'PARTIALLY_PAID') LIMIT 1")
+          .get(tableMeta.active_tab_id) as Record<string, unknown> | undefined;
+        if (linkedTab) {
+          return this.mapTabRow(linkedTab);
+        }
+      }
+
+      const existingByTable = this.db
+        .prepare("SELECT * FROM tabs WHERE table_number = ? AND status IN ('OPEN', 'BILL_REQUESTED', 'PARTIALLY_PAID') LIMIT 1")
+        .get(input.tableNumber) as Record<string, unknown> | undefined;
+
+      if (existingByTable) {
+        return this.mapTabRow(existingByTable);
+      }
+    }
+
     const normalizedCode = input.code.trim().toUpperCase();
     const existingRow = this.db
       .prepare("SELECT * FROM tabs WHERE code = ? AND status IN ('OPEN', 'BILL_REQUESTED', 'PARTIALLY_PAID') LIMIT 1")
@@ -920,11 +1895,17 @@ export class LocalOperationalStore {
       hotelReservationId: null,
       customerName: input.customerName ?? null,
       guestsCount: input.guestsCount ?? 1,
+      waiterUserId: input.waiterUserId ?? input.openedByUserId ?? 'usr-operator-local',
+      waiterName: input.waiterName ?? null,
+      notes: input.notes ?? null,
+      joinedTables: input.tableNumber ? [input.tableNumber] : [],
       serviceFeeEnabled: input.type === 'TABLE',
       serviceFeeBasisPoints: 1000,
       subtotalCents: 0,
       serviceFeeCents: 0,
+      discountType: 'NONE',
       discountCents: 0,
+      discountBasisPoints: 0,
       totalCents: 0,
       paidCents: 0,
       openedByUserId: input.openedByUserId ?? 'usr-operator-local',
@@ -937,10 +1918,11 @@ export class LocalOperationalStore {
       .prepare(`
         INSERT INTO tabs (
           id, code, type, status, table_number, hotel_reservation_id, customer_name,
-          guests_count, service_fee_enabled, service_fee_bps, subtotal_cents,
-          service_fee_cents, discount_cents, total_cents, paid_cents,
-          opened_by_user_id, opened_at, closed_at, version
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          guests_count, waiter_user_id, waiter_name, notes, joined_tables_json,
+          service_fee_enabled, service_fee_bps, subtotal_cents,
+          service_fee_cents, discount_type, discount_cents, discount_bps,
+          total_cents, paid_cents, opened_by_user_id, opened_at, closed_at, version
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'NONE', 0, 0, ?, ?, ?, ?, ?, ?)
       `)
       .run(
         tab.id,
@@ -951,9 +1933,12 @@ export class LocalOperationalStore {
         null,
         tab.customerName ?? null,
         tab.guestsCount,
+        tab.waiterUserId ?? null,
+        tab.waiterName ?? null,
+        tab.notes ?? null,
+        JSON.stringify(tab.joinedTables ?? []),
         tab.serviceFeeEnabled ? 1 : 0,
         tab.serviceFeeBasisPoints,
-        0,
         0,
         0,
         0,
@@ -963,6 +1948,28 @@ export class LocalOperationalStore {
         null,
         tab.version
       );
+
+    if (tab.tableNumber) {
+      this.db
+        .prepare(`
+          UPDATE dining_tables_qr
+          SET physical_status = CASE WHEN physical_status = 'LIVRE' THEN 'AGUARDANDO_PEDIDO' ELSE physical_status END,
+              active_tab_id = ?,
+              assigned_waiter_user_id = COALESCE(assigned_waiter_user_id, ?),
+              assigned_waiter_name = COALESCE(assigned_waiter_name, ?),
+              guests_count = CASE WHEN guests_count = 0 THEN ? ELSE guests_count END,
+              opened_at = COALESCE(opened_at, ?)
+          WHERE table_number = ?
+        `)
+        .run(
+          tab.id,
+          tab.waiterUserId ?? null,
+          tab.waiterName ?? null,
+          tab.guestsCount,
+          now,
+          tab.tableNumber
+        );
+    }
 
     this.appendOutboxEvent({
       idempotencyKey: `tab-open-${tab.id}-v1`,
@@ -994,6 +2001,7 @@ export class LocalOperationalStore {
     qrToken?: string;
     channel: SalesChannel;
     originNode: OriginNode;
+    priority?: OrderPriority;
     waiterUserId?: string | null;
     waiterName?: string | null;
     customerNotes?: string;
@@ -1107,7 +2115,8 @@ export class LocalOperationalStore {
         totalItemCents,
         notes: rawItem.notes,
         modifiers,
-        status: initialStatus
+        status: initialStatus,
+        paidQuantity: 0
       });
     }
 
@@ -1119,6 +2128,8 @@ export class LocalOperationalStore {
         code: `MESA-${String(resolvedTableNumber).padStart(2, '0')}`,
         type: 'TABLE',
         tableNumber: resolvedTableNumber,
+        waiterUserId: input.waiterUserId ?? 'usr-waiter',
+        waiterName: input.waiterName ?? null,
         openedByUserId: input.waiterUserId ?? 'usr-waiter',
         originNode: input.originNode
       });
@@ -1126,9 +2137,15 @@ export class LocalOperationalStore {
       resolvedTab = this.openOrGetTab({
         code: `BALCAO-${orderId.slice(0, 6).toUpperCase()}`,
         type: 'COUNTER',
+        waiterUserId: input.waiterUserId ?? 'usr-cashier',
+        waiterName: input.waiterName ?? null,
         openedByUserId: input.waiterUserId ?? 'usr-cashier',
         originNode: input.originNode
       });
+    }
+
+    if (resolvedTab && (resolvedTab.status === 'CLOSED' || resolvedTab.status === 'CANCELLED')) {
+      throw new Error(`Não é permitido lançar pedidos na comanda encerrada ${resolvedTab.code}.`);
     }
 
     const totalOrderCents = orderItems.reduce((acc, item) => acc + item.totalItemCents, 0);
@@ -1140,6 +2157,7 @@ export class LocalOperationalStore {
       originNode: input.originNode,
       idempotencyKey: input.idempotencyKey,
       status: initialStatus,
+      priority: input.priority ?? 'NORMAL',
       waiterUserId: input.waiterUserId ?? null,
       waiterName: input.waiterName ?? null,
       tableNumber: resolvedTableNumber ?? resolvedTab?.tableNumber ?? null,
@@ -1156,10 +2174,10 @@ export class LocalOperationalStore {
       this.db
         .prepare(`
           INSERT INTO orders (
-            id, tab_id, channel, origin_node, idempotency_key, status,
+            id, tab_id, channel, origin_node, idempotency_key, status, priority,
             waiter_user_id, waiter_name, table_number, customer_notes,
             total_order_cents, created_at, updated_at, version
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `)
         .run(
           order.id,
@@ -1168,6 +2186,7 @@ export class LocalOperationalStore {
           order.originNode,
           order.idempotencyKey,
           order.status,
+          order.priority ?? 'NORMAL',
           order.waiterUserId ?? null,
           order.waiterName ?? null,
           order.tableNumber ?? null,
@@ -1182,8 +2201,8 @@ export class LocalOperationalStore {
         INSERT INTO order_items (
           id, order_id, product_id, product_name, prep_station,
           quantity, unit_price_cents, modifiers_total_cents, total_item_cents,
-          notes, modifiers_json, status
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          notes, modifiers_json, status, paid_quantity
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
       `);
 
       for (const item of order.items) {
@@ -1215,6 +2234,17 @@ export class LocalOperationalStore {
 
       if (resolvedTab) {
         resolvedTab = this.recalculateTabInTx(resolvedTab.id, order.originNode);
+        this.db
+          .prepare(`
+            UPDATE dining_tables_qr
+            SET physical_status = CASE
+                  WHEN physical_status IN ('LIVRE', 'OCUPADA', 'AGUARDANDO_PEDIDO') THEN 'EM_ATENDIMENTO'
+                  ELSE physical_status
+                END,
+                active_tab_id = ?
+            WHERE active_tab_id = ? OR table_number = ?
+          `)
+          .run(resolvedTab.id, resolvedTab.id, order.tableNumber ?? resolvedTab.tableNumber ?? -1);
       }
 
       this.appendOutboxEvent({
@@ -1229,6 +2259,18 @@ export class LocalOperationalStore {
 
       this.db.exec('COMMIT');
 
+      this.createNotification({
+        eventType: 'ORDER_CREATED',
+        targetRole: 'KITCHEN',
+        tableNumber: order.tableNumber ?? null,
+        tabId: resolvedTab?.id ?? null,
+        orderId: order.id,
+        title: order.tableNumber
+          ? `Novo Pedido — Mesa ${String(order.tableNumber).padStart(2, '0')}`
+          : `Novo Pedido (${order.channel})`,
+        message: `${order.items.map((i) => `${i.quantity}x ${i.productName}`).join(', ')}`
+      });
+
       return {
         order,
         tab: resolvedTab,
@@ -1240,6 +2282,277 @@ export class LocalOperationalStore {
       this.db.exec('ROLLBACK');
       throw err;
     }
+  }
+
+  /**
+   * Transferência de Item entre Comandas (Seção 10):
+   * - Não realiza nova baixa de estoque.
+   * - Não reimprime pedido na cozinha.
+   * - Não duplica receita financeira.
+   * - Bloqueia transferência de item cancelado ou já pago.
+   */
+  public transferOrderItemBetweenTabs(input: {
+    orderItemId: string;
+    quantityToTransfer?: number;
+    targetTabId: string;
+    actorUserId: string;
+    reason: string;
+    originNode?: OriginNode;
+  }): { sourceTab: Tab; targetTab: Tab; transferredItem: OrderItem } {
+    if (!input.reason || input.reason.trim().length < 3) {
+      throw new Error('Informe o motivo da transferência do item (mínimo 3 caracteres).');
+    }
+
+    this.db.exec('BEGIN IMMEDIATE TRANSACTION');
+    try {
+      const itemRow = this.db
+        .prepare('SELECT * FROM order_items WHERE id = ?')
+        .get(input.orderItemId) as Record<string, unknown> | undefined;
+
+      if (!itemRow) {
+        throw new Error(`Item de pedido '${input.orderItemId}' não encontrado.`);
+      }
+
+      const sourceOrderRow = this.db
+        .prepare('SELECT * FROM orders WHERE id = ?')
+        .get(String(itemRow.order_id)) as Record<string, unknown> | undefined;
+
+      if (!sourceOrderRow || !sourceOrderRow.tab_id) {
+        throw new Error('O pedido de origem não está vinculado a uma comanda.');
+      }
+
+      const sourceTabId = String(sourceOrderRow.tab_id);
+      if (sourceTabId === input.targetTabId) {
+        throw new Error('A comanda de destino deve ser diferente da comanda de origem.');
+      }
+
+      const sourceTab = this.getTabById(sourceTabId);
+      const targetTab = this.getTabById(input.targetTabId);
+
+      if (!sourceTab || sourceTab.status === 'CLOSED' || sourceTab.status === 'CANCELLED') {
+        throw new Error('Comanda de origem não está ativa para transferência.');
+      }
+      if (!targetTab || targetTab.status === 'CLOSED' || targetTab.status === 'CANCELLED') {
+        throw new Error('Comanda de destino não está ativa para receber transferência.');
+      }
+
+      const itemStatus = String(itemRow.status) as OrderStatus;
+      if (itemStatus === 'CANCELLED' || String(sourceOrderRow.status) === 'CANCELLED') {
+        throw new Error('Não é permitido transferir um item cancelado.');
+      }
+
+      const totalQty = Number(itemRow.quantity);
+      const paidQty = Number(itemRow.paid_quantity ?? 0);
+      const availableUnpaidQty = Number((totalQty - paidQty).toFixed(4));
+
+      const qtyToTransfer = input.quantityToTransfer ?? availableUnpaidQty;
+      if (qtyToTransfer <= 0 || qtyToTransfer > availableUnpaidQty) {
+        throw new Error(
+          `Quantidade indisponível para transferência. O item já foi pago parcial ou integralmente (Disponível não pago: ${availableUnpaidQty}).`
+        );
+      }
+
+      // Garante que a transferência na origem não reduza o total abaixo do que já foi pago na comanda de origem
+      const unitWithModsCents = Number(itemRow.unit_price_cents) + Number(itemRow.modifiers_total_cents);
+      const transferValueCents = Math.round(unitWithModsCents * qtyToTransfer);
+      const sourceRemainingGross = sourceTab.subtotalCents - transferValueCents;
+      if (sourceTab.paidCents > 0 && sourceRemainingGross < sourceTab.paidCents) {
+        throw new Error(
+          'Não é permitido transferir este item pois o valor restante na comanda de origem ficaria menor que os pagamentos já recebidos.'
+        );
+      }
+
+      const now = new Date().toISOString();
+      const targetOrderId = crypto.randomUUID();
+
+      // Cria um registro de pedido receptor na comanda de destino (sem acionar estoque nem impressão)
+      this.db
+        .prepare(`
+          INSERT INTO orders (
+            id, tab_id, channel, origin_node, idempotency_key, status, priority,
+            waiter_user_id, waiter_name, table_number, customer_notes,
+            total_order_cents, created_at, updated_at, version
+          ) VALUES (?, ?, ?, ?, ?, ?, 'NORMAL', ?, ?, ?, ?, ?, ?, ?, 1)
+        `)
+        .run(
+          targetOrderId,
+          targetTab.id,
+          String(sourceOrderRow.channel),
+          input.originNode ?? 'WINDOWS_PDV',
+          `transfer-item-${input.orderItemId}-${now}`,
+          itemStatus,
+          input.actorUserId,
+          null,
+          targetTab.tableNumber ?? null,
+          `Transferido da comanda ${sourceTab.code}: ${input.reason}`,
+          transferValueCents,
+          now,
+          now
+        );
+
+      let transferredItemId = input.orderItemId;
+
+      if (qtyToTransfer === totalQty && paidQty === 0) {
+        // Move a linha inteira para o pedido na comanda de destino
+        this.db
+          .prepare(`
+            UPDATE order_items
+            SET order_id = ?,
+                transferred_from_tab_id = ?,
+                transferred_from_order_id = ?,
+                transferred_at = ?,
+                transferred_by_user_id = ?
+            WHERE id = ?
+          `)
+          .run(
+            targetOrderId,
+            sourceTab.id,
+            String(sourceOrderRow.id),
+            now,
+            input.actorUserId,
+            input.orderItemId
+          );
+      } else {
+        // Transferência parcial: reduz quantidade no item original e cria novo item no destino
+        const remainingSourceQty = Number((totalQty - qtyToTransfer).toFixed(4));
+        const remainingSourceCents = Math.round(unitWithModsCents * remainingSourceQty);
+        this.db
+          .prepare('UPDATE order_items SET quantity = ?, total_item_cents = ? WHERE id = ?')
+          .run(remainingSourceQty, remainingSourceCents, input.orderItemId);
+
+        transferredItemId = crypto.randomUUID();
+        this.db
+          .prepare(`
+            INSERT INTO order_items (
+              id, order_id, product_id, product_name, prep_station,
+              quantity, unit_price_cents, modifiers_total_cents, total_item_cents,
+              notes, modifiers_json, status, transferred_from_tab_id,
+              transferred_from_order_id, transferred_at, transferred_by_user_id, paid_quantity
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+          `)
+          .run(
+            transferredItemId,
+            targetOrderId,
+            String(itemRow.product_id),
+            String(itemRow.product_name),
+            String(itemRow.prep_station),
+            qtyToTransfer,
+            Number(itemRow.unit_price_cents),
+            Number(itemRow.modifiers_total_cents),
+            transferValueCents,
+            itemRow.notes ? String(itemRow.notes) : null,
+            String(itemRow.modifiers_json),
+            itemStatus,
+            sourceTab.id,
+            String(sourceOrderRow.id),
+            now,
+            input.actorUserId
+          );
+      }
+
+      // Recalcula o total_order_cents do pedido de origem
+      const remainingSourceItems = this.db
+        .prepare("SELECT COALESCE(SUM(total_item_cents), 0) as total FROM order_items WHERE order_id = ? AND status != 'CANCELLED'")
+        .get(String(sourceOrderRow.id)) as { total: number };
+
+      this.db
+        .prepare('UPDATE orders SET total_order_cents = ?, updated_at = ?, version = version + 1 WHERE id = ?')
+        .run(Number(remainingSourceItems.total), now, String(sourceOrderRow.id));
+
+      const updatedSourceTab = this.recalculateTabInTx(sourceTab.id, input.originNode ?? 'WINDOWS_PDV');
+      const updatedTargetTab = this.recalculateTabInTx(targetTab.id, input.originNode ?? 'WINDOWS_PDV');
+
+      const targetOrder = this.getOrderById(targetOrderId)!;
+      const transferredItem = targetOrder.items.find((i) => i.id === transferredItemId) ?? targetOrder.items[0]!;
+
+      this.recordAuditLog({
+        actorUserId: input.actorUserId,
+        action: 'TAB_ITEM_TRANSFERRED',
+        entityType: 'ORDER_ITEM',
+        entityId: transferredItem.id,
+        metadata: {
+          sourceTabId: sourceTab.id,
+          sourceTabCode: sourceTab.code,
+          targetTabId: targetTab.id,
+          targetTabCode: targetTab.code,
+          productName: transferredItem.productName,
+          quantityTransferred: qtyToTransfer,
+          transferValueCents,
+          reason: input.reason
+        }
+      });
+
+      this.db.exec('COMMIT');
+
+      this.createNotification({
+        eventType: 'TAB_ITEM_TRANSFERRED',
+        tabId: updatedTargetTab.id,
+        tableNumber: updatedTargetTab.tableNumber ?? null,
+        title: `Item Transferido (${sourceTab.code} → ${targetTab.code})`,
+        message: `${qtyToTransfer}x ${transferredItem.productName} transferido para ${targetTab.code}.`
+      });
+
+      return {
+        sourceTab: updatedSourceTab,
+        targetTab: updatedTargetTab,
+        transferredItem
+      };
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
+  /**
+   * Solicitação de Fechamento de Conta pelo Garçom ou Operador (Seções 3, 6 e 19)
+   */
+  public requestTabBill(input: {
+    tabId: string;
+    actorUserId: string;
+    originNode?: OriginNode;
+  }): Tab {
+    const tab = this.getTabById(input.tabId);
+    if (!tab) {
+      throw new Error(`Comanda '${input.tabId}' não encontrada.`);
+    }
+    if (tab.status === 'CLOSED' || tab.status === 'CANCELLED') {
+      throw new Error(`Comanda ${tab.code} já está encerrada (${tab.status}).`);
+    }
+
+    const nextStatus = tab.paidCents > 0 ? 'PARTIALLY_PAID' : 'BILL_REQUESTED';
+    this.db
+      .prepare('UPDATE tabs SET status = ?, version = version + 1 WHERE id = ?')
+      .run(nextStatus, tab.id);
+
+    this.db
+      .prepare("UPDATE dining_tables_qr SET physical_status = 'AGUARDANDO_PAGAMENTO' WHERE active_tab_id = ?")
+      .run(tab.id);
+
+    const updatedTab = this.getTabById(tab.id)!;
+
+    this.recordAuditLog({
+      actorUserId: input.actorUserId,
+      action: 'BILL_REQUESTED',
+      entityType: 'TAB',
+      entityId: tab.id,
+      metadata: {
+        tabCode: tab.code,
+        tableNumber: tab.tableNumber,
+        totalCents: tab.totalCents,
+        remainingCents: Math.max(0, tab.totalCents - tab.paidCents)
+      }
+    });
+
+    this.createNotification({
+      eventType: 'BILL_REQUESTED',
+      targetRole: 'CASHIER',
+      tableNumber: tab.tableNumber ?? null,
+      tabId: tab.id,
+      title: `Fechamento Solicitado — ${tab.code}`,
+      message: `Cliente solicitou fechamento da conta ${tab.code} (Saldo: R$ ${((tab.totalCents - tab.paidCents) / 100).toFixed(2).replace('.', ',')}).`
+    });
+
+    return updatedTab;
   }
 
   private deductOrderStockInTx(
@@ -1474,14 +2787,17 @@ export class LocalOperationalStore {
   }
 
   /**
-   * Avança o status de um pedido:
-   * - Se o pedido estava em `PENDING_APPROVAL` (QR Code com aprovação manual) e passa para `RECEIVED`,
-   *   compromete o estoque e gera os trabalhos de impressão agora.
-   * - Mudanças entre `RECEIVED` -> `IN_PREPARATION` -> `READY` -> `DELIVERED` NUNCA baixam estoque novamente.
-   * - Se o pedido for `CANCELLED`, aplica a regra auditável de reversão (Seção 9):
-   *   * Se o pedido ainda NÃO havia entrado em preparo (`RECEIVED` / `PENDING_APPROVAL`), ou se `reverseStock = true`,
-   *     estorna as baixas de estoque com `REVERSAL_ENTRY`.
-   *   * Se já estava preparado/entregue e `reverseStock = false`, mantém a baixa como perda operacional auditada.
+   * Avança o status de um pedido (Seções 14, 15, 16 e 17):
+   * - Se o pedido estava em `PENDING_APPROVAL` e passa para `RECEIVED`, compromete o estoque e imprime.
+   * - `IN_PREPARATION`: grava `prep_started_at` e atualiza mesa para `EM_ATENDIMENTO`.
+   * - `READY`: grava `ready_at`, `waiter_notified_at` e emite alerta em tempo real `ORDER_READY` para o garçom.
+   * - `DELIVERED`: grava `delivered_at`, `delivered_by_user_id` e confirma a entrega da notificação.
+   * - `CANCELLED`: diferencia os 3 estágios operacionais (Seção 17):
+   *   1. `BEFORE_PREP` (`RECEIVED` / `PENDING_APPROVAL`): estorna estoque automaticamente (`REVERSAL_ENTRY`).
+   *   2. `DURING_PREP` (`IN_PREPARATION`): exige autorização de Gerente/Proprietário (`tabs:discount_or_void`),
+   *      registra perda operacional auditada e NÃO devolve automaticamente insumos já em preparo ao estoque.
+   *   3. `AFTER_DELIVERY` (`READY` / `DELIVERED`): exige autorização de Gerente/Proprietário,
+   *      ajusta o financeiro da comanda, preserva histórico e NÃO devolve insumos consumidos ao estoque.
    */
   public advanceOrderStatus(input: {
     orderId: string;
@@ -1490,6 +2806,9 @@ export class LocalOperationalStore {
     reverseStockOnCancel?: boolean;
     cancelReason?: string;
     actorUserId?: string;
+    actorRole?: UserRole;
+    authorizedByUserId?: string;
+    priority?: OrderPriority;
   }): Order {
     const existing = this.getOrderById(input.orderId);
     if (!existing) {
@@ -1498,16 +2817,118 @@ export class LocalOperationalStore {
 
     const now = new Date().toISOString();
     const nextVersion = existing.version + 1;
+    const actorUserId = input.actorUserId ?? 'usr-operator-local';
+
+    let cancelStage: OrderCancelStage | null = null;
+    if (input.newStatus === 'CANCELLED' && existing.status !== 'CANCELLED') {
+      if (existing.status === 'PENDING_APPROVAL' || existing.status === 'RECEIVED') {
+        cancelStage = 'BEFORE_PREP';
+      } else if (existing.status === 'IN_PREPARATION') {
+        cancelStage = 'DURING_PREP';
+      } else {
+        cancelStage = 'AFTER_DELIVERY';
+      }
+
+      if (cancelStage === 'DURING_PREP' || cancelStage === 'AFTER_DELIVERY') {
+        if (
+          input.actorRole &&
+          !hasPermission(input.actorRole, 'tabs:discount_or_void') &&
+          !input.authorizedByUserId
+        ) {
+          throw new Error(
+            `Cancelamento de pedido no estágio ${cancelStage} (${existing.status}) exige autorização de Gerente ou Proprietário.`
+          );
+        }
+        if (!input.cancelReason || input.cancelReason.trim().length < 3) {
+          throw new Error(
+            `Informe obrigatoriamente o motivo do cancelamento para pedido no estágio ${cancelStage}.`
+          );
+        }
+      }
+    }
 
     this.db.exec('BEGIN IMMEDIATE TRANSACTION');
     try {
+      const prepStartedAt =
+        input.newStatus === 'IN_PREPARATION'
+          ? (existing.prepStartedAt ?? now)
+          : (existing.prepStartedAt ?? null);
+      const readyAt =
+        input.newStatus === 'READY' ? (existing.readyAt ?? now) : (existing.readyAt ?? null);
+      const waiterNotifiedAt =
+        input.newStatus === 'READY'
+          ? (existing.waiterNotifiedAt ?? now)
+          : (existing.waiterNotifiedAt ?? null);
+      const deliveredAt =
+        input.newStatus === 'DELIVERED'
+          ? (existing.deliveredAt ?? now)
+          : (existing.deliveredAt ?? null);
+      const deliveredByUserId =
+        input.newStatus === 'DELIVERED'
+          ? actorUserId
+          : (existing.deliveredByUserId ?? null);
+
       this.db
-        .prepare('UPDATE orders SET status = ?, updated_at = ?, version = ? WHERE id = ?')
-        .run(input.newStatus, now, nextVersion, input.orderId);
+        .prepare(`
+          UPDATE orders
+          SET status = ?,
+              priority = COALESCE(?, priority),
+              prep_started_at = ?,
+              ready_at = ?,
+              waiter_notified_at = ?,
+              delivered_at = ?,
+              delivered_by_user_id = ?,
+              cancel_stage = COALESCE(?, cancel_stage),
+              cancel_reason = COALESCE(?, cancel_reason),
+              cancelled_by_user_id = CASE WHEN ? = 'CANCELLED' THEN ? ELSE cancelled_by_user_id END,
+              cancelled_at = CASE WHEN ? = 'CANCELLED' THEN ? ELSE cancelled_at END,
+              updated_at = ?,
+              version = ?
+          WHERE id = ?
+        `)
+        .run(
+          input.newStatus,
+          input.priority ?? null,
+          prepStartedAt,
+          readyAt,
+          waiterNotifiedAt,
+          deliveredAt,
+          deliveredByUserId,
+          cancelStage,
+          input.cancelReason ?? null,
+          input.newStatus,
+          actorUserId,
+          input.newStatus,
+          now,
+          now,
+          nextVersion,
+          input.orderId
+        );
 
       this.db
         .prepare('UPDATE order_items SET status = ? WHERE order_id = ?')
         .run(input.newStatus, input.orderId);
+
+      if (input.newStatus === 'IN_PREPARATION' && existing.tabId) {
+        this.db
+          .prepare(`
+            UPDATE dining_tables_qr
+            SET physical_status = 'EM_ATENDIMENTO'
+            WHERE active_tab_id = ? AND physical_status IN ('LIVRE', 'OCUPADA', 'AGUARDANDO_PEDIDO')
+          `)
+          .run(existing.tabId);
+      }
+
+      if (input.newStatus === 'DELIVERED') {
+        this.db
+          .prepare(`
+            UPDATE operational_notifications
+            SET acknowledged_at = COALESCE(acknowledged_at, ?),
+                acknowledged_by_user_id = COALESCE(acknowledged_by_user_id, ?)
+            WHERE order_id = ? AND event_type = 'ORDER_READY' AND acknowledged_at IS NULL
+          `)
+          .run(now, actorUserId, existing.id);
+      }
 
       const updated = this.getOrderById(input.orderId)!;
 
@@ -1518,11 +2939,12 @@ export class LocalOperationalStore {
         this.enqueueOrderPrintJobsInTx(updated, tab?.code);
       }
 
-      // Caso o pedido seja CANCELLED: executa estorno auditável de estoque quando aplicável
+      // Caso o pedido seja CANCELLED: executa estorno auditável de estoque apenas quando BEFORE_PREP (ou quando explicitamente forçado)
       if (input.newStatus === 'CANCELLED' && existing.status !== 'CANCELLED') {
         const shouldReverse =
-          input.reverseStockOnCancel ??
-          (existing.status === 'RECEIVED' || existing.status === 'PENDING_APPROVAL');
+          input.reverseStockOnCancel !== undefined
+            ? input.reverseStockOnCancel
+            : cancelStage === 'BEFORE_PREP';
 
         if (shouldReverse) {
           const originalDeductions = this.getStockMovementsByReference('ORDER', existing.id).filter(
@@ -1541,8 +2963,8 @@ export class LocalOperationalStore {
               referenceEntityId: existing.id,
               reason:
                 input.cancelReason ??
-                `Estorno automático por cancelamento do Pedido #${existing.id.slice(0, 8)} (Status anterior: ${existing.status})`,
-              createdByUserId: input.actorUserId ?? 'system-reversal',
+                `Estorno automático por cancelamento do Pedido #${existing.id.slice(0, 8)} (${cancelStage})`,
+              createdByUserId: actorUserId,
               now
             });
 
@@ -1553,6 +2975,21 @@ export class LocalOperationalStore {
             }
           }
         }
+
+        this.recordAuditLog({
+          actorUserId,
+          action: `ORDER_CANCELLED_${cancelStage ?? 'BEFORE_PREP'}`,
+          entityType: 'ORDER',
+          entityId: existing.id,
+          metadata: {
+            previousStatus: existing.status,
+            cancelStage,
+            stockReversed: shouldReverse,
+            operationalLossRecorded: !shouldReverse,
+            cancelReason: input.cancelReason ?? 'Cancelamento operacional',
+            authorizedByUserId: input.authorizedByUserId ?? actorUserId
+          }
+        });
 
         if (updated.tabId) {
           this.recalculateTabInTx(updated.tabId, input.originNode);
@@ -1570,6 +3007,31 @@ export class LocalOperationalStore {
       });
 
       this.db.exec('COMMIT');
+
+      if (input.newStatus === 'READY' && existing.status !== 'READY') {
+        this.createNotification({
+          eventType: 'ORDER_READY',
+          targetRole: 'WAITER',
+          targetUserId: updated.waiterUserId ?? null,
+          tableNumber: updated.tableNumber ?? null,
+          tabId: updated.tabId ?? null,
+          orderId: updated.id,
+          title: updated.tableNumber
+            ? `Pedido Pronto — Mesa ${String(updated.tableNumber).padStart(2, '0')}`
+            : `Pedido Pronto (#${updated.id.slice(0, 6)})`,
+          message: `Pronto para entrega: ${updated.items.map((i) => `${i.quantity}x ${i.productName}`).join(', ')}`
+        });
+      } else if (input.newStatus === 'CANCELLED' && existing.status !== 'CANCELLED') {
+        this.createNotification({
+          eventType: 'ORDER_CANCELLED',
+          tableNumber: updated.tableNumber ?? null,
+          tabId: updated.tabId ?? null,
+          orderId: updated.id,
+          title: `Pedido Cancelado (${cancelStage})`,
+          message: `Pedido #${updated.id.slice(0, 6)} cancelado: ${input.cancelReason ?? 'Sem motivo adicional'}`
+        });
+      }
+
       return updated;
     } catch (err) {
       this.db.exec('ROLLBACK');
@@ -1577,12 +3039,285 @@ export class LocalOperationalStore {
     }
   }
 
+  // ============================================================================
+  // DESCONTOS, TAXA DE SERVIÇO, DIVISÃO DE CONTA, PAGAMENTOS E ESTORNOS (SEÇÕES 11, 12, 13)
+  // ============================================================================
+
+  public applyTabDiscount(input: {
+    tabId: string;
+    discountType: DiscountType;
+    discountCents?: number;
+    discountBasisPoints?: number;
+    reason: string;
+    actorUserId: string;
+    actorRole?: UserRole;
+    authorizedByUserId?: string;
+    originNode?: OriginNode;
+  }): Tab {
+    if (
+      input.actorRole &&
+      !hasPermission(input.actorRole, 'tabs:discount_or_void') &&
+      !input.authorizedByUserId
+    ) {
+      throw new Error('Aplicação de desconto ou cortesia exige permissão de Gerente ou Proprietário.');
+    }
+    if (input.discountType !== 'NONE' && (!input.reason || input.reason.trim().length < 3)) {
+      throw new Error('Informe obrigatoriamente o motivo do desconto ou cortesia.');
+    }
+
+    this.db.exec('BEGIN IMMEDIATE TRANSACTION');
+    try {
+      const tab = this.getTabById(input.tabId);
+      if (!tab) throw new Error(`Comanda '${input.tabId}' não encontrada.`);
+      if (tab.status === 'CLOSED' || tab.status === 'CANCELLED') {
+        throw new Error(`Não é permitido alterar desconto em comanda encerrada (${tab.status}).`);
+      }
+
+      const grossBeforeDiscount = tab.subtotalCents + tab.serviceFeeCents;
+      let resolvedDiscountCents = 0;
+      let resolvedDiscountBps = 0;
+
+      if (input.discountType === 'COURTESY') {
+        resolvedDiscountCents = grossBeforeDiscount;
+        resolvedDiscountBps = 10000;
+      } else if (input.discountType === 'PERCENTAGE') {
+        resolvedDiscountBps = Math.min(10000, Math.max(0, Math.round(input.discountBasisPoints ?? 0)));
+        resolvedDiscountCents = Math.round((grossBeforeDiscount * resolvedDiscountBps) / 10000);
+      } else if (input.discountType === 'FIXED_CENTS') {
+        resolvedDiscountCents = Math.min(grossBeforeDiscount, Math.max(0, Math.round(input.discountCents ?? 0)));
+      }
+
+      const newTotalAfterDiscount = Math.max(0, grossBeforeDiscount - resolvedDiscountCents);
+      if (tab.paidCents > 0 && newTotalAfterDiscount < tab.paidCents) {
+        throw new Error(
+          `Desconto inválido: o novo total da comanda (${newTotalAfterDiscount}c) ficaria menor que o valor já pago (${tab.paidCents}c).`
+        );
+      }
+
+      this.db
+        .prepare(`
+          UPDATE tabs
+          SET discount_type = ?,
+              discount_cents = ?,
+              discount_bps = ?,
+              discount_reason = ?,
+              discount_authorized_by_user_id = ?
+          WHERE id = ?
+        `)
+        .run(
+          input.discountType,
+          resolvedDiscountCents,
+          resolvedDiscountBps,
+          input.discountType === 'NONE' ? null : input.reason.trim(),
+          input.authorizedByUserId ?? input.actorUserId,
+          tab.id
+        );
+
+      const updatedTab = this.recalculateTabInTx(tab.id, input.originNode ?? 'WINDOWS_PDV');
+
+      this.recordAuditLog({
+        actorUserId: input.actorUserId,
+        action: 'TAB_DISCOUNT_APPLIED',
+        entityType: 'TAB',
+        entityId: tab.id,
+        metadata: {
+          discountType: input.discountType,
+          discountCents: updatedTab.discountCents,
+          discountBasisPoints: resolvedDiscountBps,
+          reason: input.reason,
+          authorizedByUserId: input.authorizedByUserId ?? input.actorUserId
+        }
+      });
+
+      this.db.exec('COMMIT');
+      return updatedTab;
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
+  public configureTabServiceFee(input: {
+    tabId: string;
+    serviceFeeEnabled: boolean;
+    serviceFeeBasisPoints?: number;
+    actorUserId: string;
+    originNode?: OriginNode;
+  }): Tab {
+    this.db.exec('BEGIN IMMEDIATE TRANSACTION');
+    try {
+      const tab = this.getTabById(input.tabId);
+      if (!tab) throw new Error(`Comanda '${input.tabId}' não encontrada.`);
+      if (tab.status === 'CLOSED' || tab.status === 'CANCELLED') {
+        throw new Error(`Não é permitido alterar taxa de serviço em comanda encerrada (${tab.status}).`);
+      }
+
+      const nextBps = input.serviceFeeBasisPoints ?? tab.serviceFeeBasisPoints;
+      const previewOrders = this.listOrdersByTab(tab.id);
+      const previewTotals = calculateTabTotals({
+        orders: previewOrders,
+        serviceFeeEnabled: input.serviceFeeEnabled,
+        serviceFeeBasisPoints: nextBps,
+        discountCents: tab.discountCents,
+        paidCents: tab.paidCents
+      });
+
+      if (tab.paidCents > 0 && previewTotals.totalCents < tab.paidCents) {
+        throw new Error(
+          `Não é permitido remover a taxa de serviço pois o novo total (${previewTotals.totalCents}c) ficaria menor que os pagamentos já confirmados (${tab.paidCents}c).`
+        );
+      }
+
+      this.db
+        .prepare('UPDATE tabs SET service_fee_enabled = ?, service_fee_bps = ? WHERE id = ?')
+        .run(input.serviceFeeEnabled ? 1 : 0, nextBps, tab.id);
+
+      const updatedTab = this.recalculateTabInTx(tab.id, input.originNode ?? 'WINDOWS_PDV');
+
+      this.recordAuditLog({
+        actorUserId: input.actorUserId,
+        action: 'TAB_SERVICE_FEE_UPDATED',
+        entityType: 'TAB',
+        entityId: tab.id,
+        metadata: {
+          serviceFeeEnabled: input.serviceFeeEnabled,
+          serviceFeeBasisPoints: nextBps,
+          serviceFeeCents: updatedTab.serviceFeeCents
+        }
+      });
+
+      this.db.exec('COMMIT');
+      return updatedTab;
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
+  /**
+   * Divisão de Contas (Seção 11):
+   * - Valor livre (`FREE_AMOUNT`)
+   * - Partes iguais / por número de pessoas (`EQUAL_SHARES`)
+   * - Por itens consumidos (`BY_ITEMS`) sem corromper os pedidos originais
+   * - Pagamento misto (`MIXED`)
+   */
+  public configureTabSplitPlan(input: {
+    tabId: string;
+    mode: BillSplitPlan['mode'];
+    sharesCount?: number;
+    itemAllocations?: Array<{
+      orderItemId: string;
+      quantity: number;
+      payerLabel: string;
+    }>;
+    actorUserId?: string;
+  }): {
+    tab: Tab;
+    splitSummary: {
+      mode: BillSplitPlan['mode'];
+      totalCents: number;
+      paidCents: number;
+      remainingCents: number;
+      sharesCount: number;
+      shareAmountCents: number;
+      remainderCents: number;
+      itemAllocations: Array<{
+        orderItemId: string;
+        productName: string;
+        quantity: number;
+        payerLabel: string;
+        amountCents: number;
+        alreadyPaidQuantity: number;
+      }>;
+    };
+  } {
+    const tab = this.getTabById(input.tabId);
+    if (!tab) {
+      throw new Error(`Comanda '${input.tabId}' não encontrada.`);
+    }
+
+    const orders = this.listOrdersByTab(tab.id).filter((o) => o.status !== 'CANCELLED');
+    const allItems = orders.flatMap((o) => o.items).filter((i) => i.status !== 'CANCELLED');
+
+    const remainingCents = Math.max(0, tab.totalCents - tab.paidCents);
+    const sharesCount = Math.max(1, input.sharesCount ?? tab.guestsCount ?? 1);
+    const shareAmountCents = Math.floor(remainingCents / sharesCount);
+    const remainderCents = remainingCents - shareAmountCents * sharesCount;
+
+    const feeMultiplier =
+      tab.subtotalCents > 0 ? tab.totalCents / tab.subtotalCents : 1;
+
+    const enrichedAllocations = (input.itemAllocations ?? []).map((alloc) => {
+      const foundItem = allItems.find((i) => i.id === alloc.orderItemId);
+      if (!foundItem) {
+        throw new Error(`Item '${alloc.orderItemId}' não pertence à comanda ${tab.code}.`);
+      }
+      const paidQty = foundItem.paidQuantity ?? 0;
+      const availableQty = Number((foundItem.quantity - paidQty).toFixed(4));
+      if (alloc.quantity <= 0 || alloc.quantity > availableQty) {
+        throw new Error(
+          `Quantidade alocada (${alloc.quantity}) para '${foundItem.productName}' excede o saldo não pago do item (${availableQty}).`
+        );
+      }
+      const unitWithMods = foundItem.unitPriceCents + foundItem.modifiersTotalCents;
+      const rawItemSliceCents = Math.round(unitWithMods * alloc.quantity);
+      const proportionalTotalCents = Math.round(rawItemSliceCents * feeMultiplier);
+
+      return {
+        orderItemId: foundItem.id,
+        productName: foundItem.productName,
+        quantity: alloc.quantity,
+        payerLabel: alloc.payerLabel,
+        amountCents: proportionalTotalCents,
+        alreadyPaidQuantity: paidQty
+      };
+    });
+
+    const plan: BillSplitPlan = {
+      mode: input.mode,
+      sharesCount,
+      itemAllocations: enrichedAllocations.map((a) => ({
+        orderItemId: a.orderItemId,
+        quantity: a.quantity,
+        payerLabel: a.payerLabel,
+        amountCents: a.amountCents
+      })),
+      updatedAt: new Date().toISOString()
+    };
+
+    this.db
+      .prepare('UPDATE tabs SET split_plan_json = ? WHERE id = ?')
+      .run(JSON.stringify(plan), tab.id);
+
+    const updatedTab = this.getTabById(tab.id)!;
+
+    return {
+      tab: updatedTab,
+      splitSummary: {
+        mode: input.mode,
+        totalCents: updatedTab.totalCents,
+        paidCents: updatedTab.paidCents,
+        remainingCents,
+        sharesCount,
+        shareAmountCents,
+        remainderCents,
+        itemAllocations: enrichedAllocations
+      }
+    };
+  }
+
   public recordPayment(input: {
     idempotencyKey: string;
     tabId: string;
     method: PaymentMethod;
+    confirmationMode?: PaymentConfirmationMode;
     amountCents: number;
     receivedCashCents?: number;
+    payerLabel?: string;
+    allocatedItems?: Array<{
+      orderItemId: string;
+      quantity: number;
+    }>;
     nsuOrTxId?: string;
     operatorUserId?: string;
     originNode?: OriginNode;
@@ -1598,66 +3333,131 @@ export class LocalOperationalStore {
       return { payment, tab, printJob, idempotentReplay: true };
     }
 
-    const tab = this.getTabById(input.tabId);
-    if (!tab) {
-      throw new Error(`Comanda ${input.tabId} não encontrada para pagamento.`);
-    }
-
-    if (tab.status === 'CLOSED' || tab.status === 'CANCELLED') {
-      throw new Error(`Comanda ${tab.code} já está encerrada (${tab.status}). Não é permitido novo pagamento.`);
-    }
-
-    const remainingBefore = Math.max(0, tab.totalCents - tab.paidCents);
-    if (remainingBefore > 0 && input.amountCents > remainingBefore) {
-      throw new Error(
-        `Valor do pagamento (${input.amountCents} centavos) excede o saldo pendente da comanda (${remainingBefore} centavos).`
-      );
-    }
-
-    const activeSession = this.db
-      .prepare("SELECT id FROM cash_register_sessions WHERE status = 'OPEN' LIMIT 1")
-      .get() as { id: string };
-
-    const now = new Date().toISOString();
-    const changeCents =
-      input.method === 'CASH' && input.receivedCashCents && input.receivedCashCents > input.amountCents
-        ? input.receivedCashCents - input.amountCents
-        : 0;
-
-    const payment: Payment = {
-      id: crypto.randomUUID(),
-      tabId: tab.id,
-      cashRegisterSessionId: activeSession.id,
-      method: input.method,
-      status: 'CONFIRMED',
-      amountCents: input.amountCents,
-      receivedCashCents: input.receivedCashCents,
-      changeCents,
-      nsuOrTxId: input.nsuOrTxId,
-      idempotencyKey: input.idempotencyKey,
-      operatorUserId: input.operatorUserId ?? 'usr-cashier-01',
-      createdAt: now
-    };
-
     this.db.exec('BEGIN IMMEDIATE TRANSACTION');
     try {
+      const tab = this.getTabById(input.tabId);
+      if (!tab) {
+        throw new Error(`Comanda ${input.tabId} não encontrada para pagamento.`);
+      }
+
+      if (tab.status === 'CLOSED' || tab.status === 'CANCELLED') {
+        throw new Error(`Comanda ${tab.code} já está encerrada (${tab.status}). Não é permitido novo pagamento.`);
+      }
+
+      const remainingBefore = Math.max(0, tab.totalCents - tab.paidCents);
+      if (tab.totalCents > 0 && remainingBefore <= 0) {
+        throw new Error(
+          `Comanda ${tab.code} já está com o saldo integralmente quitado. Pagamento duplicado bloqueado.`
+        );
+      }
+
+      if (remainingBefore > 0 && input.amountCents > remainingBefore) {
+        throw new Error(
+          `Valor do pagamento (${input.amountCents} centavos) excede o saldo pendente da comanda (${remainingBefore} centavos).`
+        );
+      }
+
+      if (input.method === 'CASH' && input.receivedCashCents !== undefined && input.receivedCashCents < input.amountCents) {
+        throw new Error(
+          `Valor recebido em espécie (${input.receivedCashCents}c) é menor que o valor cobrado no pagamento (${input.amountCents}c).`
+        );
+      }
+
+      // Valida e marca alocação financeira de itens quando informada (impede que 2 clientes paguem o mesmo item)
+      const enrichedAllocatedItems: Array<{
+        orderItemId: string;
+        quantity: number;
+        payerLabel: string;
+        amountCents: number;
+      }> = [];
+
+      if (input.allocatedItems && input.allocatedItems.length > 0) {
+        for (const alloc of input.allocatedItems) {
+          const itemRow = this.db
+            .prepare('SELECT * FROM order_items WHERE id = ?')
+            .get(alloc.orderItemId) as Record<string, unknown> | undefined;
+          if (!itemRow) {
+            throw new Error(`Item '${alloc.orderItemId}' não encontrado para alocação de pagamento.`);
+          }
+          const totalQty = Number(itemRow.quantity);
+          const paidQty = Number(itemRow.paid_quantity ?? 0);
+          const remainingQty = Number((totalQty - paidQty).toFixed(4));
+          if (alloc.quantity <= 0 || alloc.quantity > remainingQty) {
+            throw new Error(
+              `O item '${String(itemRow.product_name)}' já foi pago parcial ou integralmente por outro cliente (Disponível: ${remainingQty}).`
+            );
+          }
+
+          this.db
+            .prepare('UPDATE order_items SET paid_quantity = COALESCE(paid_quantity, 0) + ? WHERE id = ?')
+            .run(alloc.quantity, alloc.orderItemId);
+
+          const unitWithMods = Number(itemRow.unit_price_cents) + Number(itemRow.modifiers_total_cents);
+          enrichedAllocatedItems.push({
+            orderItemId: alloc.orderItemId,
+            quantity: alloc.quantity,
+            payerLabel: input.payerLabel ?? 'Cliente',
+            amountCents: Math.round(unitWithMods * alloc.quantity)
+          });
+        }
+      }
+
+      const activeSession = this.db
+        .prepare("SELECT id FROM cash_register_sessions WHERE status = 'OPEN' ORDER BY opened_at DESC LIMIT 1")
+        .get() as { id: string } | undefined;
+
+      if (!activeSession) {
+        throw new Error('Não há turno de caixa aberto. Abra o caixa antes de registrar recebimentos.');
+      }
+
+      const now = new Date().toISOString();
+      const changeCents =
+        input.method === 'CASH' && input.receivedCashCents && input.receivedCashCents > input.amountCents
+          ? input.receivedCashCents - input.amountCents
+          : 0;
+
+      const confirmationMode: PaymentConfirmationMode =
+        input.confirmationMode ??
+        (input.nsuOrTxId ? 'ELECTRONIC_PROVIDER_CONFIRMED' : 'MANUAL_DECLARED');
+
+      const payment: Payment = {
+        id: crypto.randomUUID(),
+        tabId: tab.id,
+        cashRegisterSessionId: activeSession.id,
+        method: input.method,
+        confirmationMode,
+        status: 'CONFIRMED',
+        amountCents: input.amountCents,
+        receivedCashCents: input.receivedCashCents,
+        changeCents,
+        payerLabel: input.payerLabel ?? null,
+        allocatedItems: enrichedAllocatedItems.length > 0 ? enrichedAllocatedItems : undefined,
+        nsuOrTxId: input.nsuOrTxId,
+        idempotencyKey: input.idempotencyKey,
+        operatorUserId: input.operatorUserId ?? 'usr-cashier-01',
+        createdAt: now
+      };
+
       this.db
         .prepare(`
           INSERT INTO payments (
-            id, tab_id, cash_register_session_id, method, status,
-            amount_cents, received_cash_cents, change_cents, nsu_or_tx_id,
-            idempotency_key, operator_user_id, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            id, tab_id, cash_register_session_id, method, confirmation_mode, status,
+            amount_cents, received_cash_cents, change_cents, payer_label, allocated_items_json,
+            nsu_or_tx_id, idempotency_key, operator_user_id, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `)
         .run(
           payment.id,
           payment.tabId,
           payment.cashRegisterSessionId,
           payment.method,
+          confirmationMode,
           payment.status,
           payment.amountCents,
           payment.receivedCashCents ?? null,
           payment.changeCents,
+          payment.payerLabel ?? null,
+          enrichedAllocatedItems.length > 0 ? JSON.stringify(enrichedAllocatedItems) : null,
           payment.nsuOrTxId ?? null,
           payment.idempotencyKey,
           payment.operatorUserId,
@@ -1679,12 +3479,16 @@ export class LocalOperationalStore {
           '     COMPROVANTE DE PAGAMENTO DE COMANDA        ',
           '================================================',
           `COMANDA: ${updatedTab.code}`,
-          `METODO:  ${payment.method}`,
+          `PAGADOR: ${payment.payerLabel ?? 'Consumidor'}`,
+          `METODO:  ${payment.method} (${confirmationMode})`,
           `VALOR:   R$ ${(payment.amountCents / 100).toFixed(2).replace('.', ',')}`,
           `TROCO:   R$ ${(payment.changeCents / 100).toFixed(2).replace('.', ',')}`,
+          `SALDO PENDENTE: R$ ${(Math.max(0, updatedTab.totalCents - updatedTab.paidCents) / 100).toFixed(2).replace('.', ',')}`,
           `STATUS COMANDA: ${updatedTab.status}`,
           '================================================'
         ].join('\n'),
+        isReprint: false,
+        copyNumber: 1,
         attempts: 0,
         lastError: null,
         createdAt: now,
@@ -1695,8 +3499,9 @@ export class LocalOperationalStore {
         .prepare(`
           INSERT INTO print_jobs (
             id, target_printer, job_type, status, reference_entity_type,
-            reference_entity_id, payload_text, attempts, last_error, created_at, printed_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, NULL)
+            reference_entity_id, payload_text, is_reprint, copy_number,
+            attempts, last_error, created_at, printed_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 1, ?, NULL, ?, NULL)
         `)
         .run(
           receiptJob.id,
@@ -1721,7 +3526,247 @@ export class LocalOperationalStore {
       });
 
       this.db.exec('COMMIT');
+
+      this.createNotification({
+        eventType: 'PAYMENT_CONFIRMED',
+        tableNumber: updatedTab.tableNumber ?? null,
+        tabId: updatedTab.id,
+        title: `Pagamento Confirmado — ${updatedTab.code}`,
+        message: `${payment.method}: R$ ${(payment.amountCents / 100).toFixed(2).replace('.', ',')} (Saldo restante: R$ ${(Math.max(0, updatedTab.totalCents - updatedTab.paidCents) / 100).toFixed(2).replace('.', ',')})`
+      });
+
       return { payment, tab: updatedTab, printJob: receiptJob, idempotentReplay: false };
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
+  /**
+   * Estorno autorizado de pagamento (Seção 12):
+   * - Exige permissão de Gerente ou Proprietário (`tabs:discount_or_void`).
+   * - Impede estorno duplicado do mesmo pagamento.
+   * - Recalcula o saldo pendente da comanda e reverte eventual alocação de itens pagos.
+   */
+  public refundPayment(input: {
+    paymentId: string;
+    reason: string;
+    actorUserId: string;
+    actorRole?: UserRole;
+    authorizedByUserId?: string;
+    originNode?: OriginNode;
+  }): { payment: Payment; tab: Tab } {
+    if (
+      input.actorRole &&
+      !hasPermission(input.actorRole, 'tabs:discount_or_void') &&
+      !input.authorizedByUserId
+    ) {
+      throw new Error('Estorno de pagamento exige autorização de Gerente ou Proprietário.');
+    }
+    if (!input.reason || input.reason.trim().length < 3) {
+      throw new Error('Informe obrigatoriamente o motivo do estorno do pagamento.');
+    }
+
+    this.db.exec('BEGIN IMMEDIATE TRANSACTION');
+    try {
+      const row = this.db
+        .prepare('SELECT * FROM payments WHERE id = ?')
+        .get(input.paymentId) as Record<string, unknown> | undefined;
+
+      if (!row) {
+        throw new Error(`Pagamento '${input.paymentId}' não encontrado.`);
+      }
+
+      const existingPayment = this.mapPaymentRow(row);
+      if (existingPayment.status === 'REFUNDED') {
+        throw new Error('Este pagamento já foi estornado anteriormente. Estorno em duplicidade bloqueado.');
+      }
+
+      const now = new Date().toISOString();
+      this.db
+        .prepare(`
+          UPDATE payments
+          SET status = 'REFUNDED',
+              refund_reason = ?,
+              refunded_by_user_id = ?,
+              refunded_at = ?
+          WHERE id = ?
+        `)
+        .run(input.reason.trim(), input.actorUserId, now, existingPayment.id);
+
+      if (existingPayment.allocatedItems && existingPayment.allocatedItems.length > 0) {
+        for (const alloc of existingPayment.allocatedItems) {
+          this.db
+            .prepare(`
+              UPDATE order_items
+              SET paid_quantity = MAX(0, COALESCE(paid_quantity, 0) - ?)
+              WHERE id = ?
+            `)
+            .run(alloc.quantity, alloc.orderItemId);
+        }
+      }
+
+      const updatedTab = this.recalculateTabInTx(
+        existingPayment.tabId,
+        input.originNode ?? 'WINDOWS_PDV'
+      );
+      const updatedPaymentRow = this.db
+        .prepare('SELECT * FROM payments WHERE id = ?')
+        .get(existingPayment.id) as Record<string, unknown>;
+      const updatedPayment = this.mapPaymentRow(updatedPaymentRow);
+
+      this.recordAuditLog({
+        actorUserId: input.actorUserId,
+        action: 'PAYMENT_REFUNDED',
+        entityType: 'PAYMENT',
+        entityId: existingPayment.id,
+        metadata: {
+          tabId: existingPayment.tabId,
+          amountCents: existingPayment.amountCents,
+          method: existingPayment.method,
+          reason: input.reason.trim(),
+          authorizedByUserId: input.authorizedByUserId ?? input.actorUserId
+        }
+      });
+
+      this.db.exec('COMMIT');
+
+      this.createNotification({
+        eventType: 'PAYMENT_REFUNDED',
+        tableNumber: updatedTab.tableNumber ?? null,
+        tabId: updatedTab.id,
+        title: `Pagamento Estornado — ${updatedTab.code}`,
+        message: `Estorno de R$ ${(existingPayment.amountCents / 100).toFixed(2).replace('.', ',')} (${existingPayment.method}): ${input.reason.trim()}`
+      });
+
+      return { payment: updatedPayment, tab: updatedTab };
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
+  /**
+   * Fechamento de Comanda e Liberação de Mesa (Seção 21):
+   * - Bloqueia se houver saldo pendente (`remainingCents > 0`).
+   * - Bloqueia se houver pedidos ativos em preparo (`IN_PREPARATION` / `PENDING_APPROVAL`).
+   * - Passa a comanda para `CLOSED`, preenche `closedAt` e libera todas as mesas vinculadas (`LIVRE` ou `LIMPEZA`).
+   * - Preserva a comanda encerrada no histórico; nova abertura da mesma mesa criará nova comanda independente.
+   */
+  public closeTabAndReleaseTable(input: {
+    tabId: string;
+    actorUserId: string;
+    releaseStatus?: 'LIVRE' | 'LIMPEZA';
+    originNode?: OriginNode;
+  }): { tab: Tab; releasedTables: DiningTableQr[] } {
+    const releaseStatus = input.releaseStatus ?? 'LIVRE';
+
+    this.db.exec('BEGIN IMMEDIATE TRANSACTION');
+    try {
+      const tab = this.recalculateTabInTx(input.tabId, input.originNode ?? 'WINDOWS_PDV');
+      if (!tab) {
+        throw new Error(`Comanda '${input.tabId}' não encontrada.`);
+      }
+
+      const remainingCents = Math.max(0, tab.totalCents - tab.paidCents);
+      if (remainingCents > 0) {
+        throw new Error(
+          `Não é permitido encerrar a comanda ${tab.code} e liberar a mesa: ainda há saldo pendente de R$ ${(remainingCents / 100).toFixed(2).replace('.', ',')}.`
+        );
+      }
+
+      const tabOrders = this.listOrdersByTab(tab.id);
+      const incompatibleActiveOrders = tabOrders.filter(
+        (o) => o.status === 'PENDING_APPROVAL' || o.status === 'IN_PREPARATION'
+      );
+      if (incompatibleActiveOrders.length > 0) {
+        throw new Error(
+          `Não é permitido encerrar a comanda ${tab.code}: existem ${incompatibleActiveOrders.length} pedido(s) ainda em preparo ou aguardando aprovação.`
+        );
+      }
+
+      const now = new Date().toISOString();
+      this.db
+        .prepare(`
+          UPDATE tabs
+          SET status = 'CLOSED',
+              closed_at = COALESCE(closed_at, ?),
+              closed_by_user_id = ?,
+              version = version + 1
+          WHERE id = ?
+        `)
+        .run(now, input.actorUserId, tab.id);
+
+      const linkedTablesRows = this.db
+        .prepare('SELECT table_number FROM dining_tables_qr WHERE active_tab_id = ? OR table_number = ?')
+        .all(tab.id, tab.tableNumber ?? -1) as Array<{ table_number: number }>;
+
+      const tableNumbersToRelease = Array.from(
+        new Set([
+          ...linkedTablesRows.map((r) => Number(r.table_number)),
+          ...(tab.joinedTables ?? []),
+          ...(tab.tableNumber ? [tab.tableNumber] : [])
+        ])
+      );
+
+      for (const tblNum of tableNumbersToRelease) {
+        this.db
+          .prepare(`
+            UPDATE dining_tables_qr
+            SET physical_status = ?,
+                active_tab_id = NULL,
+                primary_table_number = NULL,
+                joined_group_id = NULL,
+                assigned_waiter_user_id = NULL,
+                assigned_waiter_name = NULL,
+                guests_count = 0,
+                opened_at = NULL,
+                notes = NULL
+            WHERE table_number = ?
+          `)
+          .run(releaseStatus, tblNum);
+      }
+
+      const closedTab = this.getTabById(tab.id)!;
+      const releasedTables = tableNumbersToRelease
+        .map((n) => this.getDiningTableByNumber(n))
+        .filter((t): t is DiningTableQr => t !== null);
+
+      this.recordAuditLog({
+        actorUserId: input.actorUserId,
+        action: 'TAB_CLOSED_AND_TABLE_RELEASED',
+        entityType: 'TAB',
+        entityId: closedTab.id,
+        metadata: {
+          tabCode: closedTab.code,
+          totalCents: closedTab.totalCents,
+          paidCents: closedTab.paidCents,
+          releasedTables: tableNumbersToRelease,
+          releaseStatus
+        }
+      });
+
+      this.appendOutboxEvent({
+        idempotencyKey: `tab-close-${closedTab.id}-v${closedTab.version}`,
+        originNode: input.originNode ?? 'WINDOWS_PDV',
+        entityType: 'TAB',
+        entityId: closedTab.id,
+        operation: 'STATE_TRANSITION',
+        entityVersion: closedTab.version,
+        payload: closedTab
+      });
+
+      this.db.exec('COMMIT');
+
+      this.createNotification({
+        eventType: 'TAB_CLOSED',
+        tableNumber: closedTab.tableNumber ?? null,
+        tabId: closedTab.id,
+        title: `Comanda Encerrada — ${closedTab.code}`,
+        message: `Comanda ${closedTab.code} fechada e mesa liberada (${releaseStatus}).`
+      });
+
+      return { tab: closedTab, releasedTables };
     } catch (err) {
       this.db.exec('ROLLBACK');
       throw err;
@@ -1738,34 +3783,61 @@ export class LocalOperationalStore {
       .get(tabId) as { paid: number };
 
     const paidCents = Number(paidRow.paid);
+
+    // Recalcula desconto proporcional caso o tipo seja PERCENTAGE ou COURTESY
+    const activeOrdersSubtotal = tabOrders
+      .filter((o) => o.status !== 'CANCELLED')
+      .reduce((acc, o) => acc + o.totalOrderCents, 0);
+    const previewServiceFee = currentTab.serviceFeeEnabled
+      ? Math.round((activeOrdersSubtotal * currentTab.serviceFeeBasisPoints) / 10000)
+      : 0;
+    const grossBeforeDiscount = activeOrdersSubtotal + previewServiceFee;
+
+    let effectiveDiscountCents = currentTab.discountCents;
+    if (currentTab.discountType === 'COURTESY') {
+      effectiveDiscountCents = grossBeforeDiscount;
+    } else if (currentTab.discountType === 'PERCENTAGE' && currentTab.discountBasisPoints) {
+      effectiveDiscountCents = Math.round((grossBeforeDiscount * currentTab.discountBasisPoints) / 10000);
+    } else if (currentTab.discountType === 'NONE') {
+      effectiveDiscountCents = 0;
+    }
+
     const totals = calculateTabTotals({
       orders: tabOrders,
       serviceFeeEnabled: currentTab.serviceFeeEnabled,
       serviceFeeBasisPoints: currentTab.serviceFeeBasisPoints,
-      discountCents: currentTab.discountCents,
+      discountCents: effectiveDiscountCents,
       paidCents
     });
 
     let nextStatus = currentTab.status;
     let closedAt = currentTab.closedAt ?? null;
-    if (totals.totalCents > 0 && paidCents >= totals.totalCents) {
-      nextStatus = 'CLOSED';
-      closedAt = new Date().toISOString();
-    } else if (paidCents > 0 && paidCents < totals.totalCents) {
-      nextStatus = 'PARTIALLY_PAID';
+
+    if (currentTab.status !== 'CANCELLED') {
+      if (paidCents > 0 && paidCents < totals.totalCents) {
+        nextStatus = 'PARTIALLY_PAID';
+        closedAt = null;
+      } else if (paidCents === 0 && (currentTab.status === 'PARTIALLY_PAID' || currentTab.status === 'CLOSED')) {
+        nextStatus = 'OPEN';
+        closedAt = null;
+      } else if (totals.totalCents > 0 && paidCents >= totals.totalCents && currentTab.type !== 'TABLE') {
+        nextStatus = 'CLOSED';
+        closedAt = closedAt ?? new Date().toISOString();
+      }
     }
 
     const nextVersion = currentTab.version + 1;
     this.db
       .prepare(`
         UPDATE tabs
-        SET subtotal_cents = ?, service_fee_cents = ?, total_cents = ?,
+        SET subtotal_cents = ?, service_fee_cents = ?, discount_cents = ?, total_cents = ?,
             paid_cents = ?, status = ?, closed_at = ?, version = ?
         WHERE id = ?
       `)
       .run(
         totals.subtotalCents,
         totals.serviceFeeCents,
+        effectiveDiscountCents,
         totals.totalCents,
         paidCents,
         nextStatus,
@@ -1786,6 +3858,361 @@ export class LocalOperationalStore {
     });
 
     return updatedTab;
+  }
+
+  // ============================================================================
+  // ABERTURA, SANGRIA, SUPRIMENTO E FECHAMENTO DE TURNO DE CAIXA (SEÇÕES 19 E 20)
+  // ============================================================================
+
+  public openCashRegisterSession(input: {
+    openingBalanceCents: number;
+    openedByUserId: string;
+    notes?: string;
+  }): CashRegisterSession {
+    this.db.exec('BEGIN IMMEDIATE TRANSACTION');
+    try {
+      const existingOpen = this.db
+        .prepare("SELECT * FROM cash_register_sessions WHERE status = 'OPEN' LIMIT 1")
+        .get() as Record<string, unknown> | undefined;
+
+      if (existingOpen) {
+        const existingId = String(existingOpen.id);
+        const paymentCount = (
+          this.db
+            .prepare('SELECT COUNT(*) as total FROM payments WHERE cash_register_session_id = ?')
+            .get(existingId) as { total: number }
+        ).total;
+        const movCount = (
+          this.db
+            .prepare('SELECT COUNT(*) as total FROM cash_register_movements WHERE session_id = ?')
+            .get(existingId) as { total: number }
+        ).total;
+
+        // Se for apenas a sessão semente inicial sem nenhuma operação, substitui pelo turno aberto pelo operador
+        if (existingId === 'CASH-SESSION-INITIAL' && paymentCount === 0 && movCount === 0) {
+          this.db
+            .prepare("UPDATE cash_register_sessions SET status = 'CLOSED', closed_at = ? WHERE id = ?")
+            .run(new Date().toISOString(), existingId);
+        } else {
+          throw new Error(
+            `Já existe um turno de caixa aberto (${existingId}). Feche o turno atual antes de abrir um novo.`
+          );
+        }
+      }
+
+      const id = `CASH-${Date.now().toString(36).toUpperCase()}-${crypto.randomUUID().slice(0, 4).toUpperCase()}`;
+      const now = new Date().toISOString();
+
+      this.db
+        .prepare(`
+          INSERT INTO cash_register_sessions (
+            id, opened_by_user_id, opened_at, opening_balance_cents,
+            expected_balance_cents, status, notes
+          ) VALUES (?, ?, ?, ?, ?, 'OPEN', ?)
+        `)
+        .run(
+          id,
+          input.openedByUserId,
+          now,
+          input.openingBalanceCents,
+          input.openingBalanceCents,
+          input.notes ?? null
+        );
+
+      this.recordAuditLog({
+        actorUserId: input.openedByUserId,
+        action: 'CASH_SESSION_OPENED',
+        entityType: 'CASH_REGISTER_SESSION',
+        entityId: id,
+        metadata: {
+          openingBalanceCents: input.openingBalanceCents,
+          notes: input.notes ?? null
+        }
+      });
+
+      this.db.exec('COMMIT');
+      return this.getCashRegisterSessionById(id)!;
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
+  public recordCashRegisterMovement(input: {
+    sessionId?: string;
+    movementType: CashRegisterMovement['movementType'];
+    amountCents: number;
+    reason: string;
+    createdByUserId: string;
+    authorizedByUserId?: string;
+  }): { movement: CashRegisterMovement; session: CashRegisterSession } {
+    if (input.amountCents <= 0) {
+      throw new Error('O valor da movimentação de caixa deve ser maior que zero.');
+    }
+    if (!input.reason || input.reason.trim().length < 3) {
+      throw new Error('Informe o motivo da movimentação de caixa (sangria/suprimento).');
+    }
+
+    this.db.exec('BEGIN IMMEDIATE TRANSACTION');
+    try {
+      const sessionRow = input.sessionId
+        ? (this.db
+            .prepare('SELECT * FROM cash_register_sessions WHERE id = ?')
+            .get(input.sessionId) as Record<string, unknown> | undefined)
+        : (this.db
+            .prepare("SELECT * FROM cash_register_sessions WHERE status = 'OPEN' ORDER BY opened_at DESC LIMIT 1")
+            .get() as Record<string, unknown> | undefined);
+
+      if (!sessionRow || String(sessionRow.status) !== 'OPEN') {
+        throw new Error('Não há turno de caixa aberto para registrar sangria ou suprimento.');
+      }
+
+      const sessionId = String(sessionRow.id);
+      const id = crypto.randomUUID();
+      const now = new Date().toISOString();
+
+      this.db
+        .prepare(`
+          INSERT INTO cash_register_movements (
+            id, session_id, movement_type, amount_cents, reason,
+            created_by_user_id, authorized_by_user_id, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `)
+        .run(
+          id,
+          sessionId,
+          input.movementType,
+          input.amountCents,
+          input.reason.trim(),
+          input.createdByUserId,
+          input.authorizedByUserId ?? input.createdByUserId,
+          now
+        );
+
+      this.recordAuditLog({
+        actorUserId: input.createdByUserId,
+        action: `CASH_MOVEMENT_${input.movementType}`,
+        entityType: 'CASH_REGISTER_SESSION',
+        entityId: sessionId,
+        metadata: {
+          movementId: id,
+          movementType: input.movementType,
+          amountCents: input.amountCents,
+          reason: input.reason.trim()
+        }
+      });
+
+      this.db.exec('COMMIT');
+
+      const session = this.getCashRegisterSessionById(sessionId)!;
+      const movement: CashRegisterMovement = {
+        id,
+        sessionId,
+        movementType: input.movementType,
+        amountCents: input.amountCents,
+        reason: input.reason.trim(),
+        createdByUserId: input.createdByUserId,
+        authorizedByUserId: input.authorizedByUserId ?? input.createdByUserId,
+        createdAt: now
+      };
+
+      this.createNotification({
+        eventType: 'CASH_MOVEMENT',
+        targetRole: 'CASHIER',
+        title: `Caixa: ${input.movementType}`,
+        message: `${input.movementType} de R$ ${(input.amountCents / 100).toFixed(2).replace('.', ',')} (${input.reason.trim()})`
+      });
+
+      return { movement, session };
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
+  public closeCashRegisterSession(input: {
+    sessionId?: string;
+    countedCashCents: number;
+    closedByUserId: string;
+    notes?: string;
+  }): CashRegisterSession {
+    this.db.exec('BEGIN IMMEDIATE TRANSACTION');
+    try {
+      const sessionRow = input.sessionId
+        ? (this.db
+            .prepare('SELECT * FROM cash_register_sessions WHERE id = ?')
+            .get(input.sessionId) as Record<string, unknown> | undefined)
+        : (this.db
+            .prepare("SELECT * FROM cash_register_sessions WHERE status = 'OPEN' ORDER BY opened_at DESC LIMIT 1")
+            .get() as Record<string, unknown> | undefined);
+
+      if (!sessionRow || String(sessionRow.status) !== 'OPEN') {
+        throw new Error('Turno de caixa não encontrado ou já encerrado.');
+      }
+
+      const sessionId = String(sessionRow.id);
+      const currentSession = this.getCashRegisterSessionById(sessionId)!;
+      const expectedCashCents = currentSession.expectedCashCents;
+      const differenceCents = input.countedCashCents - expectedCashCents;
+      const now = new Date().toISOString();
+
+      this.db
+        .prepare(`
+          UPDATE cash_register_sessions
+          SET closed_by_user_id = ?,
+              closed_at = ?,
+              expected_balance_cents = ?,
+              counted_balance_cents = ?,
+              difference_cents = ?,
+              status = 'CLOSED',
+              notes = COALESCE(?, notes)
+          WHERE id = ?
+        `)
+        .run(
+          input.closedByUserId,
+          now,
+          expectedCashCents,
+          input.countedCashCents,
+          differenceCents,
+          input.notes ?? null,
+          sessionId
+        );
+
+      this.recordAuditLog({
+        actorUserId: input.closedByUserId,
+        action: 'CASH_SESSION_CLOSED',
+        entityType: 'CASH_REGISTER_SESSION',
+        entityId: sessionId,
+        metadata: {
+          openingBalanceCents: currentSession.openingBalanceCents,
+          expectedCashCents,
+          countedCashCents: input.countedCashCents,
+          differenceCents,
+          notes: input.notes ?? null
+        }
+      });
+
+      this.db.exec('COMMIT');
+      return this.getCashRegisterSessionById(sessionId)!;
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
+  public getCashRegisterSessionById(sessionId: string): CashRegisterSession | null {
+    const row = this.db
+      .prepare('SELECT * FROM cash_register_sessions WHERE id = ?')
+      .get(sessionId) as Record<string, unknown> | undefined;
+    if (!row) return null;
+    return this.mapCashSessionRow(row);
+  }
+
+  public getCashierOperationalSummary(): {
+    activeSession: CashRegisterSession | null;
+    recentSessions: CashRegisterSession[];
+    movements: CashRegisterMovement[];
+    financialSummary: {
+      registeredSalesCents: number;
+      actualReceivedTotalCents: number;
+      receivedByMethod: Record<PaymentMethod, number>;
+      receivedByConfirmationMode: Record<PaymentConfirmationMode, number>;
+      totalChangeGivenCents: number;
+      totalRefundedCents: number;
+      totalDiscountsCents: number;
+      totalServiceFeesCents: number;
+      pendingReceivablesCents: number;
+      openTabsCount: number;
+      partiallyPaidTabsCount: number;
+      closedTabsCount: number;
+    };
+  } {
+    const sessionRows = this.db
+      .prepare('SELECT * FROM cash_register_sessions ORDER BY opened_at DESC LIMIT 20')
+      .all() as Array<Record<string, unknown>>;
+
+    const recentSessions = sessionRows.map((r) => this.mapCashSessionRow(r));
+    const activeSession = recentSessions.find((s) => s.status === 'OPEN') ?? null;
+
+    const targetSessionId = activeSession?.id ?? recentSessions[0]?.id ?? '';
+    const movRows = targetSessionId
+      ? (this.db
+          .prepare('SELECT * FROM cash_register_movements WHERE session_id = ? ORDER BY created_at DESC')
+          .all(targetSessionId) as Array<Record<string, unknown>>)
+      : [];
+
+    const movements: CashRegisterMovement[] = movRows.map((r) => ({
+      id: String(r.id),
+      sessionId: String(r.session_id),
+      movementType: r.movement_type as CashRegisterMovement['movementType'],
+      amountCents: Number(r.amount_cents),
+      reason: String(r.reason),
+      createdByUserId: String(r.created_by_user_id),
+      authorizedByUserId: r.authorized_by_user_id ? String(r.authorized_by_user_id) : null,
+      createdAt: String(r.created_at)
+    }));
+
+    const allTabs = this.listTabs();
+    const allPayments = this.listPayments();
+
+    const nonCancelledTabs = allTabs.filter((t) => t.status !== 'CANCELLED');
+    const registeredSalesCents = nonCancelledTabs.reduce((acc, t) => acc + t.totalCents, 0);
+    const totalDiscountsCents = nonCancelledTabs.reduce((acc, t) => acc + t.discountCents, 0);
+    const totalServiceFeesCents = nonCancelledTabs.reduce((acc, t) => acc + t.serviceFeeCents, 0);
+    const pendingReceivablesCents = nonCancelledTabs
+      .filter((t) => t.status !== 'CLOSED')
+      .reduce((acc, t) => acc + Math.max(0, t.totalCents - t.paidCents), 0);
+
+    const confirmedPayments = allPayments.filter((p) => p.status === 'CONFIRMED');
+    const refundedPayments = allPayments.filter((p) => p.status === 'REFUNDED');
+
+    const receivedByMethod: Record<PaymentMethod, number> = {
+      CASH: 0,
+      PIX: 0,
+      CREDIT_CARD: 0,
+      DEBIT_CARD: 0,
+      ROOM_CHARGE: 0,
+      VOUCHER: 0
+    };
+    const receivedByConfirmationMode: Record<PaymentConfirmationMode, number> = {
+      MANUAL_DECLARED: 0,
+      ELECTRONIC_PROVIDER_CONFIRMED: 0
+    };
+
+    let actualReceivedTotalCents = 0;
+    let totalChangeGivenCents = 0;
+
+    for (const p of confirmedPayments) {
+      actualReceivedTotalCents += p.amountCents;
+      receivedByMethod[p.method] = (receivedByMethod[p.method] ?? 0) + p.amountCents;
+      const mode = p.confirmationMode ?? 'MANUAL_DECLARED';
+      receivedByConfirmationMode[mode] = (receivedByConfirmationMode[mode] ?? 0) + p.amountCents;
+      if (p.method === 'CASH') {
+        totalChangeGivenCents += p.changeCents;
+      }
+    }
+
+    const totalRefundedCents = refundedPayments.reduce((acc, p) => acc + p.amountCents, 0);
+
+    return {
+      activeSession,
+      recentSessions,
+      movements,
+      financialSummary: {
+        registeredSalesCents,
+        actualReceivedTotalCents,
+        receivedByMethod,
+        receivedByConfirmationMode,
+        totalChangeGivenCents,
+        totalRefundedCents,
+        totalDiscountsCents,
+        totalServiceFeesCents,
+        pendingReceivablesCents,
+        openTabsCount: allTabs.filter((t) => t.status === 'OPEN' || t.status === 'BILL_REQUESTED').length,
+        partiallyPaidTabsCount: allTabs.filter((t) => t.status === 'PARTIALLY_PAID').length,
+        closedTabsCount: allTabs.filter((t) => t.status === 'CLOSED').length
+      }
+    };
   }
 
   public getTabById(tabId: string): Tab | null {
@@ -1834,13 +4261,78 @@ export class LocalOperationalStore {
     return rows.map((r) => this.mapPrintJobRow(r));
   }
 
-  public markPrintJobPrinted(jobId: string): PrintJob {
+  /**
+   * Atualiza o estado de um trabalho de impressão térmica (Seção 18):
+   * Suporta `PENDING`, `QUEUED`, `SENDING`, `PRINTED`, `FAILED`, `UNKNOWN_OUTCOME`, `CANCELLED`.
+   * Quando um trabalho entra em `UNKNOWN_OUTCOME` (ex.: queda de energia/rede durante o envio do buffer),
+   * bloqueia reenvio cego automático para impedir duplicidade física na cozinha, exigindo decisão do operador
+   * (confirmar que saiu na impressora ou acionar `reprintJob` com marcação explícita de 2ª via).
+   */
+  public updatePrintJobStatus(input: {
+    jobId: string;
+    status: PrintJobStatus;
+    errorMsg?: string;
+    actorUserId?: string;
+  }): PrintJob {
+    const row = this.db
+      .prepare('SELECT * FROM print_jobs WHERE id = ?')
+      .get(input.jobId) as Record<string, unknown> | undefined;
+
+    if (!row) {
+      throw new Error(`Trabalho de impressão '${input.jobId}' não encontrado.`);
+    }
+
+    const currentStatus = String(row.status) as PrintJobStatus;
+    if (
+      currentStatus === 'UNKNOWN_OUTCOME' &&
+      (input.status === 'SENDING' || input.status === 'PENDING' || input.status === 'QUEUED')
+    ) {
+      throw new Error(
+        'Trabalho de impressão com resultado desconhecido (UNKNOWN_OUTCOME) não pode ser reenviado automaticamente sem verificação. Confirme a saída ou solicite Reimpressão Autorizada (2ª via).'
+      );
+    }
+
     const now = new Date().toISOString();
+    const shouldIncrementAttempts =
+      input.status === 'SENDING' ||
+      input.status === 'PRINTED' ||
+      input.status === 'FAILED' ||
+      input.status === 'UNKNOWN_OUTCOME';
+
     this.db
-      .prepare("UPDATE print_jobs SET status = 'PRINTED', attempts = attempts + 1, printed_at = ? WHERE id = ?")
-      .run(now, jobId);
-    const row = this.db.prepare('SELECT * FROM print_jobs WHERE id = ?').get(jobId) as Record<string, unknown>;
-    return this.mapPrintJobRow(row);
+      .prepare(`
+        UPDATE print_jobs
+        SET status = ?,
+            attempts = CASE WHEN ? = 1 THEN attempts + 1 ELSE attempts END,
+            last_error = COALESCE(?, last_error),
+            printed_at = CASE WHEN ? = 'PRINTED' THEN ? ELSE printed_at END
+        WHERE id = ?
+      `)
+      .run(
+        input.status,
+        shouldIncrementAttempts ? 1 : 0,
+        input.errorMsg ?? null,
+        input.status,
+        now,
+        input.jobId
+      );
+
+    if (input.status === 'FAILED' || input.status === 'UNKNOWN_OUTCOME') {
+      this.createNotification({
+        eventType: 'PRINT_FAILED',
+        title: `Alerta de Impressora (${String(row.target_printer)})`,
+        message: `Status ${input.status}: ${input.errorMsg ?? 'Falha ou resultado desconhecido na comunicação com a impressora.'}`
+      });
+    }
+
+    const updated = this.db
+      .prepare('SELECT * FROM print_jobs WHERE id = ?')
+      .get(input.jobId) as Record<string, unknown>;
+    return this.mapPrintJobRow(updated);
+  }
+
+  public markPrintJobPrinted(jobId: string): PrintJob {
+    return this.updatePrintJobStatus({ jobId, status: 'PRINTED' });
   }
 
   public reprintJob(jobId: string, actorUserId: string): PrintJob {
@@ -1849,9 +4341,46 @@ export class LocalOperationalStore {
       throw new Error(`Trabalho de impressão '${jobId}' não encontrado.`);
     }
     const now = new Date().toISOString();
+    const nextCopyNumber = Number(row.copy_number ?? 1) + 1;
+    const rawPayload = String(row.payload_text);
+    const reprintBanner = `*** 2a VIA / REIMPRESSAO AUTORIZADA (COPIA #${nextCopyNumber}) ***`;
+    const cleanPayloadWithoutOldBanner = rawPayload
+      .split('\n')
+      .filter((line) => !line.includes('2a VIA / REIMPRESSAO AUTORIZADA'))
+      .join('\n');
+    const updatedPayload = `${reprintBanner}\n${cleanPayloadWithoutOldBanner}`;
+
     this.db
-      .prepare("UPDATE print_jobs SET status = 'QUEUED', attempts = attempts + 1, last_error = ? WHERE id = ?")
-      .run(`Reimpressão autorizada por ${actorUserId} em ${now}`, jobId);
+      .prepare(`
+        UPDATE print_jobs
+        SET status = 'QUEUED',
+            is_reprint = 1,
+            copy_number = ?,
+            reprint_authorized_by_user_id = ?,
+            payload_text = ?,
+            attempts = attempts + 1,
+            last_error = ?
+        WHERE id = ?
+      `)
+      .run(
+        nextCopyNumber,
+        actorUserId,
+        updatedPayload,
+        `Reimpressão (Cópia #${nextCopyNumber}) autorizada por ${actorUserId} em ${now}`,
+        jobId
+      );
+
+    this.recordAuditLog({
+      actorUserId,
+      action: 'PRINT_JOB_REPRINTED',
+      entityType: 'PRINT_JOB',
+      entityId: jobId,
+      metadata: {
+        copyNumber: nextCopyNumber,
+        targetPrinter: String(row.target_printer),
+        previousStatus: String(row.status)
+      }
+    });
 
     const updated = this.db.prepare('SELECT * FROM print_jobs WHERE id = ?').get(jobId) as Record<string, unknown>;
     return this.mapPrintJobRow(updated);
@@ -2310,7 +4839,37 @@ export class LocalOperationalStore {
     };
   }
 
+  private mapDiningTableRow(r: Record<string, unknown>): DiningTableQr {
+    return {
+      tableNumber: Number(r.table_number),
+      qrToken: String(r.qr_token),
+      label: String(r.label),
+      requiresOperatorApproval: Boolean(r.requires_operator_approval),
+      active: Boolean(r.active),
+      physicalStatus: (r.physical_status as TablePhysicalStatus) ?? 'LIVRE',
+      activeTabId: r.active_tab_id ? String(r.active_tab_id) : null,
+      primaryTableNumber:
+        r.primary_table_number !== null && r.primary_table_number !== undefined
+          ? Number(r.primary_table_number)
+          : null,
+      joinedGroupId: r.joined_group_id ? String(r.joined_group_id) : null,
+      assignedWaiterUserId: r.assigned_waiter_user_id ? String(r.assigned_waiter_user_id) : null,
+      assignedWaiterName: r.assigned_waiter_name ? String(r.assigned_waiter_name) : null,
+      guestsCount: Number(r.guests_count ?? 0),
+      openedAt: r.opened_at ? String(r.opened_at) : null,
+      notes: r.notes ? String(r.notes) : null,
+      createdAt: String(r.created_at)
+    };
+  }
+
   private mapTabRow(r: Record<string, unknown>): Tab {
+    const joinedTables = r.joined_tables_json
+      ? (JSON.parse(String(r.joined_tables_json)) as number[])
+      : [];
+    const splitPlan = r.split_plan_json
+      ? (JSON.parse(String(r.split_plan_json)) as BillSplitPlan)
+      : null;
+
     return {
       id: String(r.id),
       code: String(r.code),
@@ -2320,14 +4879,26 @@ export class LocalOperationalStore {
       hotelReservationId: r.hotel_reservation_id ? String(r.hotel_reservation_id) : null,
       customerName: r.customer_name ? String(r.customer_name) : null,
       guestsCount: Number(r.guests_count),
+      waiterUserId: r.waiter_user_id ? String(r.waiter_user_id) : null,
+      waiterName: r.waiter_name ? String(r.waiter_name) : null,
+      notes: r.notes ? String(r.notes) : null,
+      joinedTables,
       serviceFeeEnabled: Boolean(r.service_fee_enabled),
       serviceFeeBasisPoints: Number(r.service_fee_bps),
       subtotalCents: Number(r.subtotal_cents),
       serviceFeeCents: Number(r.service_fee_cents),
+      discountType: (r.discount_type as DiscountType) ?? 'NONE',
       discountCents: Number(r.discount_cents),
+      discountBasisPoints: Number(r.discount_bps ?? 0),
+      discountReason: r.discount_reason ? String(r.discount_reason) : null,
+      discountAuthorizedByUserId: r.discount_authorized_by_user_id
+        ? String(r.discount_authorized_by_user_id)
+        : null,
       totalCents: Number(r.total_cents),
       paidCents: Number(r.paid_cents),
+      splitPlan,
       openedByUserId: String(r.opened_by_user_id),
+      closedByUserId: r.closed_by_user_id ? String(r.closed_by_user_id) : null,
       openedAt: String(r.opened_at),
       closedAt: r.closed_at ? String(r.closed_at) : null,
       version: Number(r.version)
@@ -2347,10 +4918,20 @@ export class LocalOperationalStore {
       originNode: r.origin_node as Order['originNode'],
       idempotencyKey: String(r.idempotency_key),
       status: r.status as Order['status'],
+      priority: (r.priority as OrderPriority) ?? 'NORMAL',
       waiterUserId: r.waiter_user_id ? String(r.waiter_user_id) : null,
       waiterName: r.waiter_name ? String(r.waiter_name) : null,
       tableNumber: r.table_number !== null && r.table_number !== undefined ? Number(r.table_number) : null,
       customerNotes: r.customer_notes ? String(r.customer_notes) : undefined,
+      prepStartedAt: r.prep_started_at ? String(r.prep_started_at) : null,
+      readyAt: r.ready_at ? String(r.ready_at) : null,
+      deliveredAt: r.delivered_at ? String(r.delivered_at) : null,
+      deliveredByUserId: r.delivered_by_user_id ? String(r.delivered_by_user_id) : null,
+      waiterNotifiedAt: r.waiter_notified_at ? String(r.waiter_notified_at) : null,
+      cancelStage: r.cancel_stage ? (r.cancel_stage as OrderCancelStage) : null,
+      cancelReason: r.cancel_reason ? String(r.cancel_reason) : null,
+      cancelledByUserId: r.cancelled_by_user_id ? String(r.cancelled_by_user_id) : null,
+      cancelledAt: r.cancelled_at ? String(r.cancelled_at) : null,
       items: itemRows.map((ir) => ({
         id: String(ir.id),
         orderId,
@@ -2363,7 +4944,12 @@ export class LocalOperationalStore {
         totalItemCents: Number(ir.total_item_cents),
         notes: ir.notes ? String(ir.notes) : undefined,
         modifiers: JSON.parse(String(ir.modifiers_json)),
-        status: ir.status as OrderItem['status']
+        status: ir.status as OrderItem['status'],
+        transferredFromTabId: ir.transferred_from_tab_id ? String(ir.transferred_from_tab_id) : null,
+        transferredFromOrderId: ir.transferred_from_order_id ? String(ir.transferred_from_order_id) : null,
+        transferredAt: ir.transferred_at ? String(ir.transferred_at) : null,
+        transferredByUserId: ir.transferred_by_user_id ? String(ir.transferred_by_user_id) : null,
+        paidQuantity: Number(ir.paid_quantity ?? 0)
       })),
       totalOrderCents: Number(r.total_order_cents),
       createdAt: String(r.created_at),
@@ -2378,13 +4964,24 @@ export class LocalOperationalStore {
       tabId: String(r.tab_id),
       cashRegisterSessionId: String(r.cash_register_session_id),
       method: r.method as Payment['method'],
+      confirmationMode: (r.confirmation_mode as PaymentConfirmationMode) ?? 'MANUAL_DECLARED',
       status: r.status as Payment['status'],
       amountCents: Number(r.amount_cents),
-      receivedCashCents: r.received_cash_cents !== null && r.received_cash_cents !== undefined ? Number(r.received_cash_cents) : undefined,
+      receivedCashCents:
+        r.received_cash_cents !== null && r.received_cash_cents !== undefined
+          ? Number(r.received_cash_cents)
+          : undefined,
       changeCents: Number(r.change_cents),
+      payerLabel: r.payer_label ? String(r.payer_label) : null,
+      allocatedItems: r.allocated_items_json
+        ? JSON.parse(String(r.allocated_items_json))
+        : undefined,
       nsuOrTxId: r.nsu_or_tx_id ? String(r.nsu_or_tx_id) : undefined,
       idempotencyKey: String(r.idempotency_key),
       operatorUserId: String(r.operator_user_id),
+      refundReason: r.refund_reason ? String(r.refund_reason) : null,
+      refundedByUserId: r.refunded_by_user_id ? String(r.refunded_by_user_id) : null,
+      refundedAt: r.refunded_at ? String(r.refunded_at) : null,
       createdAt: String(r.created_at)
     };
   }
@@ -2398,10 +4995,85 @@ export class LocalOperationalStore {
       referenceEntityType: r.reference_entity_type as PrintJob['referenceEntityType'],
       referenceEntityId: String(r.reference_entity_id),
       payloadText: String(r.payload_text),
+      isReprint: Boolean(r.is_reprint),
+      copyNumber: Number(r.copy_number ?? 1),
+      reprintAuthorizedByUserId: r.reprint_authorized_by_user_id
+        ? String(r.reprint_authorized_by_user_id)
+        : null,
       attempts: Number(r.attempts),
       lastError: r.last_error ? String(r.last_error) : null,
       createdAt: String(r.created_at),
       printedAt: r.printed_at ? String(r.printed_at) : null
+    };
+  }
+
+  private mapCashSessionRow(r: Record<string, unknown>): CashRegisterSession {
+    const sessionId = String(r.id);
+    const openingBalanceCents = Number(r.opening_balance_cents);
+
+    // Soma vendas em espécie confirmadas neste turno (líquido sem troco)
+    const cashSalesRow = this.db
+      .prepare(
+        "SELECT COALESCE(SUM(amount_cents), 0) as total FROM payments WHERE cash_register_session_id = ? AND method = 'CASH' AND status = 'CONFIRMED'"
+      )
+      .get(sessionId) as { total: number };
+    const cashSalesNetCents = Number(cashSalesRow.total ?? 0);
+
+    const inflowRow = this.db
+      .prepare(
+        "SELECT COALESCE(SUM(amount_cents), 0) as total FROM cash_register_movements WHERE session_id = ? AND movement_type IN ('SUPRIMENTO', 'MANUAL_INFLOW')"
+      )
+      .get(sessionId) as { total: number };
+    const suprimentosCents = Number(inflowRow.total ?? 0);
+
+    const outflowRow = this.db
+      .prepare(
+        "SELECT COALESCE(SUM(amount_cents), 0) as total FROM cash_register_movements WHERE session_id = ? AND movement_type IN ('SANGRIA', 'AUTHORIZED_OUTFLOW')"
+      )
+      .get(sessionId) as { total: number };
+    const sangriasCents = Number(outflowRow.total ?? 0);
+
+    const expectedCashCents =
+      openingBalanceCents + cashSalesNetCents + suprimentosCents - sangriasCents;
+
+    return {
+      id: sessionId,
+      openedByUserId: String(r.opened_by_user_id),
+      closedByUserId: r.closed_by_user_id ? String(r.closed_by_user_id) : null,
+      openedAt: String(r.opened_at),
+      closedAt: r.closed_at ? String(r.closed_at) : null,
+      openingBalanceCents,
+      expectedCashCents,
+      countedCashCents:
+        r.counted_balance_cents !== null && r.counted_balance_cents !== undefined
+          ? Number(r.counted_balance_cents)
+          : null,
+      differenceCents:
+        r.difference_cents !== null && r.difference_cents !== undefined
+          ? Number(r.difference_cents)
+          : null,
+      status: r.status as CashRegisterSession['status'],
+      notes: r.notes ? String(r.notes) : null
+    };
+  }
+
+  private mapNotificationRow(r: Record<string, unknown>): OperationalNotification {
+    return {
+      id: String(r.id),
+      cursorId: r.cursor_id !== undefined ? Number(r.cursor_id) : undefined,
+      eventType: r.event_type as OperationalNotification['eventType'],
+      targetRole: r.target_role ? (r.target_role as UserRole) : null,
+      targetUserId: r.target_user_id ? String(r.target_user_id) : null,
+      tableNumber:
+        r.table_number !== null && r.table_number !== undefined ? Number(r.table_number) : null,
+      tabId: r.tab_id ? String(r.tab_id) : null,
+      orderId: r.order_id ? String(r.order_id) : null,
+      title: String(r.title),
+      message: String(r.message),
+      payloadJson: String(r.payload_json ?? '{}'),
+      acknowledgedAt: r.acknowledged_at ? String(r.acknowledged_at) : null,
+      acknowledgedByUserId: r.acknowledged_by_user_id ? String(r.acknowledged_by_user_id) : null,
+      createdAt: String(r.created_at)
     };
   }
 
