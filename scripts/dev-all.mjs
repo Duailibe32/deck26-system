@@ -8,16 +8,16 @@
  * 4. Site Público / Cardápio Digital QR Code / Delivery (Porta 5174)
  */
 
-import { spawn, ChildProcess } from 'node:child_process';
+import { spawn } from 'node:child_process';
 
-const services: Array<{ name: string; color: string; script: string }> = [
+const services = [
   { name: 'LOCAL-SERVER:4000', color: '\x1b[35m', script: 'dev:local-server' },
   { name: 'CLOUD-VPS:4100',    color: '\x1b[36m', script: 'dev:cloud-api' },
   { name: 'DESKTOP-UI:5173',   color: '\x1b[32m', script: 'dev:desktop' },
   { name: 'PUBLIC-WEB:5174',   color: '\x1b[33m', script: 'dev:web' }
 ];
 
-const children: ChildProcess[] = [];
+const children = [];
 
 console.log('========================================================================');
 console.log(' DECK 26 — INICIANDO TODOS OS 4 SERVIÇOS LOCAIS DE DESENVOLVIMENTO');
@@ -36,14 +36,14 @@ for (const svc of services) {
     shell: true
   });
 
-  child.stdout?.on('data', (chunk: Buffer) => {
+  child.stdout?.on('data', (chunk) => {
     const lines = chunk.toString().split(/\r?\n/).filter(Boolean);
     for (const line of lines) {
       console.log(`${svc.color}[${svc.name}]\x1b[0m ${line}`);
     }
   });
 
-  child.stderr?.on('data', (chunk: Buffer) => {
+  child.stderr?.on('data', (chunk) => {
     const lines = chunk.toString().split(/\r?\n/).filter(Boolean);
     for (const line of lines) {
       console.error(`${svc.color}[${svc.name}]\x1b[0m ${line}`);

@@ -22,7 +22,8 @@ import {
   SalesChannelSchema,
   SyncBatchPushRequestSchema,
   SyncBatchPushResponse,
-  SyncOutboxEvent
+  SyncOutboxEvent,
+  resolveChannelPriceCents
 } from '@deck26/contracts';
 import { z } from 'zod';
 
@@ -257,6 +258,7 @@ export async function buildCloudApiServer(options?: {
     idempotencyKey: z.string().min(8),
     channel: SalesChannelSchema.default('QR_TABLE'),
     tableNumber: z.number().int().positive().nullable().optional(),
+    qrToken: z.string().optional(),
     customerName: z.string().min(2),
     customerNotes: z.string().optional(),
     items: z
@@ -264,7 +266,18 @@ export async function buildCloudApiServer(options?: {
         z.object({
           productId: z.string().min(1),
           quantity: z.number().positive(),
-          notes: z.string().optional()
+          notes: z.string().optional(),
+          modifiers: z
+            .array(
+              z.object({
+                groupId: z.string(),
+                groupName: z.string(),
+                optionId: z.string(),
+                optionName: z.string(),
+                priceDeltaCents: z.number().int().optional()
+              })
+            )
+            .optional()
         })
       )
       .min(1)
@@ -283,6 +296,19 @@ export async function buildCloudApiServer(options?: {
       if (!prod) {
         throw new Error(`Produto ${item.productId} inválido`);
       }
+      const unitPriceCents = resolveChannelPriceCents(prod, parsed.data.channel);
+      const modifiers = (item.modifiers ?? []).map((m) => {
+        const grp = prod.modifierGroups.find((g) => g.id === m.groupId);
+        const opt = grp?.options.find((o) => o.id === m.optionId);
+        return {
+          groupId: m.groupId,
+          groupName: grp?.name ?? m.groupName,
+          optionId: m.optionId,
+          optionName: opt?.name ?? m.optionName,
+          priceDeltaCents: opt ? opt.priceDeltaCents : (m.priceDeltaCents ?? 0)
+        };
+      });
+      const modifiersTotalCents = modifiers.reduce((acc, m) => acc + m.priceDeltaCents, 0);
       return {
         id: crypto.randomUUID(),
         orderId,
@@ -290,11 +316,11 @@ export async function buildCloudApiServer(options?: {
         productName: prod.name,
         prepStation: prod.prepStation,
         quantity: item.quantity,
-        unitPriceCents: prod.priceCents,
-        modifiersTotalCents: 0,
-        totalItemCents: Math.round(prod.priceCents * item.quantity),
+        unitPriceCents,
+        modifiersTotalCents,
+        totalItemCents: Math.round((unitPriceCents + modifiersTotalCents) * item.quantity),
         notes: item.notes,
-        modifiers: [],
+        modifiers,
         status: 'RECEIVED' as const
       };
     });

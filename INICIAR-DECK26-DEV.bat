@@ -1,14 +1,12 @@
 @echo off
-chcp 65001 >nul
-title DECK 26 — Inicializador de Ambiente Local (Windows 11)
+title DECK 26 - Inicializador de Ambiente Local (Windows 11)
 
 echo ============================================================================
-echo   DECK 26 — SISTEMA DE GESTAO INTEGRADA (BAR, RESTAURANTE E HOTEL MILLA)
+echo   DECK 26 - SISTEMA DE GESTAO INTEGRADA (BAR, RESTAURANTE E HOTEL MILLA)
 echo   Ambiente de Desenvolvimento e Testes Locais (Windows 11)
 echo ============================================================================
 echo.
 
-:: 1. Verifica pre-requisito Node.js
 where node >nul 2>nul
 if %errorlevel% neq 0 (
     echo [ERRO] O Node.js nao foi encontrado no seu computador.
@@ -18,9 +16,8 @@ if %errorlevel% neq 0 (
 )
 
 for /f "delims=" %%v in ('node -v') do set NODE_VER=%%v
-echo [OK] Node.js detectado: %NODE_VER% (Com suporte nativo a node:sqlite)
+echo [OK] Node.js detectado: %NODE_VER% - Suporte nativo a node:sqlite ativo.
 
-:: 2. Verifica dependencias instaladas
 if not exist "node_modules\" (
     echo [AVISO] A pasta node_modules nao foi encontrada. Instalando pacotes locais...
     call npm install
@@ -30,17 +27,15 @@ if not exist "node_modules\" (
         exit /b 1
     )
 ) else (
-    echo [OK] Dependencias locais (node_modules) verificadas.
+    echo [OK] Dependencias locais verificadas com sucesso.
 )
 
-:: 3. Verifica portas em uso (4000, 4100, 5173, 5174)
 echo.
-echo Verificando portas locais (4000, 4100, 5173, 5174)...
+echo Verificando portas locais 4000, 4100, 5173 e 5174...
 for %%p in (4000 4100 5173 5174) do (
     netstat -ano | findstr /R /C:":%%p .*LISTENING" >nul
     if not errorlevel 1 (
         echo [AVISO] A porta %%p ja esta em uso neste computador.
-        echo         Caso uma instancia anterior do Deck 26 esteja aberta, feche-a antes.
     ) else (
         echo [LIVRE] Porta %%p disponivel.
     )
@@ -48,26 +43,25 @@ for %%p in (4000 4100 5173 5174) do (
 
 echo.
 echo ============================================================================
-echo   URLS DE ACESSO LOCAL (ABRA NO SEU NAVEGADOR):
+echo   URLS DE ACESSO LOCAL - ABRA NO SEU NAVEGADOR:
 echo ----------------------------------------------------------------------------
-echo   1. Programa Principal (Dashboard, Caixa, Mesas, Hotel):
+echo   1. Programa Principal - Dashboard, Caixa, Mesas, Hotel:
 echo      http://localhost:5173
 echo.
-echo   2. Tela Exclusiva da Cozinha / Chapa (KDS):
+echo   2. Tela Exclusiva da Cozinha / Chapa - KDS:
 echo      http://localhost:5173/?terminal=cozinha
 echo.
 echo   3. Tela de Lancamento de Garcom:
 echo      http://localhost:5173/?terminal=garcom
 echo.
-echo   4. Site Publico (Cardapio Digital QR Code, Delivery e Painel do Dono):
+echo   4. Site Publico - Cardapio Digital QR Code, Delivery e Painel do Dono:
 echo      http://localhost:5174
 echo.
 echo   PINs Operacionais de Teste:
-echo   Proprietario: 2626 ^| Gerente: 1010 ^| Caixa: 2020 ^| Garcom: 3030 ^| Cozinha: 4040
+echo   Proprietario: 2626 / Gerente: 1010 / Caixa: 2020 / Garcom: 3030 / Cozinha: 4040
 echo ============================================================================
 echo.
-echo Iniciando todos os servicos do DECK 26... (Pressione Ctrl+C para encerrar)
+echo Iniciando todos os servicos do DECK 26... Pressione Ctrl+C para encerrar.
 echo.
 
 call npm run dev:all
-pause

@@ -2,8 +2,9 @@
  * DECK 26 — Servidor Operacional Local (Fastify + SQLite WAL + Autenticação Real & Autorização RBAC)
  *
  * Atende simultaneamente:
- * - Aplicativo Windows Principal (PDV / Caixa / Recepção Hotel Milla)
+ * - Aplicativo Windows Principal (PDV / Caixa / Recepção Hotel Milla / Catálogo & Estoque)
  * - Terminais Internos com Autenticação por PIN + Token Assinado HMAC-SHA256
+ * - Cardápio Digital QR Code Seguro por Mesa (Tokens Não-Previsíveis)
  * - Sincronizador Bidirecional com a VPS (ou Simulador Local da VPS na porta 4100)
  */
 
@@ -13,11 +14,14 @@ import crypto from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  ModifierGroupSchema,
   OrderStatusSchema,
   OriginNodeSchema,
+  OutOfStockPolicySchema,
   PaymentMethodSchema,
   Permission,
   PrepStationSchema,
+  SalesChannel,
   SalesChannelSchema,
   StockMovementTypeSchema,
   SyncBatchPushResponseSchema,
@@ -90,7 +94,12 @@ export async function buildLocalServer(options?: {
 
   await app.register(cors, {
     origin: (origin, cb) => {
-      if (!origin || allowedOrigins.includes(origin) || origin.startsWith('http://192.168.') || origin.startsWith('http://10.')) {
+      if (
+        !origin ||
+        allowedOrigins.includes(origin) ||
+        origin.startsWith('http://192.168.') ||
+        origin.startsWith('http://10.')
+      ) {
         cb(null, true);
         return;
       }
@@ -138,7 +147,11 @@ export async function buildLocalServer(options?: {
     return null;
   }
 
-  function authorizePermission(req: FastifyRequest, reply: FastifyReply, permission: Permission): AuthenticatedSession | null {
+  function authorizePermission(
+    req: FastifyRequest,
+    reply: FastifyReply,
+    permission: Permission
+  ): AuthenticatedSession | null {
     const session = resolveSession(req);
     if (!session) {
       reply.status(401).send({ error: 'Não autenticado. Informe seu PIN operacional válido.' });
@@ -207,9 +220,11 @@ export async function buildLocalServer(options?: {
     };
   });
 
-  // 3. Estado Consolidado para Dashboard, PDV, Mesas, Cozinha, Estoque, Hotel e Impressoras
+  // 3. Estado Consolidado para Dashboard, PDV, Mesas, Cozinha, Catálogo, Estoque, Hotel e Impressoras
   app.get('/api/state', async () => {
-    const catalog = store.getCatalog();
+    const catalog = store.getCatalog({ includeInactive: true });
+    const recipes = store.listProductRecipes();
+    const qrTables = store.listDiningTablesQr();
     const tabs = store.listTabs();
     const orders = store.listOrders();
     const payments = store.listPayments();
@@ -222,6 +237,8 @@ export async function buildLocalServer(options?: {
       lanAddresses: getLanIpv4Addresses(),
       cloudSyncState: lastSyncStatus,
       catalog,
+      recipes,
+      qrTables,
       tabs,
       orders,
       payments,
@@ -232,32 +249,210 @@ export async function buildLocalServer(options?: {
     };
   });
 
-  // 4. Catálogo Lógico Compartilhado (Consulta e Cadastro de Novos Produtos)
-  app.get('/api/catalog', async () => {
-    return store.getCatalog();
-  });
+  // 4. Catálogo Lógico Compartilhado (Categorias, Produtos e Fichas Técnicas)
+  app.get<{ Querystring: { includeInactive?: string; channel?: SalesChannel } }>(
+    '/api/catalog',
+    async (req) => {
+      const includeInactive = req.query.includeInactive === 'true';
+      const channel = req.query.channel;
+      return store.getCatalog({ includeInactive, channel });
+    }
+  );
 
-  const CreateProductSchema = z.object({
+  const UpsertCategoryBodySchema = z.object({
     id: z.string().optional(),
-    sku: z.string().min(2),
-    categoryId: z.string().min(1),
+    slug: z.string().optional(),
     name: z.string().min(2),
     description: z.string().optional(),
+    imageUrl: z.string().nullable().optional(),
+    sortOrder: z.number().int().nonnegative().optional(),
+    availableChannels: z.array(SalesChannelSchema).optional(),
+    active: z.boolean().optional()
+  });
+
+  app.post('/api/catalog/categories', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'catalog:manage');
+    if (!session) return;
+
+    const parsed = UpsertCategoryBodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply
+        .status(400)
+        .send({ error: 'Dados de categoria inválidos', issues: parsed.error.issues });
+    }
+    const category = store.upsertCategory(parsed.data);
+    return reply.status(201).send({ category });
+  });
+
+  app.put<{ Params: { id: string } }>('/api/catalog/categories/:id', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'catalog:manage');
+    if (!session) return;
+
+    const parsed = UpsertCategoryBodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply
+        .status(400)
+        .send({ error: 'Dados de categoria inválidos', issues: parsed.error.issues });
+    }
+    const category = store.upsertCategory({ ...parsed.data, id: req.params.id });
+    return { category };
+  });
+
+  app.delete<{ Params: { id: string } }>('/api/catalog/categories/:id', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'catalog:manage');
+    if (!session) return;
+
+    try {
+      const result = store.deleteCategory(req.params.id);
+      return result;
+    } catch (err) {
+      return reply.status(400).send({
+        error: err instanceof Error ? err.message : 'Erro ao excluir categoria'
+      });
+    }
+  });
+
+  const ProductInputSchema = z.object({
+    id: z.string().optional(),
+    sku: z.string().min(2),
+    barcode: z.string().nullable().optional(),
+    categoryId: z.string().min(1),
+    subcategory: z.string().optional(),
+    name: z.string().min(2),
+    description: z.string().optional(),
+    imageUrl: z.string().nullable().optional(),
+    unitOfMeasure: z.string().optional(),
     priceCents: z.number().int().nonnegative(),
+    costPriceCents: z.number().int().nonnegative().optional(),
+    channelPricesCents: z.record(SalesChannelSchema, z.number().int().nonnegative()).optional(),
     prepStation: PrepStationSchema,
-    initialStock: z.number().nonnegative().optional()
+    targetPrinter: z.string().optional(),
+    prepTimeMinutes: z.number().int().nonnegative().optional(),
+    trackStock: z.boolean().optional(),
+    initialStock: z.number().nonnegative().optional(),
+    minStockQuantity: z.number().nonnegative().optional(),
+    outOfStockPolicy: OutOfStockPolicySchema.optional(),
+    modifierGroups: z.array(ModifierGroupSchema).optional(),
+    internalNotes: z.string().optional(),
+    ncm: z.string().optional(),
+    cest: z.string().optional(),
+    cfop: z.string().optional(),
+    merchandiseOrigin: z.string().optional(),
+    taxProfile: z.string().optional(),
+    dataSource: z.enum(['OFFICIAL_MENU', 'TEST_ONLY']).optional(),
+    availableChannels: z.array(SalesChannelSchema).optional(),
+    active: z.boolean().optional()
   });
 
   app.post('/api/catalog/products', async (req, reply) => {
     const session = authorizePermission(req, reply, 'catalog:manage');
     if (!session) return;
 
-    const parsed = CreateProductSchema.safeParse(req.body);
+    const parsed = ProductInputSchema.safeParse(req.body);
     if (!parsed.success) {
-      return reply.status(400).send({ error: 'Dados de produto inválidos', issues: parsed.error.issues });
+      return reply
+        .status(400)
+        .send({ error: 'Dados de produto inválidos', issues: parsed.error.issues });
     }
     const product = store.createCatalogProduct(parsed.data);
     return reply.status(201).send({ product });
+  });
+
+  app.put<{ Params: { id: string } }>('/api/catalog/products/:id', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'catalog:manage');
+    if (!session) return;
+
+    const parsed = ProductInputSchema.partial().safeParse(req.body);
+    if (!parsed.success) {
+      return reply
+        .status(400)
+        .send({ error: 'Dados de atualização inválidos', issues: parsed.error.issues });
+    }
+    try {
+      const product = store.updateCatalogProduct(req.params.id, parsed.data);
+      return { product };
+    } catch (err) {
+      return reply.status(404).send({
+        error: err instanceof Error ? err.message : 'Produto não encontrado'
+      });
+    }
+  });
+
+  app.delete<{ Params: { id: string } }>('/api/catalog/products/:id', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'catalog:manage');
+    if (!session) return;
+
+    try {
+      const result = store.deleteOrDeactivateProduct(req.params.id);
+      return result;
+    } catch (err) {
+      return reply.status(404).send({
+        error: err instanceof Error ? err.message : 'Erro ao desativar/excluir produto'
+      });
+    }
+  });
+
+  const BatchProductsStatusSchema = z.object({
+    productIds: z.array(z.string().min(1)).min(1),
+    active: z.boolean()
+  });
+
+  app.post('/api/catalog/products/batch-status', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'catalog:manage');
+    if (!session) return;
+
+    const parsed = BatchProductsStatusSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply
+        .status(400)
+        .send({ error: 'Lote de produtos inválido', issues: parsed.error.issues });
+    }
+    const result = store.batchSetProductsStatus(parsed.data.productIds, parsed.data.active);
+    return result;
+  });
+
+  // 4.1 Fichas Técnicas Versionadas (Product Recipes)
+  app.get<{ Querystring: { productId?: string } }>('/api/recipes', async (req) => {
+    return { recipes: store.listProductRecipes(req.query.productId) };
+  });
+
+  const SaveRecipeBodySchema = z.object({
+    productId: z.string().min(1),
+    status: z.enum(['DRAFT', 'APPROVED']).optional(),
+    yieldQuantity: z.number().positive().optional(),
+    notes: z.string().optional(),
+    items: z
+      .array(
+        z.object({
+          ingredientProductId: z.string().min(1),
+          quantityUsed: z.number().positive(),
+          unitOfMeasure: z.string().optional()
+        })
+      )
+      .min(1)
+  });
+
+  app.post('/api/recipes', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'catalog:manage');
+    if (!session) return;
+
+    const parsed = SaveRecipeBodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply
+        .status(400)
+        .send({ error: 'Ficha técnica inválida', issues: parsed.error.issues });
+    }
+    try {
+      const recipe = store.saveProductRecipe({
+        ...parsed.data,
+        approvedByUserId: session.userId
+      });
+      return reply.status(201).send({ recipe });
+    } catch (err) {
+      return reply.status(400).send({
+        error: err instanceof Error ? err.message : 'Erro ao salvar ficha técnica'
+      });
+    }
   });
 
   // 5. Abertura / Consulta de Comandas e Mesas (Tab)
@@ -277,7 +472,9 @@ export async function buildLocalServer(options?: {
 
     const parsed = OpenTabBodySchema.safeParse(req.body);
     if (!parsed.success) {
-      return reply.status(400).send({ error: 'Dados inválidos para abertura de comanda', issues: parsed.error.issues });
+      return reply
+        .status(400)
+        .send({ error: 'Dados inválidos para abertura de comanda', issues: parsed.error.issues });
     }
     const tab = store.openOrGetTab({
       ...parsed.data,
@@ -286,11 +483,12 @@ export async function buildLocalServer(options?: {
     return reply.status(201).send({ tab });
   });
 
-  // 6. Criação de Pedido (Order) com Idempotência, Impressão Incremental por Praça e Baixa Automática de Estoque
+  // 6. Criação de Pedido (Order) com Idempotência, Preço por Canal, Impressão Incremental e Baixa de Estoque
   const CreateOrderBodySchema = z.object({
     idempotencyKey: z.string().min(8),
     tabId: z.string().uuid().nullable().optional(),
     tableNumber: z.number().int().positive().nullable().optional(),
+    qrToken: z.string().optional(),
     channel: SalesChannelSchema.default('DINE_IN'),
     originNode: OriginNodeSchema.default('WINDOWS_PDV'),
     waiterUserId: z.string().nullable().optional(),
@@ -326,18 +524,123 @@ export async function buildLocalServer(options?: {
     if (!parsed.success) {
       return reply.status(400).send({ error: 'Pedido inválido', issues: parsed.error.issues });
     }
-    const result = store.createOrder({
-      ...parsed.data,
-      waiterUserId: parsed.data.waiterUserId ?? session.userId,
-      waiterName: parsed.data.waiterName ?? session.name
-    });
-    return reply.status(result.idempotentReplay ? 200 : 201).send(result);
+    try {
+      const result = store.createOrder({
+        ...parsed.data,
+        waiterUserId: parsed.data.waiterUserId ?? session.userId,
+        waiterName: parsed.data.waiterName ?? session.name
+      });
+      return reply.status(result.idempotentReplay ? 200 : 201).send(result);
+    } catch (err) {
+      return reply.status(400).send({
+        error: err instanceof Error ? err.message : 'Erro ao processar pedido'
+      });
+    }
   });
 
-  // 7. Avanço de Status na Cozinha / KDS / Garçom
+  // 6.1 Endpoints Públicos para Cardápio Digital QR Code Seguro por Mesa (Seções 11 e 12)
+  app.get<{ Params: { qrToken: string } }>('/api/public/qr-table/:qrToken', async (req, reply) => {
+    const qrTable = store.getDiningTableByQrToken(req.params.qrToken);
+    if (!qrTable) {
+      return reply.status(404).send({
+        error: 'QR Code de mesa inválido, expirado ou desativado. Solicite auxílio ao garçom.'
+      });
+    }
+    const catalog = store.getCatalog({ includeInactive: false, channel: 'QR_TABLE' });
+    return {
+      establishment: 'DECK 26 — Hotel Auto Posto Milla',
+      qrTable,
+      catalog
+    };
+  });
+
+  const CreatePublicQrOrderSchema = z.object({
+    idempotencyKey: z.string().min(8),
+    qrToken: z.string().min(10),
+    customerName: z.string().min(2),
+    customerNotes: z.string().optional(),
+    items: z
+      .array(
+        z.object({
+          productId: z.string().min(1),
+          quantity: z.number().positive(),
+          notes: z.string().optional(),
+          modifiers: z
+            .array(
+              z.object({
+                groupId: z.string(),
+                groupName: z.string(),
+                optionId: z.string(),
+                optionName: z.string(),
+                priceDeltaCents: z.number().int().optional()
+              })
+            )
+            .optional()
+        })
+      )
+      .min(1)
+  });
+
+  app.post('/api/public/qr-orders', async (req, reply) => {
+    const parsed = CreatePublicQrOrderSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: 'Pedido QR inválido', issues: parsed.error.issues });
+    }
+
+    try {
+      const customerNoteStr = `${parsed.data.customerName}${
+        parsed.data.customerNotes ? ` — ${parsed.data.customerNotes}` : ''
+      }`;
+      const result = store.createOrder({
+        idempotencyKey: parsed.data.idempotencyKey,
+        qrToken: parsed.data.qrToken,
+        channel: 'QR_TABLE',
+        originNode: 'CLOUD_QR_MENU',
+        customerNotes: customerNoteStr,
+        items: parsed.data.items
+      });
+      return reply.status(result.idempotentReplay ? 200 : 201).send(result);
+    } catch (err) {
+      return reply.status(400).send({
+        error: err instanceof Error ? err.message : 'Não foi possível registrar o pedido por QR Code'
+      });
+    }
+  });
+
+  const UpdateQrPolicySchema = z.object({
+    requiresOperatorApproval: z.boolean()
+  });
+
+  app.patch<{ Params: { tableNumber: string } }>(
+    '/api/qr-tables/:tableNumber',
+    async (req, reply) => {
+      const session = authorizePermission(req, reply, 'tabs:manage');
+      if (!session) return;
+
+      const parsed = UpdateQrPolicySchema.safeParse(req.body);
+      if (!parsed.success) {
+        return reply.status(400).send({ error: 'Configuração de QR inválida' });
+      }
+      try {
+        const qrTable = store.configureDiningTableQrPolicy(
+          Number(req.params.tableNumber),
+          parsed.data.requiresOperatorApproval
+        );
+        return { qrTable };
+      } catch (err) {
+        return reply.status(404).send({
+          error: err instanceof Error ? err.message : 'Mesa não encontrada'
+        });
+      }
+    }
+  );
+
+  // 7. Avanço de Status na Cozinha / KDS / Garçom / Cancelamento com Estorno de Estoque
   const AdvanceOrderBodySchema = z.object({
     status: OrderStatusSchema,
-    originNode: OriginNodeSchema.default('KITCHEN_KDS')
+    originNode: OriginNodeSchema.default('KITCHEN_KDS'),
+    reverseStockOnCancel: z.boolean().optional(),
+    cancelReason: z.string().optional()
   });
 
   app.patch<{ Params: { id: string } }>('/api/orders/:id/status', async (req, reply) => {
@@ -348,12 +651,21 @@ export async function buildLocalServer(options?: {
     if (!parsed.success) {
       return reply.status(400).send({ error: 'Status inválido', issues: parsed.error.issues });
     }
-    const order = store.advanceOrderStatus({
-      orderId: req.params.id,
-      newStatus: parsed.data.status,
-      originNode: parsed.data.originNode
-    });
-    return { order };
+    try {
+      const order = store.advanceOrderStatus({
+        orderId: req.params.id,
+        newStatus: parsed.data.status,
+        originNode: parsed.data.originNode,
+        reverseStockOnCancel: parsed.data.reverseStockOnCancel,
+        cancelReason: parsed.data.cancelReason,
+        actorUserId: session.userId
+      });
+      return { order };
+    } catch (err) {
+      return reply.status(404).send({
+        error: err instanceof Error ? err.message : 'Pedido não encontrado'
+      });
+    }
   });
 
   // 8. Registro de Pagamento Parcial ou Total (Payment — Entidade Separada)
@@ -388,7 +700,7 @@ export async function buildLocalServer(options?: {
     }
   });
 
-  // 9. Confirmação de Impressão Térmica no Spooler Local
+  // 9. Confirmação e Reimpressão Autorizada de Impressão Térmica no Spooler Local
   app.post<{ Params: { id: string } }>('/api/print-jobs/:id/mark-printed', async (req, reply) => {
     const session = authorizePermission(req, reply, 'printers:manage');
     if (!session) return;
@@ -397,11 +709,28 @@ export async function buildLocalServer(options?: {
     return { printJob: job };
   });
 
-  // 10. Ajuste Auditado de Estoque
+  app.post<{ Params: { id: string } }>('/api/print-jobs/:id/reprint', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'printers:manage');
+    if (!session) return;
+
+    try {
+      const job = store.reprintJob(req.params.id, session.userId);
+      return { printJob: job };
+    } catch (err) {
+      return reply.status(404).send({
+        error: err instanceof Error ? err.message : 'Trabalho de impressão não encontrado'
+      });
+    }
+  });
+
+  // 10. Ajuste Auditado e Estorno de Movimentação de Estoque
   const AdjustStockBodySchema = z.object({
+    idempotencyKey: z.string().optional(),
     productId: z.string().min(1),
     quantityDelta: z.number().refine((v) => v !== 0, 'Quantidade não pode ser zero'),
     movementType: StockMovementTypeSchema,
+    unitCostCents: z.number().int().nonnegative().optional(),
+    originChannel: z.string().optional(),
     reason: z.string().min(3)
   });
 
@@ -411,13 +740,50 @@ export async function buildLocalServer(options?: {
 
     const parsed = AdjustStockBodySchema.safeParse(req.body);
     if (!parsed.success) {
-      return reply.status(400).send({ error: 'Movimentação inválida', issues: parsed.error.issues });
+      return reply
+        .status(400)
+        .send({ error: 'Movimentação inválida', issues: parsed.error.issues });
     }
-    const movement = store.adjustStock({
-      ...parsed.data,
-      userId: session.userId
-    });
-    return reply.status(201).send({ movement });
+    try {
+      const result = store.adjustStock({
+        ...parsed.data,
+        userId: session.userId
+      });
+      return reply.status(result.idempotentReplay ? 200 : 201).send(result);
+    } catch (err) {
+      return reply.status(400).send({
+        error: err instanceof Error ? err.message : 'Erro ao ajustar estoque'
+      });
+    }
+  });
+
+  const ReverseStockBodySchema = z.object({
+    movementId: z.string().min(1),
+    reason: z.string().min(3)
+  });
+
+  app.post('/api/stock/reverse', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'stock:adjust');
+    if (!session) return;
+
+    const parsed = ReverseStockBodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply
+        .status(400)
+        .send({ error: 'Dados de estorno inválidos', issues: parsed.error.issues });
+    }
+    try {
+      const movement = store.reverseStockMovement({
+        movementId: parsed.data.movementId,
+        reason: parsed.data.reason,
+        userId: session.userId
+      });
+      return reply.status(201).send({ movement });
+    } catch (err) {
+      return reply.status(400).send({
+        error: err instanceof Error ? err.message : 'Erro ao estornar movimentação'
+      });
+    }
   });
 
   // 11. Check-in de Hóspede no Hotel Auto Posto Milla
@@ -432,7 +798,9 @@ export async function buildLocalServer(options?: {
 
     const parsed = HotelCheckInSchema.safeParse(req.body);
     if (!parsed.success) {
-      return reply.status(400).send({ error: 'Dados de check-in inválidos', issues: parsed.error.issues });
+      return reply
+        .status(400)
+        .send({ error: 'Dados de check-in inválidos', issues: parsed.error.issues });
     }
     const result = store.checkInHotelRoom(parsed.data);
     return reply.status(201).send(result);

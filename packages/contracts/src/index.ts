@@ -322,29 +322,40 @@ export const SalesChannelSchema = z.enum([
   'COUNTER_PDV',  // Balcão / PDV Rápido
   'QR_TABLE',     // Autoatendimento QR Code na mesa
   'DELIVERY',     // Delivery Online
+  'PICKUP',       // Retirada no Estabelecimento
   'HOTEL_ROOM'    // Consumo lançado no Quarto do Hotel Milla
 ]);
 export type SalesChannel = z.infer<typeof SalesChannelSchema>;
 
 export const PrepStationSchema = z.enum([
-  'KITCHEN_HOT',   // Cozinha Quente (Pratos Executivos, Panelada, Carnes)
+  'KITCHEN_HOT',     // Cozinha Quente (Pratos Executivos, Panelada, Carnes)
+  'KITCHEN_COLD',    // Cozinha Fria / Saladas / Sobremesas
   'GRIDDLE_TAPIOCA', // Chapa (Tapiocas, Cuscuz, Omeletes, Panquecas)
-  'BAR_DRINKS',    // Bar (Drinks, Cervejas, Sucos, Refrigerantes)
-  'NONE'           // Itens de pronta entrega sem preparo
+  'BAR_DRINKS',      // Bar (Drinks, Cervejas, Sucos, Refrigerantes)
+  'CASHIER_COUNTER', // Caixa / Recepção
+  'NONE'             // Itens de pronta entrega sem preparo
 ]);
 export type PrepStation = z.infer<typeof PrepStationSchema>;
 
 export const ModifierOptionSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
-  priceDeltaCents: z.number().int().default(0)
+  priceDeltaCents: z.number().int().default(0),
+  available: z.boolean().optional(),
+  sortOrder: z.number().int().optional(),
+  stockProductId: z.string().optional(), // Se o adicional consumir estoque de um insumo/produto cadastrado
+  stockQuantityUsed: z.number().positive().optional()
 });
+export type ModifierOption = z.infer<typeof ModifierOptionSchema>;
 
 export const ModifierGroupSchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1), // Ex: "Escolha a base", "Escolha o recheio", "Ponto da carne"
+  required: z.boolean().optional(),
   minSelect: z.number().int().min(0),
   maxSelect: z.number().int().min(1),
+  sortOrder: z.number().int().optional(),
+  available: z.boolean().optional(),
   options: z.array(ModifierOptionSchema)
 });
 export type ModifierGroup = z.infer<typeof ModifierGroupSchema>;
@@ -353,29 +364,96 @@ export const CatalogCategorySchema = z.object({
   id: z.string().min(1),
   slug: z.string().min(1),
   name: z.string().min(1),
+  description: z.string().optional(),
+  imageUrl: z.string().nullable().optional(),
   sortOrder: z.number().int(),
-  active: z.boolean().default(true)
+  availableChannels: z.array(SalesChannelSchema).optional(),
+  active: z.boolean().default(true),
+  updatedAt: IsoDateTimeSchema.optional()
 });
 export type CatalogCategory = z.infer<typeof CatalogCategorySchema>;
+
+export const OutOfStockPolicySchema = z.enum(['BLOCK_SALE', 'ALLOW_BACKORDER']);
+export type OutOfStockPolicy = z.infer<typeof OutOfStockPolicySchema>;
+
+export const DataSourceTypeSchema = z.enum(['OFFICIAL_MENU', 'TEST_ONLY']);
+export type DataSourceType = z.infer<typeof DataSourceTypeSchema>;
 
 export const CatalogProductSchema = z.object({
   id: z.string().min(1),
   sku: z.string().min(1),
+  barcode: z.string().nullable().optional(),
   categoryId: z.string().min(1),
+  subcategory: z.string().optional(),
   name: z.string().min(1),
   description: z.string().default(''),
-  priceCents: z.number().int().nonnegative(), // Preço base em centavos de Real (R$)
+  imageUrl: z.string().nullable().optional(),
+  unitOfMeasure: z.string().optional(),
+  priceCents: z.number().int().nonnegative(), // Preço base de venda em centavos
+  costPriceCents: z.number().int().nonnegative().optional(), // Preço de custo em centavos
   channelPricesCents: z.record(SalesChannelSchema, z.number().int().nonnegative()).optional(),
   availableChannels: z.array(SalesChannelSchema).min(1),
   prepStation: PrepStationSchema,
+  targetPrinter: z.string().optional(),
+  prepTimeMinutes: z.number().int().nonnegative().optional(),
   trackStock: z.boolean().default(true),
+  minStockQuantity: z.number().nonnegative().optional(),
+  outOfStockPolicy: OutOfStockPolicySchema.optional(),
   modifierGroups: z.array(ModifierGroupSchema).default([]),
-  ncm: z.string().length(8).optional(),
-  cfop: z.string().length(4).optional(),
+  internalNotes: z.string().optional(),
+  ncm: z.string().optional(),
+  cest: z.string().optional(),
+  cfop: z.string().optional(),
+  merchandiseOrigin: z.string().optional(),
+  taxProfile: z.string().optional(),
+  dataSource: DataSourceTypeSchema.optional(),
   active: z.boolean().default(true),
+  createdAt: IsoDateTimeSchema.optional(),
   updatedAt: IsoDateTimeSchema
 });
 export type CatalogProduct = z.infer<typeof CatalogProductSchema>;
+
+/**
+ * 4.1 FICHA TÉCNICA E RECEITAS (Opcional, Versionada e sem valores fictícios)
+ */
+export const RecipeItemSchema = z.object({
+  id: z.string().min(1),
+  recipeId: z.string().min(1),
+  ingredientProductId: z.string().min(1),
+  ingredientName: z.string().min(1),
+  quantityUsed: z.number().positive(),
+  unitOfMeasure: z.string().default('UN'),
+  unitCostCents: z.number().int().nonnegative().default(0)
+});
+export type RecipeItem = z.infer<typeof RecipeItemSchema>;
+
+export const ProductRecipeSchema = z.object({
+  id: z.string().min(1),
+  productId: z.string().min(1),
+  version: z.number().int().positive(),
+  status: z.enum(['DRAFT', 'APPROVED', 'ARCHIVED']),
+  yieldQuantity: z.number().positive().default(1),
+  estimatedCostCents: z.number().int().nonnegative(),
+  notes: z.string().default(''),
+  approvedByUserId: z.string().nullable().optional(),
+  items: z.array(RecipeItemSchema).min(1),
+  createdAt: IsoDateTimeSchema,
+  updatedAt: IsoDateTimeSchema
+});
+export type ProductRecipe = z.infer<typeof ProductRecipeSchema>;
+
+/**
+ * 4.2 IDENTIFICADOR CRIPTOGRÁFICO DE MESA PARA QR CODE
+ */
+export const DiningTableQrSchema = z.object({
+  tableNumber: z.number().int().positive(),
+  qrToken: z.string().min(16),
+  label: z.string().min(1),
+  requiresOperatorApproval: z.boolean().default(false),
+  active: z.boolean().default(true),
+  createdAt: IsoDateTimeSchema
+});
+export type DiningTableQr = z.infer<typeof DiningTableQrSchema>;
 
 // ============================================================================
 // 5. ENTIDADES OPERACIONAIS SEPARADAS (REGRA ARQUITETURAL ESTRITA)
@@ -422,11 +500,12 @@ export type Tab = z.infer<typeof TabSchema>;
  * Uma Comanda (Tab) pode ter 1..N Pedidos (Orders).
  */
 export const OrderStatusSchema = z.enum([
-  'RECEIVED',       // Registrado localmente ou recebido da nuvem
-  'IN_PREPARATION', // Em preparo na cozinha / bar
-  'READY',          // Pronto para entrega pelo garçom
-  'DELIVERED',      // Entregue na mesa / cliente
-  'CANCELLED'       // Cancelado com justificativa auditada
+  'PENDING_APPROVAL', // Aguardando aprovação operacional (quando política de mesa QR exige confirmação)
+  'RECEIVED',         // Registrado localmente ou aprovado para produção
+  'IN_PREPARATION',   // Em preparo na cozinha / bar
+  'READY',            // Pronto para entrega pelo garçom
+  'DELIVERED',        // Entregue na mesa / cliente
+  'CANCELLED'         // Cancelado com justificativa auditada
 ]);
 export type OrderStatus = z.infer<typeof OrderStatusSchema>;
 
@@ -512,6 +591,7 @@ export type Payment = z.infer<typeof PaymentSchema>;
  */
 export const PrintJobTargetSchema = z.enum([
   'PRINTER_KITCHEN_HOT',
+  'PRINTER_KITCHEN_COLD',
   'PRINTER_GRIDDLE',
   'PRINTER_BAR',
   'PRINTER_CASHIER'
@@ -552,24 +632,29 @@ export type PrintJob = z.infer<typeof PrintJobSchema>;
  * Entidade de razão (ledger) imutável para cada entrada, saída por venda, perda ou ajuste de inventário.
  */
 export const StockMovementTypeSchema = z.enum([
-  'PURCHASE_ENTRY',    // Entrada por nota de compra
-  'SALE_DEDUCTION',    // Baixa automática por item vendido
-  'WASTE_OR_LOSS',     // Quebra, perda ou vencimento
-  'INVENTORY_ADJUST',  // Ajuste de contagem física
-  'INTERNAL_USE'       // Consumo interno
+  'PURCHASE_ENTRY',    // Entrada de mercadorias por nota/compra
+  'SALE_DEDUCTION',    // Baixa automática por item ou ingrediente vendido
+  'WASTE_OR_LOSS',     // Perdas, quebras ou desperdícios
+  'INVENTORY_ADJUST',  // Ajuste manual autorizado de inventário
+  'INTERNAL_USE',      // Consumo interno
+  'RETURN_ENTRY',      // Devolução de mercadoria
+  'REVERSAL_ENTRY'     // Estorno auditável de movimentação / cancelamento de pedido
 ]);
 export type StockMovementType = z.infer<typeof StockMovementTypeSchema>;
 
 export const StockMovementSchema = z.object({
   id: UuidSchema,
+  idempotencyKey: z.string().optional(),
   productId: z.string().min(1),
   productName: z.string().min(1),
   movementType: StockMovementTypeSchema,
-  quantityDelta: z.number(), // Positivo para entrada, negativo para saída
+  quantityDelta: z.number(), // Positivo para entrada/estorno, negativo para saída
   balanceAfter: z.number(),
   unitCostCents: z.number().int().nonnegative().optional(),
-  referenceEntityType: z.enum(['ORDER', 'PURCHASE_INVOICE', 'MANUAL_AUDIT']).optional(),
+  originChannel: z.string().optional(),
+  referenceEntityType: z.enum(['ORDER', 'PURCHASE_INVOICE', 'MANUAL_AUDIT', 'REVERSAL']).optional(),
   referenceEntityId: z.string().optional(),
+  reversedByMovementId: z.string().nullable().optional(),
   reason: z.string().min(2),
   createdByUserId: z.string().min(1),
   createdAt: IsoDateTimeSchema
@@ -610,7 +695,9 @@ export const SyncEntityTypeSchema = z.enum([
   'ORDER',
   'PAYMENT',
   'STOCK_MOVEMENT',
+  'CATALOG_CATEGORY',
   'CATALOG_PRODUCT',
+  'PRODUCT_RECIPE',
   'HOTEL_ROOM',
   'FISCAL_CONFIG'
 ]);
@@ -730,7 +817,7 @@ const RECHEIO_DOCE: ModifierGroup = {
   ]
 };
 
-const ALL_CHANNELS: SalesChannel[] = ['DINE_IN', 'COUNTER_PDV', 'QR_TABLE', 'DELIVERY', 'HOTEL_ROOM'];
+const ALL_CHANNELS: SalesChannel[] = ['DINE_IN', 'COUNTER_PDV', 'QR_TABLE', 'DELIVERY', 'PICKUP', 'HOTEL_ROOM'];
 
 export const DECK26_INITIAL_PRODUCTS: CatalogProduct[] = [
   // --- PARA QUALQUER HORA ---
@@ -1234,7 +1321,7 @@ export const DECK26_INITIAL_PRODUCTS: CatalogProduct[] = [
     updatedAt: '2026-11-03T00:00:00.000Z'
   },
 
-  // --- ESPECIAIS & CHURRASCO ---
+  // --- ESPECIAIS & CHURRASCO (CRIADOS EXCLUSIVAMENTE PARA CENÁRIOS DE TESTE OPERACIONAL) ---
   {
     id: 'prd-esp-picanha',
     sku: 'D26-ESP-001',
@@ -1246,6 +1333,7 @@ export const DECK26_INITIAL_PRODUCTS: CatalogProduct[] = [
     prepStation: 'KITCHEN_HOT',
     trackStock: true,
     modifierGroups: [],
+    dataSource: 'TEST_ONLY',
     active: true,
     updatedAt: '2026-11-03T00:00:00.000Z'
   },
@@ -1260,11 +1348,12 @@ export const DECK26_INITIAL_PRODUCTS: CatalogProduct[] = [
     prepStation: 'KITCHEN_HOT',
     trackStock: true,
     modifierGroups: [],
+    dataSource: 'TEST_ONLY',
     active: true,
     updatedAt: '2026-11-03T00:00:00.000Z'
   },
 
-  // --- BEBIDAS & REFRIGERANTES ---
+  // --- BEBIDAS & REFRIGERANTES (CENÁRIO DE TESTE DE ESTOQUE 50 UN -> 48 UN) ---
   {
     id: 'prd-beb-refrigerante-lata',
     sku: 'D26-BEB-001',
@@ -1276,10 +1365,25 @@ export const DECK26_INITIAL_PRODUCTS: CatalogProduct[] = [
     prepStation: 'BAR_DRINKS',
     trackStock: true,
     modifierGroups: [],
+    dataSource: 'TEST_ONLY',
     active: true,
     updatedAt: '2026-11-03T00:00:00.000Z'
   }
 ];
+
+export function resolveChannelPriceCents(product: CatalogProduct, channel: SalesChannel): number {
+  const custom = product.channelPricesCents?.[channel];
+  if (typeof custom === 'number' && custom >= 0) {
+    return custom;
+  }
+  return product.priceCents;
+}
+
+export function calculateGrossMarginPercent(priceCents: number, costPriceCents?: number): number {
+  if (priceCents <= 0) return 0;
+  const cost = costPriceCents ?? 0;
+  return Number((((priceCents - cost) / priceCents) * 100).toFixed(2));
+}
 
 // ============================================================================
 // 10. FUNÇÕES PURAS DE DOMÍNIO E CÁLCULO FINANCEIRO (SEM PONTO FLUTUANTE)
