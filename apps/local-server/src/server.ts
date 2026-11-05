@@ -160,7 +160,9 @@ export async function buildLocalServer(options?: {
   let cloudApiUrl =
     options?.cloudApiUrl ?? process.env.DECK26_CLOUD_API_URL ?? 'http://127.0.0.1:4100';
 
-  const requireStrictAuth = options?.requireStrictAuth ?? false;
+  const requireStrictAuth =
+    options?.requireStrictAuth ??
+    (process.env.NODE_ENV === 'production' || process.env.DECK26_STRICT_AUTH === 'true');
   const store = new LocalOperationalStore(dbPath);
   let lastPulledRemoteCursor = 0;
   let lastSyncStatus: {
@@ -2706,25 +2708,35 @@ export async function buildLocalServer(options?: {
     return store.listAccountReconciliations(req.query.financialAccountId);
   });
 
-  app.get<{ Querystring: { startDate?: string; endDate?: string; costCenterId?: string } }>('/api/finance/dre', async (req) => {
+  app.get<{ Querystring: { startDate?: string; endDate?: string; costCenterId?: string } }>('/api/finance/dre', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'finance:view_dre');
+    if (!session) return;
     const start = req.query.startDate || new Date().toISOString().slice(0, 7) + '-01';
     const end = req.query.endDate || new Date().toISOString().slice(0, 10);
     return store.generateDreStatement({ startDate: start, endDate: end, costCenterId: req.query.costCenterId });
   });
 
-  app.get<{ Querystring: { startDate?: string; endDate?: string; accountId?: string } }>('/api/finance/cash-flow/realized', async (req) => {
+  app.get<{ Querystring: { startDate?: string; endDate?: string; accountId?: string } }>('/api/finance/cash-flow/realized', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'finance:view_dre');
+    if (!session) return;
     const start = req.query.startDate || new Date().toISOString().slice(0, 7) + '-01';
     const end = req.query.endDate || new Date().toISOString().slice(0, 10);
     return store.generateCashFlowRealized({ startDate: start, endDate: end, accountId: req.query.accountId });
   });
 
-  app.get<{ Querystring: { startDate?: string; endDate?: string } }>('/api/finance/cash-flow/projected', async (req) => {
+  app.get<{ Querystring: { startDate?: string; endDate?: string } }>('/api/finance/cash-flow/projected', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'finance:view_dre');
+    if (!session) return;
     const start = req.query.startDate || new Date().toISOString().slice(0, 10);
     const end = req.query.endDate || new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10);
     return store.generateCashFlowProjected({ startDate: start, endDate: end });
   });
 
-  app.get('/api/finance/dashboard', async () => store.getExecutiveDashboardMetrics());
+  app.get('/api/finance/dashboard', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'finance:view_dre');
+    if (!session) return;
+    return store.getExecutiveDashboardMetrics();
+  });
 
   app.get<{ Querystring: { type: string; startDate?: string; endDate?: string } }>('/api/finance/export/csv', async (req, reply) => {
     const session = authorizePermission(req, reply, 'finance:export_reports');

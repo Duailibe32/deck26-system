@@ -53,3 +53,15 @@ Durante o desenvolvimento e operação local sem VPS contratada, o sistema utili
    - Compatibilidade total PostgreSQL 16 com tipos UUID, TIMESTAMP WITH TIME ZONE, JSONB e índices de busca para o módulo hoteleiro.
 5. **`0005_stage6_cloud_delivery_and_finance.sql`**:
    - Equivalente completo para PostgreSQL 16+ das 15 tabelas de delivery e finanças gerenciais, com integridade referencial e índices de competência.
+
+---
+
+## 3. Auditoria de Integridade e Integridade Referencial (Etapa 6.5)
+
+Na Etapa 6.5, foi executada a auditoria estrutural nos bancos de dados:
+- **Total de Tabelas Físicas:** 51 tabelas cobrindo todo o ciclo operacional de Bar, Restaurante, Hotel, Delivery e Finanças.
+- **Validação de Integridade:** `PRAGMA integrity_check` retornou status `ok` em ambos os bancos.
+- **Validação de Chaves Estrangeiras:** `PRAGMA foreign_key_check` retornou 0 violações em todo o grafo relacional.
+- **Backup Seguro Pré-Auditoria:** Cópias consistentes geradas via `VACUUM INTO` armazenadas em diretório isolado e ignorado pelo Git (`backups/`).
+- **Resiliência a Quedas de Energia:** Operação garantida sob `PRAGMA journal_mode = WAL;` e sincronização atômica em transações imediatas (`BEGIN IMMEDIATE TRANSACTION`).
+- **Política Oficial de Recuperação:** Detalhada no runbook operacional [`docs/BACKUP_AND_RECOVERY.md`](./BACKUP_AND_RECOVERY.md).

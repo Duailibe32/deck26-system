@@ -126,9 +126,21 @@ A Etapa 6 expandiu o DECK 26 com módulos essenciais de delivery próprio e inte
 
 ### 5.3 Invariantes Contábeis Rigorosas no DRE Gerencial
 O Demonstrativo do Resultado do Exercício por Competência respeita três invariantes contábeis absolutas:
-1. **Sem Duplicidade de Receita por `ROOM_CHARGE`**: O consumo de restaurante/bar faturado para apartamento do hotel é reconhecido por competência na origem e deduzido das diárias hoteleiras no DRE, impedindo dupla contagem.
+1. **Sem Duplicidade de Receita e Sem Redução de Diárias por `ROOM_CHARGE`**: O consumo de restaurante/bar faturado para o quarto do hotel é reconhecido por competência no restaurante/bar no encerramento da comanda. No folio hoteleiro, lançamentos originados de comandas (`source_reference_type = 'TAB'`) e quitações financeiras são segregados da receita bruta de hospedagem, preservando integralmente o valor real das diárias (`ROOM_RATE`) sem inflar nem duplicar o faturamento.
 2. **Ativo Circulante vs Despesa (Estoque & Kardex)**: Notas fiscais de compra (`purchase_invoices`) creditam contas a pagar e debitam o estoque Kardex como ativo circulante; o CMV (Custo das Mercadorias Vendidas) ocorre estritamente na venda ou consumo por ficha técnica.
 3. **Movimentações de Custódia**: Prestação de contas de motoboys, sangrias e transferências de saldo são movimentações de custódia e não afetam receitas nem despesas no DRE.
+
+---
+
+## 6. Auditoria Geral, Segurança e Homologação Operacional (Etapa 6.5)
+
+A Etapa 6.5 consolidou uma auditoria técnica profunda e testes de regressão automatizados em todo o sistema:
+- **Correção de Flakiness por Data:** Eliminação de datas fixas hardcoded em asserções de testes hoteleiros e DRE, tornando a suíte de testes 100% resiliente a viradas de data e fuso horário.
+- **Rigor Matemático em Centavos:** Garantia de aditividade exata e saldo restante R$ 0,00 em contas fracionadas em múltiplos pagamentos (PIX, Dinheiro, Cartões).
+- **Proteção RBAC em Rotas Financeiras:** Aplicação de `authorizePermission(..., 'finance:view_dre')` e `'delivery:settle'` nos endpoints gerenciais, impedindo acesso indevido por operadores de salão ou cozinha.
+- **Modo Estrito de Autenticação Automático:** `requireStrictAuth` ativado automaticamente quando `NODE_ENV === 'production'`, exigindo segredo forte HMAC (`DECK26_AUTH_SECRET`).
+- **Gestão Segura de Contas Bancárias:** Capacidade de renomear e desativar contas demonstrativas sem apagar o histórico de transações ou corromper a integridade referencial.
+- **103 Testes Automatizados Aprovados:** Suíte completa em Vitest cobrindo contratos, PMS hoteleiro, PDV/KDS, finanças, delivery e invariantes contábeis.
 
 ### 5.4 Exportação CSV Blindada contra Formula Injection
 Todos os endpoints de exportação utilizam `sanitizeCsvCell()`:

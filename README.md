@@ -7,8 +7,9 @@
 **Operação local • Pedidos em tempo real • Controle financeiro • Arquitetura offline-first**
 
 [![CI](https://github.com/Duailibe32/deck26-system/actions/workflows/ci.yml/badge.svg)](https://github.com/Duailibe32/deck26-system/actions/workflows/ci.yml)
-![Status](https://img.shields.io/badge/status-etapa%206%20conclu%C3%ADda-F72585)
+![Status](https://img.shields.io/badge/status-etapa%206.5%20auditada-F72585)
 ![Acesso](https://img.shields.io/badge/reposit%C3%B3rio-privado-7209B7)
+![Testes](https://img.shields.io/badge/testes-103%20aprovados-success)
 ![Node](https://img.shields.io/badge/Node.js-22%2B-339933?logo=nodedotjs&logoColor=white)
 ![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?logo=typescript&logoColor=white)
 
@@ -25,7 +26,7 @@ O **DECK 26** é uma plataforma de gestão integrada desenvolvida para a operaç
 A arquitetura é **offline-first**: a operação principal utiliza um servidor e um banco de dados locais, permitindo continuar trabalhando com latência zero e sem dependência de internet externa. A sincronização com uma instância remota faz parte da arquitetura; atualmente, a nuvem é **simulada localmente**, sem exigência de contratação prévia de VPS.
 
 > [!IMPORTANT]
-> **Status atual:** Etapas 1 a 6 implementadas, com **95 testes automatizados aprovados** e pipeline de CI no GitHub Actions. O sistema respeita as regras de negócio reais, sem dados fictícios de demonstração no banco e com persistência independente em disco.
+> **Status atual:** Etapas 1 a 6.5 concluídas e auditadas, com **103 testes automatizados aprovados** e pipeline de CI no GitHub Actions. O sistema respeita as regras de negócio reais, sem dados fictícios de demonstração no banco e com persistência independente em disco. Documentação de pré-produção, matriz de homologação e invariantes contábeis disponíveis em `docs/`.
 
 ### 🎯 Cenário operacional planejado
 

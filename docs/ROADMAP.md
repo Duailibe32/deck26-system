@@ -29,3 +29,11 @@
 
 - **Etapa 7 — Homologação de Hardware, Fiscal SEFAZ e Deploy em Produção**:
   - Integração com impressoras térmicas físicas ESC/POS, Certificado Digital A1 para NFC-e/NF-e e publicação na Hostinger VPS com PostgreSQL 16.
+- **Etapa 6.5 — Auditoria Geral, Correção de Falhas, Homologação Operacional e Preparação para Produção (Concluída)**:
+  - Auditoria profunda em 13 fases abrangendo integridade referencial, concorrência, consistência contábil e segurança;
+  - Resolução de flakiness de datas em testes automatizados (`new Date()` vs datas fixas);
+  - Refatoração da query de DRE para isolamento estrito de diárias hoteleiras, garantindo que lançamentos de `PAYMENT` no folio não reduzam receita bruta e que `ROOM_CHARGE` não duplique faturamento;
+  - Bloqueio de rotas financeiras via RBAC com `HTTP 403 Forbidden` para garçons e cozinha;
+  - Modo estrito de autenticação ativado automaticamente em produção (`NODE_ENV === 'production'`);
+  - 103 testes automatizados aprovados (100% de sucesso);
+  - Criação dos documentos `AUDIT_STAGE_6_5.md`, `FINANCIAL_INVARIANTS.md`, `OPERATIONAL_ACCEPTANCE.md`, `PREPRODUCTION_CHECKLIST.md` e `BACKUP_AND_RECOVERY.md`.

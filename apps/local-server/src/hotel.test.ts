@@ -373,7 +373,8 @@ describe('DECK 26 — Etapa 5: Bateria Completa dos 35 Testes Obrigatórios do P
       roomNumber: '101',
       guestId: guest.id,
       dailyRateCents: 11000, // Tarifa com desconto comercial
-      checkOutScheduledAt: '2026-11-06T12:00:00.000Z',
+      checkInAt: '2026-11-01T14:00:00.000Z',
+      checkOutScheduledAt: '2026-11-03T12:00:00.000Z',
       operatorUserId: 'usr-01',
       operatorName: 'Recepção'
     });

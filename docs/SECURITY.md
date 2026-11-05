@@ -70,3 +70,16 @@ O DECK 26 implementa proteção nativa contra ataques de injeção de fórmulas 
 - Qualquer valor de célula iniciando com `=`, `+`, `-`, `@`, `\t` ou `\r` é automaticamente prefixado com apóstrofo (`'`) via `sanitizeCsvCell()`.
 - Células contendo aspas, vírgulas ou quebras de linha são delimitadas e escapadas como `""`.
 - Impede a execução de comandos DDE, chamadas de shell ou macros maliciosas quando operadores abrem relatórios no Microsoft Excel ou LibreOffice Calc.
+
+---
+
+## 6. Auditoria de Segurança e Modo Estrito (Etapa 6.5)
+
+Na Etapa 6.5, foram consolidados os seguintes reforços de segurança:
+1. **Ativação Automática de Modo Estrito de Autenticação:**
+   - Em produção (`NODE_ENV=production`) ou quando `DECK26_STRICT_AUTH=true`, o servidor desativa qualquer fallback permissivo em loopback e exige tokens com assinatura HMAC-SHA256 válida.
+2. **Auditoria de Endpoints Financeiros:**
+   - As rotas executivas `/api/finance/dre`, `/api/finance/cash-flow/*` e `/api/finance/dashboard` foram protegidas com verificação obrigatória de `finance:view_dre`.
+   - Perfis de garçom e cozinha recebem `HTTP 403 Forbidden` com log de auditoria ao tentar acessar dados da tesouraria.
+3. **Análise de Dependências:**
+   - O código de produção não utiliza pacotes vulneráveis conhecidos; os alertas do `npm audit` estão circunscritos a ferramentas de desenvolvimento/teste (`vitest`, `esbuild`) e já possuem restrições documentadas para a Etapa 7.

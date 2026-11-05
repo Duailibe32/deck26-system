@@ -623,9 +623,10 @@ describe('DECK 26 — ETAPA 6: Delivery Próprio, Gestão Financeira, Fluxo de C
         operatorName: 'Caixa'
       });
 
+      const today = new Date().toISOString().slice(0, 10);
       const dre = store.generateDreStatement({
-        startDate: '2026-11-04',
-        endDate: '2026-11-04'
+        startDate: today,
+        endDate: today
       });
 
       expect(dre.revenueByCostCenter['HOTEL']).toBe(0);
@@ -828,7 +829,7 @@ describe('DECK 26 — ETAPA 6: Delivery Próprio, Gestão Financeira, Fluxo de C
       const { stay: stay102 } = store.checkInHotelStay({
         roomNumber: '102',
         guestId: guest.id,
-        checkOutScheduledAt: '2026-11-05T12:00:00.000Z',
+        checkOutScheduledAt: new Date(Date.now() + 86400000).toISOString(),
         dailyRateCents: 20000,
         operatorUserId: 'usr-reception-01',
         operatorName: 'Recepção'
@@ -893,9 +894,10 @@ describe('DECK 26 — ETAPA 6: Delivery Próprio, Gestão Financeira, Fluxo de C
 
       // Passo 19: Faz conciliação do Caixa Físico
       const caixaNow = store.getFinancialAccountById('acc-caixa-geral')!.currentBalanceCents;
+      const today = new Date().toISOString().slice(0, 10);
       const rec = store.reconcileFinancialAccount({
         financialAccountId: 'acc-caixa-geral',
-        reconciliationDate: '2026-11-04',
+        reconciliationDate: today,
         declaredPhysicalBalanceCents: caixaNow,
         actorUserId: 'usr-manager-01',
         adjustBalance: false
@@ -905,8 +907,8 @@ describe('DECK 26 — ETAPA 6: Delivery Próprio, Gestão Financeira, Fluxo de C
 
       // Passo 20: Gera DRE Gerencial do dia e audita todas as linhas
       const dre = store.generateDreStatement({
-        startDate: '2026-11-04',
-        endDate: '2026-11-04'
+        startDate: today,
+        endDate: today
       });
 
       expect(dre.grossRevenueCents).toBe(28700);
@@ -915,14 +917,14 @@ describe('DECK 26 — ETAPA 6: Delivery Próprio, Gestão Financeira, Fluxo de C
 
       // Passo 21: Gera Fluxo de Caixa Realizado e Previsto
       const cfRealized = store.generateCashFlowRealized({
-        startDate: '2026-11-04',
-        endDate: '2026-11-04'
+        startDate: today,
+        endDate: today
       });
       expect(cfRealized.totalInflowsCents).toBeGreaterThan(0);
 
       const cfProjected = store.generateCashFlowProjected({
-        startDate: '2026-11-04',
-        endDate: '2026-11-30'
+        startDate: today,
+        endDate: '2026-12-31'
       });
       expect(cfProjected.dailyProjections).toBeDefined();
 

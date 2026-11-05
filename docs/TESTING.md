@@ -12,7 +12,7 @@ npm run typecheck
 
 ---
 
-## 2. Cobertura Atual (95 Testes Aprovados com 100% de Sucesso)
+## 2. Cobertura Atual (103 Testes Aprovados com 100% de Sucesso)
 
 ### `packages/contracts/src/contracts.test.ts` (5 testes de unidade)
 - Cálculo exato de totais de comanda em centavos inteiros (sem erro de ponto flutuante).
@@ -81,3 +81,19 @@ npm run typecheck
   - Exportações CSV seguras de DRE, Vendas, Contas a Pagar e Contas a Receber.
 - **6. Teste Ponta a Ponta Operacional Integrado (28 Passos)**:
   - Jornada completa do estabelecimento: abertura de turno de caixa -> cadastro de fornecedor de alimentos -> compra faturada de 100 caldos com entrada no Kardex -> abertura de mesa no salão com pedido de 2 caldos -> avanço na cozinha -> cadastro de cliente delivery -> pedido delivery em dinheiro -> avanço e despacho com motoboy -> entrega e recebimento do dinheiro -> prestação de contas com custódia no caixa -> check-in de hóspede no Hotel Milla -> transferência de comanda do salão para o folio do quarto (`ROOM_CHARGE`) -> serviço de lavanderia no quarto -> check-out com quitação total via PIX -> pagamento de fatura do fornecedor com débito em conta bancária -> sangria do caixa para o cofre -> conciliação de caixa -> apuração final do DRE gerencial com validação de receita bruta, CMV, lucro bruto, despesas operacionais e lucro líquido -> validação do fluxo de caixa realizado -> verificação do painel executivo -> exportação do DRE em CSV sanitizado -> fechamento do turno de caixa com conferência cega.
+
+
+### `apps/local-server/src/stage6_5_audit.test.ts` (8 testes — Auditoria Geral, Invariantes e Homologação)
+- **1. Rigor Matemático e Centavos Inteiros:**
+  - Pagamento fracionado em 3 parcelas (PIX, Dinheiro, Débito) liquidando conta de R$ 101,99 com saldo restante exatamente R$ 0,00 (0 centavos perdidos/fantasmas).
+  - Idempotência estrita em pagamentos: reenvio com mesma chave idempotente retorna transação idêntica sem duplicar cobrança nem inflar recebimentos.
+- **2. Invariantes Contábeis do Caixa e DRE:**
+  - Suprimento de caixa gera saldo na gaveta física sem constar como receita bruta na DRE.
+  - Sangria de caixa retira saldo da gaveta física sem constar como despesa operacional na DRE.
+  - Transferência interna entre contas (ex.: Caixa Geral -> Conta PIX) debita e credita contas do ativo sem impactar faturamento nem lucro líquido.
+  - Invariante Crítica do `ROOM_CHARGE`: transferência de comanda de restaurante para o folio hoteleiro reconhece a receita no restaurante por competência, preserva integralmente o valor real das diárias hoteleiras no quarto e rejeita tentativas repetidas de transferência.
+- **3. Delivery Próprio e Custódia Transitória:**
+  - Prestação de contas do entregador (acerto de dinheiro) transfere custódia da carteira do motoboy para a gaveta do caixa sem registrar uma segunda venda na DRE.
+- **4. Segurança e Autorização Granular RBAC:**
+  - Garçom e Cozinha recebem `HTTP 403 Forbidden` com log de auditoria ao tentar criar contas bancárias, acessar DRE gerencial ou liquidar acertos de motoboys.
+  - Gestão de Contas Bancárias: Proprietário/Gerente pode renomear e desativar contas sem apagar o histórico de transações ou violar integridade referencial.

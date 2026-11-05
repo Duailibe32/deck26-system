@@ -2,6 +2,29 @@
 
 Todas as mudanças relevantes do projeto **DECK 26** são documentadas neste arquivo.
 
+## [Etapa 6.5] - 2026-11-05
+### Corrigido & Aprimorado
+- **Correção de Flakiness de Datas nos Testes**:
+  - Eliminação de datas hardcoded em testes hoteleiros e DRE (`hotel.test.ts` e `stage6.test.ts`), substituindo por datas dinâmicas relativas a `new Date()` e garantindo que o conjunto de testes execute sem falhas independentemente do dia e fuso horário.
+- **Rigor Contábil da DRE Gerencial**:
+  - Correção na query de receita bruta hoteleira em `generateDreStatement` e no dashboard executivo: agora filtra explicitamente débitos operacionais positivos (`amount_cents > 0` e `entry_type IN ('ROOM_RATE', 'MINIBAR', 'SERVICE', 'ADJUSTMENT')`), impedindo que lançamentos de `PAYMENT` ou adiantamentos negativos reduzam indevidamente a receita de diárias.
+  - Correção do tratamento de nulos no SQL para `source_reference_type != 'TAB'` com `(source_reference_type IS NULL OR source_reference_type != 'TAB')`, blindando contra a lógica trivalente de nulos no SQLite.
+  - Base de cálculo de competência em `tabs` aprimorada para `date(COALESCE(closed_at, opened_at))`.
+- **Segurança de Endpoints & RBAC**:
+  - Endpoints executivos de DRE (`/api/finance/dre`), Fluxo de Caixa (`/api/finance/cash-flow/*`) e Dashboard (`/api/finance/dashboard`) agora exigem autorização explícita `finance:view_dre`, retornando `403 Forbidden` para garçons e operadores de cozinha.
+  - Ativação automática de `requireStrictAuth` quando `NODE_ENV === 'production'` ou `DECK26_STRICT_AUTH === 'true'`.
+- **Gestão Segura de Contas Bancárias**:
+  - Disponibilizado e testado o endpoint `PUT /api/finance/accounts/:id`, permitindo renomear, configurar chaves PIX e desativar contas financeiras demonstrativas (ex.: Banco do Brasil, Bradesco) sem exclusão física e sem quebra de integridade referencial.
+- **Nova Suíte de Testes de Homologação**:
+  - Criação do arquivo `apps/local-server/src/stage6_5_audit.test.ts` com 8 testes cobrindo aritmética em centavos exatos, invariantes de caixa (sangria/suprimento), isolamento contábil de `ROOM_CHARGE`, prestação de contas de delivery e bloqueios RBAC.
+  - Total de testes automatizados elevado para **103 aprovados com 100% de sucesso**.
+- **Nova Documentação Técnica**:
+  - `docs/AUDIT_STAGE_6_5.md`: Relatório completo da auditoria geral.
+  - `docs/FINANCIAL_INVARIANTS.md`: Manual contábil e matemática financeira do sistema.
+  - `docs/OPERATIONAL_ACCEPTANCE.md`: Matriz de homologação e critérios de aceitação.
+  - `docs/PREPRODUCTION_CHECKLIST.md`: Checklist de prontidão para produção e requisitos Windows.
+  - `docs/BACKUP_AND_RECOVERY.md`: Runbook oficial de backup atômico (`VACUUM INTO`) e recuperação de desastres.
+
 ## [Etapa 6] - 2026-11-04
 ### Adicionado
 - **Delivery Próprio & Central de Despacho**:

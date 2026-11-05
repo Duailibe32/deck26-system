@@ -81,7 +81,7 @@
 ### Gestão Financeira Integrada, DRE e Relatórios (Etapa 6)
 - `GET /api/finance/cost-centers` — Centros de custo (`REST`, `BAR`, `DELIV`, `HOTEL`, `ADMIN`).
 - `GET /api/finance/categories` — Categorias do plano de contas gerencial (`REVENUE`, `DEDUCTION`, `COST_DIRECT`, `EXPENSE_OP`, `FINANCIAL_RESULT`).
-- `GET /api/finance/accounts` | `POST /api/finance/accounts` — Contas financeiras da tesouraria.
+- `GET /api/finance/accounts` | `POST /api/finance/accounts` | `PUT /api/finance/accounts/:id` — Contas financeiras da tesouraria (criação, edição e desativação sem perda de histórico).
 - `GET /api/finance/suppliers` | `POST /api/finance/suppliers` — Fornecedores de insumos e mercadorias.
 - `GET /api/finance/receivables` | `POST /api/finance/receivables` — Contas a receber manuais e hoteleiras.
 - `POST /api/finance/receivables/:id/pay` — Baixa de título a receber com crédito em conta da tesouraria.
@@ -91,11 +91,11 @@
 - `POST /api/finance/transfers` — Transferências internas entre contas (sangrias, suprimentos, depósitos).
 - `POST /api/finance/purchases` — Registro de notas fiscais de compra com entrada de estoque no Kardex e geração de conta a pagar.
 - `POST /api/finance/reconcile` — Conciliação manual de contas de tesouraria.
-- `GET /api/finance/dre` — Demonstrativo de Resultado do Exercício (DRE) gerencial por competência com invariantes contábeis.
-- `GET /api/finance/cash-flow/realized` — Fluxo de caixa realizado (regime de caixa por meio de pagamento).
-- `GET /api/finance/cash-flow/projected` — Projeção diária de fluxo de caixa futuro por vencimento.
-- `GET /api/finance/dashboard` — Métricas executivas consolidadas.
-- `GET /api/finance/export/csv` — Exportação segura de relatórios em CSV sanitizados contra Formula Injection.
+- `GET /api/finance/dre` — Demonstrativo de Resultado do Exercício (DRE) gerencial por competência com proteção RBAC (`finance:view_dre`).
+- `GET /api/finance/cash-flow/realized` — Fluxo de caixa realizado (regime de caixa por meio de pagamento com proteção `finance:view_dre`).
+- `GET /api/finance/cash-flow/projected` — Projeção diária de fluxo de caixa futuro por vencimento com proteção `finance:view_dre`.
+- `GET /api/finance/dashboard` — Métricas executivas consolidadas com proteção `finance:view_dre`.
+- `GET /api/finance/export/csv` — Exportação segura de relatórios em CSV sanitizados contra Formula Injection (`finance:export_reports`).
 
 ---
 

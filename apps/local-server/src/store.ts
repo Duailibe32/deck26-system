@@ -8551,7 +8551,7 @@ export class LocalOperationalStore {
     const tabSql = `
       SELECT subtotal_cents, service_fee_cents, discount_cents, total_cents
       FROM tabs
-      WHERE date(opened_at) >= ? AND date(opened_at) <= ? AND status = 'CLOSED'
+      WHERE date(COALESCE(closed_at, opened_at)) >= ? AND date(COALESCE(closed_at, opened_at)) <= ? AND status = 'CLOSED'
     `;
     const tabs = this.db.prepare(tabSql).all(startDay, endDay) as Array<{
       subtotal_cents: number;
@@ -8584,13 +8584,26 @@ export class LocalOperationalStore {
     const hotelFolios = this.db.prepare(`
       SELECT entry_type, amount_cents
       FROM hotel_folio_entries
-      WHERE date(created_at) >= ? AND date(created_at) <= ? AND source_reference_type != 'TAB' AND entry_type != 'PAYMENT_CREDIT'
+      WHERE date(created_at) >= ? AND date(created_at) <= ?
+        AND (source_reference_type IS NULL OR source_reference_type != 'TAB')
+        AND entry_type IN ('ROOM_RATE', 'MINIBAR', 'SERVICE', 'ADJUSTMENT')
+        AND amount_cents > 0
     `).all(startDay, endDay) as Array<{
       entry_type: string;
       amount_cents: number;
     }>;
     for (const h of hotelFolios) {
       hotelGrossRevenue += h.amount_cents;
+    }
+
+    const folioDiscounts = this.db.prepare(`
+      SELECT amount_cents
+      FROM hotel_folio_entries
+      WHERE date(created_at) >= ? AND date(created_at) <= ?
+        AND entry_type = 'DISCOUNT'
+    `).all(startDay, endDay) as Array<{ amount_cents: number }>;
+    for (const fd of folioDiscounts) {
+      deductionsCents += Math.abs(fd.amount_cents);
     }
 
     const manualAr = this.db.prepare(`
@@ -8845,7 +8858,10 @@ export class LocalOperationalStore {
 
     const todayHotelRev = (this.db.prepare(`
       SELECT SUM(amount_cents) as total FROM hotel_folio_entries
-      WHERE date(created_at) = ? AND source_reference_type != 'TAB' AND entry_type != 'PAYMENT_CREDIT'
+      WHERE date(created_at) = ?
+        AND (source_reference_type IS NULL OR source_reference_type != 'TAB')
+        AND entry_type IN ('ROOM_RATE', 'MINIBAR', 'SERVICE', 'ADJUSTMENT')
+        AND amount_cents > 0
     `).get(today) as { total?: number })?.total ?? 0;
 
     const hotelStats = this.db.prepare(`

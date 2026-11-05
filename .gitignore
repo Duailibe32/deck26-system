@@ -33,6 +33,7 @@ data/
 
 # Logs, Temporários e Backups
 logs/
+backups/
 *.log
 npm-debug.log*
 *.tmp
