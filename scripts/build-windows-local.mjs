@@ -1,0 +1,11 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import {fileURLToPath} from 'node:url';
+import {spawnSync} from 'node:child_process';
+if(process.platform!=='win32')throw Error('Compile a versão nativa no Windows.');
+const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..'),target=process.env.CARGO_TARGET_DIR??path.join(os.homedir(),'AppData','Local','Deck26','build-target');
+const result=spawnSync(process.execPath,[path.join(root,'node_modules','@tauri-apps','cli','tauri.js'),'build','--no-bundle','--config','src-tauri/tauri.local.conf.json'],{cwd:path.join(root,'apps','desktop'),stdio:'inherit',env:{...process.env,Path:path.join(os.homedir(),'.cargo','bin')+';'+process.env.Path,CARGO_TARGET_DIR:target,VITE_LOCAL_API_URL:'',VITE_DECK26_OPERATIONAL:'true',VITE_DECK26_TEST_MODE:'false'}});
+if(result.error)throw result.error;if(result.status!==0)process.exit(result.status??1);
+fs.writeFileSync(path.join(root,'apps','desktop','dist','deck26-operation.json'),JSON.stringify({mode:'OPERATIONAL',builtAt:new Date().toISOString()}));
+console.log('Executável operacional: '+path.join(target,'release','deck26-desktop.exe'));

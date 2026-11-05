@@ -1,3 +1,7 @@
+import {FiscalPreparationModule,FiscalCheckoutPreview} from './FiscalPreparationModule.js';
+import {FirstRunGate} from './FirstRunGate.js';
+import {MobileWaiter} from './MobileWaiter.js';
+import {StaffModule,AdministrationModule,PrintingModule} from './OperationModules.js';
 import { LoginScreen } from './LoginScreen.js';
 import { FinancialDashboard } from './FinancialDashboard.js';
 import { tableSignal } from './tableSignals.js';
@@ -174,13 +178,16 @@ const GROUP_LABELS: Record<string, string> = {
 
 export const DesktopApp: React.FC = () => {
   const [sessionKey,setSessionKey]=useState(0);
-  return <DesktopSession key={sessionKey} onSignOut={()=>setSessionKey(value=>value+1)}/>;
+  const params=new URLSearchParams(window.location.search);
+  if(params.get('terminal')==='garcom'||params.has('qr'))return <MobileWaiter qrToken={params.get('qr')??undefined}/>;
+  const api=import.meta.env.VITE_LOCAL_API_URL||(import.meta.env.VITE_DECK26_OPERATIONAL==='true'?(window.location.hostname==='tauri.localhost'?'http://127.0.0.1:4800':window.location.origin):'http://'+(window.location.hostname||'127.0.0.1')+':4000');
+  return <FirstRunGate api={api}><DesktopSession key={sessionKey} onSignOut={()=>setSessionKey(value=>value+1)}/></FirstRunGate>;
 };
 
 const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
   const localApiBase = useMemo(() => {
     const host = window.location.protocol === 'tauri:' || window.location.hostname === 'tauri.localhost' ? '127.0.0.1' : window.location.hostname || '127.0.0.1';
-    return import.meta.env.VITE_LOCAL_API_URL || `http://${host}:4000`;
+    return import.meta.env.VITE_LOCAL_API_URL || (import.meta.env.VITE_DECK26_OPERATIONAL==='true'?(window.location.hostname==='tauri.localhost'?'http://127.0.0.1:4800':window.location.origin):`http://${host}:4000`);
   }, []);
 
   const [activeModule, setActiveModule] = useState<SystemModuleId>(() => {
@@ -236,6 +243,7 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
   const [selectedCategoryId, setSelectedCategoryId] = useState<string>('ALL');
   const [posSearchQuery, setPosSearchQuery] = useState<string>('');
   const [selectedChannel, setSelectedChannel] = useState<SalesChannel>('DINE_IN');
+  const [fiscalPreviewTab,setFiscalPreviewTab]=useState<string|null>(null);
   const [selectedTableNumber, setSelectedTableNumber] = useState<number>(5);
   const [waiterName, setWaiterName] = useState<string>('Garçom 01 (Wi-Fi)');
   const [cart, setCart] = useState<CartEntry[]>([]);
@@ -1718,6 +1726,8 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
 
   return (
     <div className="d26-shell">
+      {fiscalPreviewTab&&<FiscalCheckoutPreview api={localApiBase} headers={getAuthHeaders} tabId={fiscalPreviewTab} onClose={()=>setFiscalPreviewTab(null)}/>}
+      {window.location.port==='4802'&&<div className="d26-presentation-banner">ENSAIO PARA APRESENTAÇÃO · DADOS SEPARADOS · SEM VALIDADE FISCAL</div>}
       {/* BARRA SUPERIOR DO APLICATIVO WINDOWS TAURI 2 */}
       <header className="d26-topbar">
         <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
@@ -1740,10 +1750,10 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
               snapshot.cloudSyncState.online ? 'd26-badge-success' : 'd26-badge-outline-purple'
             }`}
           >
-            ⇄ VPS Simulada:{' '}
+            ⇄ Nuvem:{' '}
             {snapshot.cloudSyncState.online
-              ? 'Sincronizado'
-              : `Offline-First (${pendingOutboxCount} na Outbox)`}
+              ? 'Conectada'
+              : `Não configurada · ${pendingOutboxCount} evento(s) local(is)`}
           </span>
 
           <button
@@ -1791,6 +1801,7 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
 
       {/* ÁREA DE TRABALHO PRINCIPAL */}
       <main className="d26-workspace">
+        <label className="d26-compact-navigation">Módulo<select className="d26-input" value={activeModule} onChange={e=>setActiveModule(e.target.value as SystemModuleId)}>{SYSTEM_MODULES.filter(module=>hasPermission(authSession.role,module.requiredPermission)).map(module=><option key={module.id} value={module.id}>{module.shortTitle}</option>)}</select></label>
         {/* MODAL DE AUTENTICAÇÃO REAL POR PIN NO BACKEND */}
         {showPinModal && (
           <div
@@ -1974,16 +1985,14 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
 
             </div>
             <p style={{ color: 'var(--d26-gray-300)', fontSize: '0.86rem', marginTop: '4px' }}>
-              {currentModuleDef.description}
+              {import.meta.env.VITE_DECK26_OPERATIONAL==='true'&&activeModule==='impressoras'?'Caixa e cozinha com vias virtuais de 58 ou 80 mm.':currentModuleDef.description}
             </p>
           </div>
           <div style={{ display: 'flex', gap: '10px' }}>
             <button className="d26-btn d26-btn-secondary" onClick={refreshState}>
               ↻ Atualizar
             </button>
-            <button className="d26-btn d26-btn-primary" onClick={handleTriggerCloudSync}>
-              ⇄ Sincronizar
-            </button>
+            {import.meta.env.VITE_DECK26_OPERATIONAL!=='true'&&<button className="d26-btn d26-btn-primary" onClick={handleTriggerCloudSync}>⇄ Sincronizar</button>}
           </div>
         </div>
 
@@ -2037,7 +2046,7 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
             </div>
 
             <div className="d26-split-2">
-              <div className="d26-card"><h2 style={{fontSize:'1rem',marginBottom:12}}>Sua operação, em um só lugar</h2><p style={{color:'var(--d26-gray-300)',lineHeight:1.8,fontSize:13}}>Acompanhe as mesas, o preparo dos pedidos e as hospedagens. Recebimentos, transferências e estornos permanecem vinculados à sua origem.</p><div style={{display:'flex',gap:10,marginTop:20,flexWrap:'wrap'}}><span className={serverConnected?'d26-badge d26-badge-success':'d26-badge d26-badge-warning'}>{serverConnected?'Operação local conectada':'Conexão local indisponível'}</span><span className="d26-badge d26-badge-purple">{pendingOutboxCount} evento(s) aguardando sincronização</span></div><p style={{color:'var(--d26-gray-400)',fontSize:12,marginTop:18,lineHeight:1.8}}>A emissão fiscal permanece em demonstração. Confira caixa e recebimentos com os comprovantes da operação.</p></div>
+              <div className="d26-card"><h2 style={{fontSize:'1rem',marginBottom:12}}>Sua operação, em um só lugar</h2><p style={{color:'var(--d26-gray-300)',lineHeight:1.8,fontSize:13}}>Acompanhe as mesas, o preparo dos pedidos e as hospedagens. Recebimentos, transferências e estornos permanecem vinculados à sua origem.</p><div style={{display:'flex',gap:10,marginTop:20,flexWrap:'wrap'}}><span className={serverConnected?'d26-badge d26-badge-success':'d26-badge d26-badge-warning'}>{serverConnected?'Operação local conectada':'Conexão local indisponível'}</span><span className="d26-badge d26-badge-purple">{pendingOutboxCount} evento(s) aguardando sincronização</span></div><p style={{color:'var(--d26-gray-400)',fontSize:12,marginTop:18,lineHeight:1.8}}>Emissão fiscal não habilitada. Confira caixa e recebimentos com os comprovantes da operação.</p></div>
               <div className="d26-card">
                 <h2 style={{ fontSize: '1rem', marginBottom: '12px' }}>Acesso Rápido aos Módulos</h2>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
@@ -3402,6 +3411,7 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
                               </strong>
                             </div>
 
+                            <button className="d26-btn d26-btn-secondary" onClick={()=>setFiscalPreviewTab(t.id)}>Conferência fiscal · todos os itens</button>
                             {/* AÇÕES OPERACIONAIS DA COMANDA (DIVISÃO, CONTA, TAXA 10%, DESCONTO) */}
                             <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                               <button
@@ -4101,7 +4111,7 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
                 </thead>
                 <tbody>
                   {(snapshot.qrTables ?? []).slice(0, 10).map((qt) => {
-                    const qrUrl = `http://localhost:5174/?qr=${qt.qrToken}`;
+                    const qrUrl = `${import.meta.env.VITE_DECK26_OPERATIONAL==='true'?('http://'+(snapshot.lanAddresses.find(ip=>/^(192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/.test(ip))??'127.0.0.1')+':4800'):'http://localhost:5174'}/?qr=${qt.qrToken}`;
                     return (
                       <tr key={qt.tableNumber}>
                         <td>
@@ -5986,7 +5996,8 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
         {/* =====================================================================
             MÓDULO: IMPRESSORAS TÉRMICAS ESC/POS (COM REIMPRESSÃO AUTORIZADA)
            ===================================================================== */}
-        {activeModule === 'impressoras' && (
+        {activeModule === 'impressoras' && <PrintingModule api={localApiBase} headers={getAuthHeaders} jobs={snapshot.printJobs}/> }
+        {false && activeModule === 'impressoras' && (
           <div className="d26-card">
             <h2 style={{ fontSize: '1.05rem', marginBottom: '12px' }}>
               Spooler de Impressão Incremental ESC/POS (Separado por Destino: Cozinha Quente, Cozinha Fria, Chapa, Bar e Caixa)
@@ -6152,39 +6163,7 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
         {/* =====================================================================
             MÓDULO: CONFIGURAÇÕES FISCAIS (SEM EMISSÃO FICTÍCIA)
            ===================================================================== */}
-        {activeModule === 'configuracoes-fiscais' && (
-          <div className="d26-card">
-            <h2 style={{ fontSize: '1.05rem', marginBottom: '8px' }}>
-              Configurações Fiscais SEFAZ (NFC-e Modelo 65 / NF-e Modelo 55)
-            </h2>
-            <p style={{ fontSize: '0.85rem', color: 'var(--d26-gray-300)', marginBottom: '16px' }}>
-              Regra estrita de engenharia: este sistema{' '}
-              <strong>não emite documentos fiscais fictícios ou simulados</strong>. Cada produto no
-              catálogo possui campos de preparação fiscal (<code>NCM</code>, <code>CEST</code>,{' '}
-              <code>CFOP</code>, <code>Origem</code> e perfil{' '}
-              <code>REVISAO_CONTABIL_PENDENTE</code>) para revisão pelo contador antes da ativação
-              do Certificado A1.
-            </p>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
-              <div>
-                <label style={{ fontSize: '0.76rem', color: 'var(--d26-gray-400)' }}>
-                  Razão Social
-                </label>
-                <input className="d26-input" defaultValue="HOTEL AUTO POSTO MILLA LTDA" readOnly />
-              </div>
-              <div>
-                <label style={{ fontSize: '0.76rem', color: 'var(--d26-gray-400)' }}>
-                  Modo Fiscal Atual
-                </label>
-                <input
-                  className="d26-input"
-                  value="DISABLED_NOT_CONFIGURED (Aguardando Certificado A1 Real)"
-                  readOnly
-                />
-              </div>
-            </div>
-          </div>
-        )}
+        {activeModule === 'configuracoes-fiscais' && <FiscalPreparationModule api={localApiBase} headers={getAuthHeaders}/>}
 
         {/* =====================================================================
             MÓDULO: GESTÃO FINANCEIRA INTEGRADA & TESOURARIA (ETAPA 6)
@@ -6218,18 +6197,9 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
         )}
 
         {/* DEMAIS MÓDULOS ESTRUTURADOS */}
-        {(['funcionarios', 'administracao'] as SystemModuleId[]).includes(activeModule) && (
-          <div className="d26-card">
-            <h2 style={{ fontSize: '1.05rem', marginBottom: '8px' }}>
-              Estrutura Base Pronta — {currentModuleDef.title}
-            </h2>
-            <p style={{ fontSize: '0.86rem', color: 'var(--d26-gray-300)' }}>
-              A navegação, permissões RBAC (<code>{currentModuleDef.requiredPermission}</code>),
-              contratos compartilhados em <code>@deck26/contracts</code> e tabelas de banco de dados
-              deste módulo já estão configurados e prontos.
-            </p>
-          </div>
-        )}
+        {activeModule==='funcionarios'&&<StaffModule api={localApiBase} headers={getAuthHeaders}/>}
+        {activeModule==='administracao'&&<AdministrationModule api={localApiBase} headers={getAuthHeaders}/>}
+
       </main>
 
       {/* RODAPÉ TÉCNICO DO PROGRAMA WINDOWS */}

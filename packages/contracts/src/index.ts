@@ -337,10 +337,10 @@ export const SYSTEM_MODULES: SystemModuleDefinition[] = [
   },
   {
     id: 'configuracoes-fiscais',
-    title: 'Configurações Fiscais (NFC-e / NF-e)',
+    title: 'Preparação Fiscal (NFC-e / NFS-e)',
     shortTitle: 'Fiscal',
     group: 'INFRA_FISCAL',
-    description: 'Certificado A1, CSC, NCM/CEST/CFOP e fila real de emissão/contingência SEFAZ sem simulação fictícia.',
+    description: 'Cadastros para revisão e ensaios identificados. Emissão real, certificado A1 e conexão SEFAZ ainda não habilitados.',
     requiredPermission: 'fiscal:configure',
     offlineCapable: true
   },
@@ -2095,7 +2095,7 @@ export function calculateTabTotals(params: {
   totalCents: number;
   remainingCents: number;
 } {
-  const activeOrders = params.orders.filter((o) => o.status !== 'CANCELLED');
+  const activeOrders = params.orders.filter((o) => o.status !== 'CANCELLED' && o.status !== 'PENDING_APPROVAL');
   const subtotalCents = activeOrders.reduce((acc, order) => acc + order.totalOrderCents, 0);
   const bps = params.serviceFeeBasisPoints ?? 1000; // 10%
   const serviceFeeCents = params.serviceFeeEnabled

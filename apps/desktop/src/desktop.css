@@ -175,3 +175,5 @@
 @media(max-width:1100px){.d26-shell{grid-template-columns:210px minmax(0,1fr);grid-template-rows:auto 1fr 34px}.d26-topbar{min-height:64px;padding:12px}.d26-topbar>div:last-child{justify-content:flex-end}.d26-workspace{padding:16px}.d26-split-2{grid-template-columns:1fr}}
 
 .d26-session-exit{position:fixed;bottom:43px;left:17px;z-index:45;background:#292929;color:#ffb3cb;border:1px solid #555;border-radius:9px;padding:10px 14px;font:inherit;font-size:11px;cursor:pointer}.d26-session-exit:focus-visible{outline:2px solid #ffb3cb;outline-offset:2px}.d26-sidebar{padding-bottom:55px}
+
+.d26-compact-navigation{display:none}@media(max-width:960px){.d26-shell{grid-template-columns:minmax(0,1fr)}.d26-sidebar{display:none}.d26-workspace{grid-column:1/-1}.d26-compact-navigation{display:grid;gap:8px;font-size:12px;margin-bottom:18px}.d26-topbar{flex-wrap:wrap}.d26-presentation-banner{font-size:9px}.d26-fiscal-dialog-header{flex-wrap:wrap}}

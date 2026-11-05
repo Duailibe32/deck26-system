@@ -1,0 +1,6 @@
+{
+  "productName": "Deck 26 — Operação Local",
+  "identifier": "br.com.deck26.desktop.local",
+  "app": {"windows":[{"title":"DECK 26 — Operação Local","width":1366,"height":850,"minWidth":1024,"minHeight":680,"resizable":true,"fullscreen":false}]},
+  "bundle":{"active":false}
+}

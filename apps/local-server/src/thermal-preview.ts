@@ -1,0 +1,15 @@
+export const escapeHtml=(value:string)=>value.replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]!));
+export function renderThermalPreview(text:string,width:58|80,device:string){
+  const columns=width===58?32:48;
+  const clean=text.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g,'').split('\n').flatMap(line=>{
+    if(line.length<=columns)return [line];
+    const chunks:string[]=[];let rest=line.trimEnd();while(rest.length>columns){let cut=rest.lastIndexOf(' ',columns);if(cut<columns/2)cut=columns;chunks.push(rest.slice(0,cut));rest=rest.slice(cut).trimStart();}chunks.push(rest);return chunks;
+  }).join('\n');
+  return '<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Via '+escapeHtml(device)+'</title><style>@page{size:'+width+'mm auto;margin:3mm}*{box-sizing:border-box}body{margin:0;background:#eee;color:#111;font:'+(width===58?10:9.5)+'px monospace}.paper{width:'+width+'mm;max-width:100%;padding:3mm;margin:12px auto;background:#fff;border:1px dashed #aaa}h1{font-size:15px;text-align:center;margin:0 0 10px}.notice{font-size:9px;text-align:center;border-block:1px dashed;padding:7px 0;line-height:1.5}pre{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;line-height:1.45;margin:12px 0}footer{font-size:10px;text-align:center}@media print{body{background:white}.paper{margin:0;padding:0;border:0;width:100%}}</style></head><body><article class="paper"><h1>'+escapeHtml(device)+'</h1><div class="notice">SIMULAÇÃO DE IMPRESSÃO<br>SEM VALIDADE FISCAL · NENHUMA IMPRESSORA ACIONADA</div><pre>'+escapeHtml(clean)+'</pre><footer>DECK 26 · '+width+' mm</footer></article></body></html>';
+}
+export const thermalModels={
+  kitchen:'DECK 26 · COZINHA\nPEDIDO DE EXEMPLO — NÃO PRODUZIR\n--------------------------------\nMESA 05 · GARÇOM EXEMPLO\n2 x Produto do cardápio\n  OBS: sem cebola / bem passado\n1 x Outro produto\n--------------------------------\nAPENAS ITENS DESTE PEDIDO\nVIA DE PRODUÇÃO · NÃO FISCAL',
+  bill:'DECK 26 · CAIXA\nMODELO DE PRÉ-CONTA — EXEMPLO\n--------------------------------\nMESA 05\n2 x Produto A      R$ 40,00\n1 x Produto B      R$ 10,00\nSUBTOTAL           R$ 50,00\nSERVIÇO 10%        R$  5,00\nTOTAL              R$ 55,00\nPAGO               R$ 20,00\nRESTANTE           R$ 35,00\n--------------------------------\nCONFERÊNCIA · NÃO É RECIBO\nSEM VALIDADE FISCAL',
+  payment:'DECK 26 · CAIXA\nCOMPROVANTE DE EXEMPLO\n--------------------------------\nMESA 05 · PAGAMENTO PARCIAL\nVALOR RECEBIDO     R$ 20,00\nFORMA: DINHEIRO\nENTREGUE           R$ 50,00\nTROCO              R$ 30,00\nSALDO RESTANTE     R$ 35,00\n--------------------------------\nREGISTRO NÃO FISCAL\nEXEMPLO · NENHUMA COBRANÇA',
+  closing:'DECK 26 · CAIXA\nFECHAMENTO DE EXEMPLO\n--------------------------------\nABERTURA          R$ 100,00\nENTRADAS ESPÉCIE  R$ 250,00\nSANGRIAS          R$  50,00\nESPERADO          R$ 300,00\nCONTADO           R$ 300,00\nDIFERENÇA         R$   0,00\n--------------------------------\nVALORES ILUSTRATIVOS\nRELATÓRIO GERENCIAL NÃO FISCAL'
+};

@@ -6,6 +6,26 @@ Restaurante, bar, delivery e Hotel Auto Posto Milla em uma operação local inte
 
 ![Prévia do painel](docs/images/windows-dashboard.png)
 
+## Instalação operacional local
+
+A versão Windows possui instalação própria, login pessoal e dados persistentes separados da demonstração. O primeiro acesso permite aproveitar os 93 produtos e 24 apartamentos, sem vendas, hóspedes, estoque ou saldos fictícios. O terminal do garçom funciona pelo navegador na mesma rede, conectado à API do PC na porta 4800.
+
+- [Guia de instalação, uso, celular e backups](docs/OPERACAO_LOCAL.md)
+- [Checklist interativo de 66 verificações](docs/CHECKLIST_OPERACIONAL.html)
+- [Checklist em texto](docs/CHECKLIST_OPERACIONAL.md)
+
+Impressoras virtuais de caixa e cozinha geram vias de 58/80 mm. Impressão física e emissão fiscal ainda precisam de integração/homologação; a simulação fiscal está bloqueada nesta instalação. Nuvem não configurada. Os registros de PIX/cartão não efetuam cobranças bancárias.
+
+Validação desta entrega: 163 testes automatizados, verificação de tipos e compilação nativa Windows. O fluxo de abrir mesa, enviar pedido e solicitar conta foi conferido pelo navegador com banco isolado. A abertura no celular físico depende da conferência na rede do estabelecimento.
+
+## Preparação fiscal sem certificado A1
+
+O módulo Fiscal agora permite preparar emitentes separados, encaminhar códigos de produtos para revisão e demonstrar aprovação, rejeição, timeout com consulta e offline em um simulador local. No caixa, a conferência integral não recebe pagamentos nem encerra a comanda. Os ensaios ficam em tabela própria, não consomem numeração e não geram chave, protocolo ou QR fiscal.
+
+**Motor de emissão real ainda não implementado:** A1/cofre criptográfico, XMLDSig, XML/XSD, SOAP/mTLS, QR fiscal, DANFE oficial, eventos e contingência oficial permanecem pendentes. Escolher Produção futura não habilita transmissão.
+
+Use o [checklist e roteiro de vídeo](docs/CHECKLIST_VIDEO_FISCAL.md) ou a [versão interativa](docs/CHECKLIST_VIDEO_FISCAL.html). A apresentação usa banco separado, somente no PC, porta 4802. Inicie com npm run start:fiscal:presentation; PIN de exemplo 536821, exclusivo desta instalação. A preparação não cria uma regra de dispensa de emissão por tipo de alimento, CPF ou forma de pagamento.
+
 ## Estado do projeto
 
 Etapa 7A revisada antes da 7B. A interface Windows usa a API operacional local. A prévia web é uma demonstração separada, com dados fictícios guardados somente no navegador. Nenhum serviço foi publicado online por esta revisão.

@@ -19,7 +19,10 @@
     "dev:web": "npm --workspace=@deck26/web run dev",
     "dev:cloud-api": "npm --workspace=@deck26/cloud-api run dev",
     "build:windows:test": "node scripts/build-windows-test.mjs",
-    "dev:windows:test:server": "node --import tsx scripts/start-windows-test.mjs"
+    "dev:windows:test:server": "node --import tsx scripts/start-windows-test.mjs",
+    "build:windows:local": "node scripts/build-windows-local.mjs",
+    "start:local": "node --import tsx scripts/start-local-operation.mjs",
+    "start:fiscal:presentation": "node --import tsx scripts/start-fiscal-presentation.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

@@ -1,4 +1,4 @@
-name: Windows nativo de teste
+name: Windows nativo
 
 on:
   workflow_dispatch:
@@ -8,6 +8,8 @@ on:
       - 'apps/desktop/**'
       - 'packages/**'
       - 'scripts/*windows*'
+      - 'scripts/*local*'
+      - 'scripts/*fiscal*'
       - 'package*.json'
       - '.github/workflows/windows-test.yml'
 
@@ -36,5 +38,19 @@ jobs:
         with:
           name: deck26-windows-teste
           path: native-target/release/deck26-desktop.exe
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Compilar operação local
+        run: npm run build:windows:local
+      - name: Disponibilizar operação local
+        uses: actions/upload-artifact@v4
+        with:
+          name: deck26-windows-operacao-local
+          path: |
+            native-target/release/deck26-desktop.exe
+            apps/desktop/dist
+            docs/CHECKLIST_OPERACIONAL.html
+            docs/CHECKLIST_VIDEO_FISCAL.html
           if-no-files-found: error
           retention-days: 14

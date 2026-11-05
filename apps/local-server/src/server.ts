@@ -1,3 +1,5 @@
+import {registerFiscalPreparationRoutes} from './fiscal-preparation-routes.js';
+import {registerOperationRoutes} from './operation-routes.js';
 /**
  * DECK 26 — Servidor Operacional Local (Fastify + SQLite WAL + Autenticação Real & Autorização RBAC)
  *
@@ -121,7 +123,7 @@ export function getLanIpv4Addresses(): string[] {
   const addresses: string[] = [];
   for (const name of Object.keys(interfaces)) {
     for (const net of interfaces[name] ?? []) {
-      if (net.family === 'IPv4' && !net.internal) {
+      if (net.family === 'IPv4' && !net.internal && (process.env.DECK26_OPERATIONAL!=='true'||/^(192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/.test(net.address))) {
         addresses.push(net.address);
       }
     }
@@ -193,7 +195,8 @@ export async function buildLocalServer(options?: {
     const verified = verifySessionToken(authHeader);
     if (verified) {
       const user = store.db.prepare('SELECT name, role FROM users WHERE id = ? AND active = 1').get(verified.userId) as {name: string; role: UserRole} | undefined;
-      return user && user.role === verified.role ? { ...verified, name: user.name } : null;
+      const revocation=store.db.prepare('SELECT revoked_at FROM user_session_revocations WHERE user_id=?').get(verified.userId) as {revoked_at:number}|undefined;
+      return user && user.role === verified.role && (!revocation||verified.issuedAt>revocation.revoked_at) ? { ...verified, name: user.name } : null;
     }
     if (!requireStrictAuth && !authHeader && ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.ip)) {
       // Fallback seguro apenas para testes de integração internos no próprio loopback quando token não enviado
@@ -231,11 +234,14 @@ export async function buildLocalServer(options?: {
     pin: z.string().min(4).max(12)
   });
 
+  const publicRequests=new Map<string,{count:number;until:number}>();
+  app.addHook('onRequest',async(req,reply)=>{if(req.method!=='POST'||!req.url.startsWith('/api/public/'))return;const now=Date.now();let entry=publicRequests.get(req.ip);if(!entry||now>entry.until){for(const [key,value] of publicRequests)if(now>value.until)publicRequests.delete(key);if(publicRequests.size>=5000)return reply.code(429).send({error:'Tente novamente em instantes.'});entry={count:0,until:now+60000};publicRequests.set(req.ip,entry);}if(++entry.count>60)return reply.code(429).send({error:'Muitos pedidos. Aguarde um minuto.'});});
   // Every internal endpoint requires a session, including GET snapshots. Route
   // handlers still apply their narrower mutation permissions.
   app.addHook('onRequest', async (req, reply) => {
     const url = req.url.split('?')[0] ?? '';
-    if (req.method === 'OPTIONS' || url === '/api/health' || url === '/api/auth/login' || url.startsWith('/api/public/')) return;
+    if (!url.startsWith('/api/')) return;
+    if (req.method === 'OPTIONS' || url === '/api/_local/stop' || url === '/api/setup/status' || url === '/api/setup/owner' || url === '/api/health' || url === '/api/auth/login' || url.startsWith('/api/public/')) return;
     const session = resolveSession(req);
     if (!session) return reply.code(401).send({error: 'Sessão ausente ou expirada. Entre com seu PIN.'});
     let permission: Permission | undefined;
@@ -299,10 +305,10 @@ export async function buildLocalServer(options?: {
       service: 'deck26-local-server',
       establishment: 'DECK 26 — Hotel Auto Posto Milla',
       status: 'OPERATIONAL_OFFLINE_READY',
-      bindMode: process.env.HOST ?? '127.0.0.1 (Loopback Seguro)',
+      bindMode: process.env.DECK26_OPERATIONAL==='true'?'Rede local autorizada':process.env.HOST ?? '127.0.0.1 (Loopback Seguro)',
       lanAddresses: lanIps,
-      waiterUrlHint: `http://${lanIps[0]}:5173/?terminal=garcom`,
-      kitchenUrlHint: `http://${lanIps[0]}:5173/?terminal=cozinha`,
+      waiterUrlHint: `http://${lanIps[0]}:${process.env.DECK26_OPERATIONAL==='true'?'4800':'5173'}/?terminal=garcom`,
+      kitchenUrlHint: `http://${lanIps[0]}:${process.env.DECK26_OPERATIONAL==='true'?'4800':'5173'}/?terminal=cozinha`,
       pendingSyncEvents: pendingSync,
       cloudSyncState: lastSyncStatus,
       timestamp: new Date().toISOString()
@@ -1111,22 +1117,22 @@ export async function buildLocalServer(options?: {
     const catalog = store.getCatalog({ includeInactive: false, channel: 'QR_TABLE' });
     return {
       establishment: 'DECK 26 — Hotel Auto Posto Milla',
-      qrTable,
-      catalog
+      qrTable:{tableNumber:qrTable.tableNumber,label:qrTable.label,requiresOperatorApproval:qrTable.requiresOperatorApproval},
+      catalog:{...catalog,products:catalog.products.map(product=>({...product,costPriceCents:undefined,internalNotes:undefined}))}
     };
   });
 
   const CreatePublicQrOrderSchema = z.object({
     idempotencyKey: z.string().min(8),
     qrToken: z.string().min(10),
-    customerName: z.string().min(2),
-    customerNotes: z.string().optional(),
+    customerName: z.string().min(2).max(80),
+    customerNotes: z.string().max(280).optional(),
     items: z
       .array(
         z.object({
           productId: z.string().min(1),
-          quantity: z.number().positive(),
-          notes: z.string().optional(),
+          quantity: z.number().int().positive().max(100),
+          notes: z.string().max(280).optional(),
           modifiers: z
             .array(
               z.object({
@@ -1140,7 +1146,7 @@ export async function buildLocalServer(options?: {
             .optional()
         })
       )
-      .min(1)
+      .min(1).max(100)
   });
 
   app.post('/api/public/qr-orders', async (req, reply) => {
@@ -1210,8 +1216,12 @@ export async function buildLocalServer(options?: {
   });
 
   app.patch<{ Params: { id: string } }>('/api/orders/:id/status', async (req, reply) => {
-    const session = authorizePermission(req, reply, 'orders:advance_kitchen');
+    const status=(req.body as {status?:string})?.status;
+    const serviceTransition=status==='RECEIVED'||status==='DELIVERED';
+    const session = authorizePermission(req, reply, serviceTransition?'orders:create':'orders:advance_kitchen');
     if (!session) return;
+    const existing=store.getOrderById(req.params.id);
+    if(serviceTransition&&existing&&!hasPermission(session.role,'orders:advance_kitchen')&&!(status==='RECEIVED'&&['PENDING_APPROVAL','RECEIVED'].includes(existing.status))&&!(status==='DELIVERED'&&['READY','DELIVERED'].includes(existing.status)))return reply.code(403).send({error:'O garçom pode aprovar pedidos pendentes ou confirmar pedidos prontos.'});
 
     const parsed = AdvanceOrderBodySchema.safeParse(req.body);
     if (!parsed.success) {
@@ -2873,6 +2883,7 @@ export async function buildLocalServer(options?: {
   });
 
   app.post('/api/fiscal/simulate', async (req, reply) => {
+    if(process.env.DECK26_OPERATIONAL==='true')return reply.code(409).send({error:'Emissão fiscal não configurada. A operação local não gera documentos fiscais simulados.'});
     const session = authorizePermission(req, reply, 'pos:operate');
     if (!session) return;
     const parsed = SimulateFiscalEmissionSchema.safeParse(req.body);
@@ -2924,6 +2935,8 @@ export async function buildLocalServer(options?: {
     }
   });
 
+  registerOperationRoutes(app,store,authorizePermission);
+  registerFiscalPreparationRoutes(app,store,authorizePermission);
   return {
     app,
     store,

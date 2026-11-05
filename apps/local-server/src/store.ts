@@ -176,6 +176,8 @@ export class LocalOperationalStore {
     this.db = new DatabaseSync(dbFilePath);
     try {
       this.runMigrations();
+      this.db.exec(fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../../../packages/contracts/migrations/local/0008_local_operation.sql'),'utf8'));
+      this.db.exec(fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../../../packages/contracts/migrations/local/0009_fiscal_preparation.sql'),'utf8'));
       this.seedBaseCatalogAndInfrastructure();
     } catch (err) {
       try {
@@ -994,6 +996,48 @@ export class LocalOperationalStore {
       if (!owner) this.db.prepare("INSERT INTO users (id,name,role,pin_hash,active,created_at) VALUES ('usr-owner-01','Proprietário','OWNER',?,1,?)").run(this.hashPin(pin),now);
       else if (this.matchesPin('2626',owner.pin_hash)) this.db.prepare("UPDATE users SET pin_hash = ? WHERE id='usr-owner-01'").run(this.hashPin(pin));
     }
+  }
+
+  public initializeLocalOperation(input:{name:string;pin:string;importCatalog:boolean;actorIp:string}):void {
+    this.atomic(()=>{
+      if((this.db.prepare('SELECT COUNT(*) AS count FROM users').get() as {count:number}).count)throw new Error('A instalação já possui um responsável.');
+      if(!/^\d{6,12}$/.test(input.pin))throw new Error('Use um PIN próprio com 6 a 12 dígitos.');
+      this.db.prepare("INSERT INTO users(id,name,role,pin_hash,active,created_at) VALUES ('usr-owner-01',?,'OWNER',?,1,?)").run(input.name,this.hashPin(input.pin),new Date().toISOString());
+      if(input.importCatalog){
+        for(const category of [...DECK26_INITIAL_CATEGORIES,...DECK26_STAGE7A_CATEGORIES])this.upsertCategory({...category});
+        for(const product of DECK26_STAGE7A_MENU_93)this.createCatalogProduct({...product,initialStock:0});
+        for(const room of DECK26_INITIAL_ROOMS_24)this.createHotelRoom({...room,operatorUserId:'usr-owner-01'});
+      }
+      const now=new Date().toISOString();
+      for(let number=1;number<=20;number++){
+        const key=process.env.DECK26_QR_SEED_SECRET||process.env.DECK26_AUTH_SECRET||'';
+        const token='d26qr_m'+String(number).padStart(2,'0')+'_'+crypto.createHmac('sha256',key).update('MESA-'+number).digest('hex').slice(0,24);
+        this.db.prepare('INSERT OR IGNORE INTO dining_tables_qr(table_number,qr_token,label,requires_operator_approval,active,created_at) VALUES (?,?,?,1,1,?)').run(number,token,'Mesa '+number,now);
+      }
+      this.recordAuditLog({actorUserId:'usr-owner-01',action:'LOCAL_OPERATION_INITIALIZED',entityType:'SETUP',entityId:'local',metadata:{importCatalog:input.importCatalog,ip:input.actorIp}});
+    });
+  }
+  public manageOperator(input:{id?:string;name:string;role:UserRole;pin?:string;active:boolean;actorId:string;actorRole:UserRole}):{id:string} {
+    return this.atomic(()=>{
+      const id=input.id??'usr-'+crypto.randomUUID();
+      const existing=this.db.prepare('SELECT role,active FROM users WHERE id=?').get(id) as {role:UserRole;active:number}|undefined;
+      if(input.id&&!existing)throw new Error('Operador não encontrado.');
+      if((input.role==='OWNER'||existing?.role==='OWNER')&&input.actorRole!=='OWNER')throw new Error('Somente o proprietário pode administrar proprietários.');
+      if(existing?.role==='OWNER'&&(!input.active||input.role!=='OWNER')&&(this.db.prepare("SELECT COUNT(*) AS count FROM users WHERE role='OWNER' AND active=1 AND id!=?").get(id) as {count:number}).count===0)throw new Error('Mantenha pelo menos um proprietário ativo.');
+      if(!existing&&!input.pin)throw new Error('Informe o PIN do novo operador.');
+      if(input.pin){
+        if(!/^\d{6,12}$/.test(input.pin))throw new Error('PIN deve conter de 6 a 12 dígitos.');
+        const users=this.db.prepare('SELECT id,pin_hash FROM users WHERE id!=?').all(id) as Array<{id:string;pin_hash:string}>;
+        if(users.some(user=>this.matchesPin(input.pin!,user.pin_hash)))throw new Error('Escolha outro PIN: este já está em uso.');
+      }
+      if(existing){
+        this.db.prepare('UPDATE users SET name=?,role=?,active=? WHERE id=?').run(input.name,input.role,input.active?1:0,id);
+        if(input.pin)this.db.prepare('UPDATE users SET pin_hash=? WHERE id=?').run(this.hashPin(input.pin),id);
+        this.db.prepare('INSERT INTO user_session_revocations(user_id,revoked_at) VALUES (?,?) ON CONFLICT(user_id) DO UPDATE SET revoked_at=excluded.revoked_at').run(id,Date.now());
+      }else this.db.prepare('INSERT INTO users(id,name,role,pin_hash,active,created_at) VALUES (?,?,?,?,?,?)').run(id,input.name,input.role,this.hashPin(input.pin!),input.active?1:0,new Date().toISOString());
+      this.recordAuditLog({actorUserId:input.actorId,action:existing?'OPERATOR_UPDATED':'OPERATOR_CREATED',entityType:'USER',entityId:id,metadata:{name:input.name,role:input.role,active:input.active}});
+      return {id};
+    });
   }
 
   public listStaffProfiles(): Array<{ id: string; name: string; role: UserRole }> {
@@ -3431,6 +3475,7 @@ export class LocalOperationalStore {
         }
       }
 
+      if(existing.status==='PENDING_APPROVAL'&&updated.status==='RECEIVED'&&updated.tabId)this.recalculateTabInTx(updated.tabId,input.originNode);
       this.appendOutboxEvent({
         idempotencyKey: `order-status-${updated.id}-v${updated.version}`,
         originNode: input.originNode,
@@ -3671,7 +3716,7 @@ export class LocalOperationalStore {
       throw new Error(`Comanda '${input.tabId}' não encontrada.`);
     }
 
-    const orders = this.listOrdersByTab(tab.id).filter((o) => o.status !== 'CANCELLED');
+    const orders = this.listOrdersByTab(tab.id).filter((o) => o.status !== 'CANCELLED' && o.status !== 'PENDING_APPROVAL');
     const allItems = orders.flatMap((o) => o.items).filter((i) => i.status !== 'CANCELLED');
 
     const remainingCents = Math.max(0, tab.totalCents - tab.paidCents);
@@ -3781,6 +3826,7 @@ export class LocalOperationalStore {
         throw new Error(`Comanda ${tab.code} já está encerrada (${tab.status}). Não é permitido novo pagamento.`);
       }
 
+      this.assertNoPendingOrders(tab.id);
       const remainingBefore = Math.max(0, tab.totalCents - tab.paidCents);
       if (tab.totalCents > 0 && remainingBefore <= 0) {
         throw new Error(
@@ -4103,6 +4149,7 @@ export class LocalOperationalStore {
     releaseStatus?: 'LIVRE' | 'LIMPEZA';
     originNode?: OriginNode;
   }): { tab: Tab; releasedTables: DiningTableQr[] } {
+    this.assertNoPendingOrders(input.tabId);
     const releaseStatus = input.releaseStatus ?? 'LIVRE';
 
     this.beginTransaction();
@@ -4217,6 +4264,9 @@ export class LocalOperationalStore {
     }
   }
 
+  private assertNoPendingOrders(tabId:string):void {
+    if(this.db.prepare("SELECT id FROM orders WHERE tab_id=? AND status='PENDING_APPROVAL' LIMIT 1").get(tabId))throw new Error('Aprove ou cancele os pedidos pendentes antes de receber ou encerrar a comanda.');
+  }
   private recalculateTabInTx(tabId: string, originNode: OriginNode): Tab {
     const tabRow = this.db.prepare('SELECT * FROM tabs WHERE id = ?').get(tabId) as Record<string, unknown>;
     const currentTab = this.mapTabRow(tabRow);
@@ -4230,7 +4280,7 @@ export class LocalOperationalStore {
 
     // Recalcula desconto proporcional caso o tipo seja PERCENTAGE ou COURTESY
     const activeOrdersSubtotal = tabOrders
-      .filter((o) => o.status !== 'CANCELLED')
+      .filter((o) => o.status !== 'CANCELLED' && o.status !== 'PENDING_APPROVAL')
       .reduce((acc, o) => acc + o.totalOrderCents, 0);
     const previewServiceFee = currentTab.serviceFeeEnabled
       ? Math.round((activeOrdersSubtotal * currentTab.serviceFeeBasisPoints) / 10000)
@@ -6406,6 +6456,7 @@ export class LocalOperationalStore {
       throw new Error(`Comanda '${tab.code}' já se encontra encerrada.`);
     }
 
+    this.assertNoPendingOrders(tab.id);
     const stay = this.getActiveStayByRoomNumber(input.roomNumber);
     if (!stay) {
       throw new Error(`Apartamento ${input.roomNumber} não possui hospedagem ativa no momento.`);
