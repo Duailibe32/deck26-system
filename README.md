@@ -16,7 +16,7 @@ A versão Windows possui instalação própria, login pessoal e dados persistent
 
 Impressoras virtuais de caixa e cozinha geram vias de 58/80 mm. Impressão física e emissão fiscal ainda precisam de integração/homologação; a simulação fiscal está bloqueada nesta instalação. Nuvem não configurada. Os registros de PIX/cartão não efetuam cobranças bancárias.
 
-Validação desta entrega: 163 testes automatizados, verificação de tipos e compilação nativa Windows. O fluxo de abrir mesa, enviar pedido e solicitar conta foi conferido pelo navegador com banco isolado. A abertura no celular físico depende da conferência na rede do estabelecimento.
+Validação desta entrega: 169 testes automatizados, verificação de tipos e compilação nativa Windows. O fluxo de abrir mesa, enviar pedido e solicitar conta foi conferido pelo navegador com banco isolado. A abertura no celular físico depende da conferência na rede do estabelecimento.
 
 ## Preparação fiscal sem certificado A1
 

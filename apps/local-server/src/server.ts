@@ -1860,9 +1860,13 @@ export async function buildLocalServer(options?: {
   app.get<{ Params: { id: string } }>('/api/hotel/stays/:id/folio', async (req, reply) => {
     const session = authorizePermission(req, reply, 'hotel:post_charges');
     if (!session) return;
-    const entries = store.listFolioEntriesByStayId(req.params.id);
+    const stay = store.getHotelStayById(req.params.id);
+    if (!stay) return reply.code(404).send({error:'Estadia não encontrada.'});
+    const folioTab = store.getTabById(stay.tabId);
+    if (!folioTab) return reply.code(409).send({error:'A comanda desta estadia não está disponível. Confira o vínculo antes de continuar.'});
+    const entries = store.listFolioEntriesByStayId(stay.id);
     const totals = calculateStayFolioTotals(entries);
-    return reply.send({ entries, totals });
+    return reply.send({ stay:{id:stay.id,tabId:stay.tabId,roomNumber:stay.roomNumber,status:stay.status}, folioTab:{id:folioTab.id,type:folioTab.type,status:folioTab.status}, entries, totals });
   });
 
   const AddFolioEntrySchema = z.object({

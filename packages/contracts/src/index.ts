@@ -1328,6 +1328,17 @@ export function calculateStayFolioTotals(entries: HotelFolioEntry[]): {
   };
 }
 
+/** Complete response consumed by the hotel statement and checkout screen. */
+export const HotelFolioViewSchema = z.object({
+  stay: HotelStaySchema.pick({id:true,tabId:true,roomNumber:true,status:true}),
+  folioTab: TabSchema.pick({id:true,type:true,status:true}),
+  entries: z.array(HotelFolioEntrySchema),
+  totals: z.object({totalChargesCents:z.number().int().nonnegative(),totalPaymentsCents:z.number().int().nonnegative(),balanceCents:z.number().int()})
+});
+export type HotelFolioView = z.infer<typeof HotelFolioViewSchema>;
+export const HotelFolioPaymentDraftSchema=z.object({stayId:z.string().min(1),amountCents:z.number().int().positive(),paymentMethod:PaymentMethodSchema,idempotencyKey:z.string().min(12)});
+export type HotelFolioPaymentDraft=z.infer<typeof HotelFolioPaymentDraftSchema>;
+
 // ============================================================================
 // 7. SINCRONIZAÇÃO BIDIRECIONAL LOCAL ↔ VPS (OUTBOX & INBOX COM IDEMPOTÊNCIA)
 // ============================================================================

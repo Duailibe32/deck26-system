@@ -1,3 +1,4 @@
+import {fetchHotelFolio,sendHotelFolioPayment,HotelFolioRequestError} from './hotelFolio.js';
 import {FiscalPreparationModule,FiscalCheckoutPreview} from './FiscalPreparationModule.js';
 import {FirstRunGate} from './FirstRunGate.js';
 import {MobileWaiter} from './MobileWaiter.js';
@@ -5,7 +6,7 @@ import {StaffModule,AdministrationModule,PrintingModule} from './OperationModule
 import { LoginScreen } from './LoginScreen.js';
 import { FinancialDashboard } from './FinancialDashboard.js';
 import { tableSignal } from './tableSignals.js';
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   BillSplitMode,
   CashRegisterMovement,
@@ -18,6 +19,9 @@ import {
   DiscountType,
   HotelDashboardMetrics,
   HotelFolioEntry,
+  HotelFolioView,
+  HotelFolioPaymentDraftSchema,
+  HotelFolioPaymentDraft,
   HotelGuest,
   HotelMinibarItem,
   HotelReservation,
@@ -342,14 +346,17 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
   const [editRoomNotes, setEditRoomNotes] = useState<string>('');
   const [showEditRoomModal, setShowEditRoomModal] = useState<boolean>(false);
   const [selectedFolioStayId, setSelectedFolioStayId] = useState<string>('');
-  const [folioData, setFolioData] = useState<{
-    stay: HotelStay;
-    folioTab: Tab;
-    entries: HotelFolioEntry[];
-    totals: { debitsCents: number; creditsCents: number; balanceCents: number };
-  } | null>(null);
+  const selectedFolioStayRef=useRef(selectedFolioStayId);
+  selectedFolioStayRef.current=selectedFolioStayId;
+  const [folioData, setFolioData] = useState<HotelFolioView | null>(null);
+  const [folioError,setFolioError]=useState('');
+  const folioRequestVersion=useRef(0);
   const [folioLoading, setFolioLoading] = useState<boolean>(false);
   const [folioPayReais, setFolioPayReais] = useState<string>('');
+  const [folioPayBusy,setFolioPayBusy]=useState(false);
+  const [folioPendingPayment,setFolioPendingPayment]=useState<HotelFolioPaymentDraft|null>(null);
+  const folioPayInFlight=useRef(false);
+  const folioPaymentStorageKey=(stayId:string)=>'deck26:hotel-payment:'+authSession?.userId+':'+stayId;
   const [folioPayMethod, setFolioPayMethod] = useState<PaymentMethod>('PIX');
 
   // Hóspedes
@@ -1308,33 +1315,31 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
   // Operações do Módulo Hoteleiro (Etapa 5 — Hotel Auto Posto Milla PMS)
   // =========================================================================
   async function loadFolio(stayId: string) {
-    if (!stayId) {
-      setFolioData(null);
-      return;
-    }
-    setFolioLoading(true);
+    if(stayId!==selectedFolioStayRef.current)return;
+    const version=++folioRequestVersion.current;
+    setFolioData(null);
+    setFolioError('');
+    setFolioLoading(!!stayId);
+    if (!stayId) {setFolioPendingPayment(null);return;}
     try {
-      const res = await fetch(`${localApiBase}/api/hotel/stays/${stayId}/folio`, {
-        headers: getAuthHeaders()
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setFolioData(data);
-      }
-    } catch (err) {
-      console.error('Erro ao carregar folio', err);
+      const saved=sessionStorage.getItem(folioPaymentStorageKey(stayId));
+      const pending=saved?HotelFolioPaymentDraftSchema.parse(JSON.parse(saved)):null;
+      if(pending&&pending.stayId!==stayId)throw Error('Confirmação pendente de outro quarto. Confira antes de receber.');
+      setFolioPendingPayment(pending);
+      if(pending){setFolioPayReais((pending.amountCents/100).toFixed(2).replace('.',','));setFolioPayMethod(pending.paymentMethod);}
+      const data=await fetchHotelFolio(localApiBase,stayId,getAuthHeaders());
+      if(version===folioRequestVersion.current)setFolioData(data);
+    } catch (error) {
+      if(version===folioRequestVersion.current)setFolioError(error instanceof Error?error.message:'Não foi possível carregar o extrato.');
     } finally {
-      setFolioLoading(false);
+      if(version===folioRequestVersion.current)setFolioLoading(false);
     }
   }
 
   useEffect(() => {
-    if (selectedFolioStayId) {
-      loadFolio(selectedFolioStayId);
-    } else {
-      setFolioData(null);
-    }
-  }, [selectedFolioStayId]);
+    void loadFolio(selectedFolioStayId);
+    return ()=>{folioRequestVersion.current++;};
+  }, [selectedFolioStayId,authSession?.token]);
 
   async function handleCreateGuest() {
     if (!guestName.trim()) {
@@ -1505,32 +1510,24 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
   }
 
   async function handlePayFolio() {
-    if (!folioData) return;
-    const amountCents = parseReaisToCents(folioPayReais, folioData.totals.balanceCents);
-    if (amountCents <= 0) {
-      notify('Informe um valor válido para pagamento.');
-      return;
-    }
+    if (!folioData||folioPayInFlight.current) return;
+    const amountCents=folioPendingPayment?.amountCents??parseReaisToCents(folioPayReais,folioData.totals.balanceCents);
+    if(amountCents<=0){notify('Informe um valor válido para pagamento.');return;}
+    const stayId=folioData.stay.id,storageKey=folioPaymentStorageKey(stayId);
+    folioPayInFlight.current=true;setFolioPayBusy(true);
     try {
-      const res = await fetch(`${localApiBase}/api/payments`, {
-        method: 'POST',
-        headers: getAuthHeaders(),
-        body: JSON.stringify({
-          idempotencyKey: `folio-pay-${folioData.stay.id}-${Date.now()}`,
-          tabId: folioData.folioTab.id,
-          method: folioPayMethod,
-          amountCents
-        })
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? 'Erro ao processar pagamento do folio');
-      setFolioPayReais('');
-      await refreshState();
-      await loadFolio(folioData.stay.id);
-      notify(`Pagamento de ${formatBrlCents(amountCents)} (${folioPayMethod}) registrado com sucesso no Folio.`);
-    } catch (err) {
-      notify(err instanceof Error ? err.message : 'Erro ao registrar pagamento');
-    }
+      const cached=sessionStorage.getItem(storageKey);
+      const draft=cached?HotelFolioPaymentDraftSchema.parse(JSON.parse(cached)):{stayId,amountCents,paymentMethod:folioPayMethod,idempotencyKey:'hotel-payment-'+Array.from(crypto.getRandomValues(new Uint8Array(16)),value=>value.toString(16).padStart(2,'0')).join('')};
+      if(draft.stayId!==stayId)throw Error('A confirmação pendente não pertence a este quarto.');
+      sessionStorage.setItem(storageKey,JSON.stringify(draft));setFolioPendingPayment(draft);
+      await sendHotelFolioPayment(localApiBase,draft,getAuthHeaders());
+      sessionStorage.removeItem(storageKey);if(selectedFolioStayRef.current===stayId){setFolioPendingPayment(null);setFolioPayReais('');}
+      await refreshState();await loadFolio(stayId);
+      notify('Pagamento de '+formatBrlCents(draft.amountCents)+' ('+draft.paymentMethod+') registrado no extrato do quarto.');
+    } catch (error) {
+      if(error instanceof HotelFolioRequestError&&error.status>=400&&error.status<500&&![401,403].includes(error.status)){sessionStorage.removeItem(storageKey);setFolioPendingPayment(null);}
+      notify(error instanceof Error?error.message:'Não foi possível confirmar o recebimento.');
+    } finally {folioPayInFlight.current=false;setFolioPayBusy(false);}
   }
 
   async function handleCheckOutStay(stayId: string, allowOverride = false) {
@@ -5041,6 +5038,7 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
                         className="d26-select"
                         style={{ minWidth: '220px' }}
                         value={selectedFolioStayId}
+                        disabled={folioPayBusy}
                         onChange={(e) => setSelectedFolioStayId(e.target.value)}
                       >
                         <option value="">-- Escolha uma estadia ativa --</option>
@@ -5065,8 +5063,8 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
                   </div>
 
                   {!folioData ? (
-                    <p style={{ color: 'var(--d26-gray-400)', padding: '24px 0', textAlign: 'center' }}>
-                      Selecione um apartamento ocupado acima para visualizar o extrato detalhado de débitos e créditos.
+                    <p role={folioError?'alert':'status'} style={{ color: 'var(--d26-gray-400)', padding: '24px 0', textAlign: 'center' }}>
+                      {folioLoading?'Carregando extrato do quarto…':folioError||'Selecione um apartamento ocupado acima para visualizar o extrato detalhado de débitos e créditos.'}
                     </p>
                   ) : (
                     <div>
@@ -5075,14 +5073,14 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
                         <div className="d26-product-card">
                           <span style={{ fontSize: '0.72rem', color: 'var(--d26-gray-400)', textTransform: 'uppercase' }}>Total de Débitos</span>
                           <div className="d26-kpi-value" style={{ color: '#FFFFFF' }}>
-                            {formatBrlCents(folioData.totals.debitsCents)}
+                            {formatBrlCents(folioData.totals.totalChargesCents)}
                           </div>
                           <span style={{ fontSize: '0.72rem', color: 'var(--d26-gray-400)' }}>Diárias, restaurante e serviços</span>
                         </div>
                         <div className="d26-product-card">
                           <span style={{ fontSize: '0.72rem', color: 'var(--d26-gray-400)', textTransform: 'uppercase' }}>Total Pago / Créditos</span>
                           <div className="d26-kpi-value" style={{ color: '#4ADE80' }}>
-                            {formatBrlCents(folioData.totals.creditsCents)}
+                            {formatBrlCents(folioData.totals.totalPaymentsCents)}
                           </div>
                           <span style={{ fontSize: '0.72rem', color: 'var(--d26-gray-400)' }}>Sinal, adiantamentos e pagamentos</span>
                         </div>
@@ -5092,7 +5090,7 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
                             {formatBrlCents(folioData.totals.balanceCents)}
                           </div>
                           <span style={{ fontSize: '0.72rem', color: folioData.totals.balanceCents > 0 ? '#FFAFCC' : '#86EFAC' }}>
-                            {folioData.totals.balanceCents > 0 ? 'Pendente de pagamento' : 'Conta 100% quitada'}
+                            {folioData.totals.balanceCents > 0 ? 'Pendente de pagamento' : folioData.totals.balanceCents<0?'Crédito a ajustar antes da saída':'Conta 100% quitada'}
                           </span>
                         </div>
                       </div>
@@ -5153,6 +5151,7 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
                         </table>
                       </div>
 
+                      {folioPendingPayment&&<p role="status">Há uma confirmação pendente de {formatBrlCents(folioPendingPayment.amountCents)} ({folioPendingPayment.paymentMethod}). Use o botão para reenviar o mesmo recebimento com segurança, sem criar outro lançamento.</p>}
                       {/* Pagamento & Check-out */}
                       <div className="d26-split-2">
                         {/* Registrar Pagamento */}
@@ -5165,6 +5164,7 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
                                 className="d26-input"
                                 placeholder={`Ex: ${(folioData.totals.balanceCents / 100).toFixed(2).replace('.', ',')}`}
                                 value={folioPayReais}
+                                disabled={folioPayBusy||!!folioPendingPayment}
                                 onChange={(e) => setFolioPayReais(e.target.value)}
                               />
                             </div>
@@ -5173,9 +5173,10 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
                               <select
                                 className="d26-select"
                                 value={folioPayMethod}
+                                disabled={folioPayBusy||!!folioPendingPayment}
                                 onChange={(e) => setFolioPayMethod(e.target.value as PaymentMethod)}
                               >
-                                <option value="PIX">PIX (Chave Automática)</option>
+                                <option value="PIX">PIX (registro do recebimento)</option>
                                 <option value="CASH">Dinheiro em Espécie</option>
                                 <option value="CREDIT_CARD">Cartão de Crédito</option>
                                 <option value="DEBIT_CARD">Cartão de Débito</option>
@@ -5183,10 +5184,10 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
                             </div>
                             <button
                               className="d26-btn d26-btn-primary"
-                              disabled={folioData.totals.balanceCents <= 0}
+                              disabled={folioPayBusy||(!folioPendingPayment&&folioData.totals.balanceCents<=0)}
                               onClick={handlePayFolio}
                             >
-                              Confirmar Recebimento de Pagamento
+                              {folioPayBusy?'Confirmando…':folioPendingPayment?'Confirmar / reenviar mesmo recebimento':'Confirmar Recebimento de Pagamento'}
                             </button>
                           </div>
                         </div>
@@ -5208,7 +5209,7 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
                             <button
                               className="d26-btn d26-btn-primary"
                               style={{ flex: 1 }}
-                              disabled={folioData.totals.balanceCents > 0}
+                              disabled={folioPayBusy||!!folioPendingPayment||folioData.totals.balanceCents!==0}
                               onClick={() => handleCheckOutStay(folioData.stay.id, false)}
                             >
                               🚪 Efetivar Check-Out
