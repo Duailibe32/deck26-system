@@ -17,7 +17,9 @@
     "dev:local-server": "npm --workspace=@deck26/local-server run dev",
     "dev:desktop": "npm --workspace=@deck26/desktop run dev",
     "dev:web": "npm --workspace=@deck26/web run dev",
-    "dev:cloud-api": "npm --workspace=@deck26/cloud-api run dev"
+    "dev:cloud-api": "npm --workspace=@deck26/cloud-api run dev",
+    "build:windows:test": "node scripts/build-windows-test.mjs",
+    "dev:windows:test:server": "node --import tsx scripts/start-windows-test.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

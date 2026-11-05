@@ -1,3 +1,4 @@
+import { LoginScreen } from './LoginScreen.js';
 import { FinancialDashboard } from './FinancialDashboard.js';
 import { tableSignal } from './tableSignals.js';
 import React, { useEffect, useMemo, useState } from 'react';
@@ -172,6 +173,11 @@ const GROUP_LABELS: Record<string, string> = {
 };
 
 export const DesktopApp: React.FC = () => {
+  const [sessionKey,setSessionKey]=useState(0);
+  return <DesktopSession key={sessionKey} onSignOut={()=>setSessionKey(value=>value+1)}/>;
+};
+
+const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
   const localApiBase = useMemo(() => {
     const host = window.location.protocol === 'tauri:' || window.location.hostname === 'tauri.localhost' ? '127.0.0.1' : window.location.hostname || '127.0.0.1';
     return import.meta.env.VITE_LOCAL_API_URL || `http://${host}:4000`;
@@ -187,7 +193,9 @@ export const DesktopApp: React.FC = () => {
 
   // Autenticação Real por PIN no Backend
   const [authSession, setAuthSession] = useState<AuthSessionInfo | null>(null);
-  const [pinInput, setPinInput] = useState<string>('2626');
+  const [pinInput, setPinInput] = useState<string>('');
+  const [loginBusy,setLoginBusy]=useState(false);
+  const [loginError,setLoginError]=useState('');
   const [showPinModal, setShowPinModal] = useState<boolean>(true);
 
   const [serverConnected, setServerConnected] = useState<boolean>(false);
@@ -196,7 +204,7 @@ export const DesktopApp: React.FC = () => {
   const [snapshot, setSnapshot] = useState<ServerStateSnapshot>({
     lanAddresses: ['127.0.0.1'],
     cloudSyncState: { online: false, lastAttemptAt: null, lastSuccessAt: null, lastError: null },
-    catalog: { categories: DECK26_INITIAL_CATEGORIES, products: DECK26_INITIAL_PRODUCTS },
+    catalog: { categories: [], products: [] },
     recipes: [],
     qrTables: [],
     tabs: [],
@@ -395,6 +403,8 @@ export const DesktopApp: React.FC = () => {
   }
 
   async function authenticateWithPin(pinToUse: string) {
+    if(loginBusy)return;
+    setLoginBusy(true);setLoginError('');
     try {
       const res = await fetch(`${localApiBase}/api/auth/login`, {
         method: 'POST',
@@ -403,7 +413,7 @@ export const DesktopApp: React.FC = () => {
       });
       if (!res.ok) {
         const errData = await res.json().catch(() => ({ error: 'PIN inválido' }));
-        notify(errData.error ?? 'PIN incorreto.');
+        setLoginError(errData.error ?? 'PIN incorreto.');
         return;
       }
       const data = await res.json();
@@ -413,17 +423,22 @@ export const DesktopApp: React.FC = () => {
         name: data.user.name,
         role: data.user.role
       });
-      setShowPinModal(false);
+      setActiveModule(current=>{
+        const module=SYSTEM_MODULES.find(item=>item.id===current);
+        if(module&&hasPermission(data.user.role,module.requiredPermission))return current;
+        return SYSTEM_MODULES.find(item=>hasPermission(data.user.role,item.requiredPermission))?.id??'garcons';
+      });
+      setShowPinModal(false);setPinInput('');
       notify(`Operador autenticado: ${data.user.name} (${data.user.role})`);
     } catch {
-      // Servidor iniciando
-    }
+      setLoginError('Não foi possível conectar à operação local. Aguarde alguns segundos e tente novamente.');
+    } finally { setLoginBusy(false); }
   }
 
   async function refreshState() {
     try {
       const res = await fetch(`${localApiBase}/api/state`, {headers: getAuthHeaders()});
-      if (res.status === 401) { setAuthSession(null); setShowPinModal(true); }
+      if (res.status === 401) { onSignOut(); return; }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as ServerStateSnapshot;
       setSnapshot(data);
@@ -1699,13 +1714,15 @@ export const DesktopApp: React.FC = () => {
   const previewCostCents = parseReaisToCents(prodCostReais, 0);
   const previewMargin = calculateGrossMarginPercent(previewPriceCents, previewCostCents);
 
+  if(!authSession)return <LoginScreen pin={pinInput} onChange={value=>{setPinInput(value);setLoginError('');}} onSubmit={()=>void authenticateWithPin(pinInput)} busy={loginBusy} error={loginError} testMode={import.meta.env.VITE_DECK26_TEST_MODE==='true'}/>;
+
   return (
     <div className="d26-shell">
       {/* BARRA SUPERIOR DO APLICATIVO WINDOWS TAURI 2 */}
       <header className="d26-topbar">
         <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
           <Deck26Logo size={42} showHotelSubtitle />
-          <span className="d26-badge d26-badge-purple">Estação de trabalho</span>
+          <span className="d26-badge d26-badge-purple">{import.meta.env.VITE_DECK26_TEST_MODE==='true'?'Ambiente de testes':'Estação de trabalho'}</span>
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
@@ -1732,13 +1749,14 @@ export const DesktopApp: React.FC = () => {
           <button
             className="d26-btn d26-btn-tertiary"
             style={{ padding: '6px 12px', fontSize: '0.78rem' }}
-            onClick={() => setShowPinModal((v) => !v)}
+            onClick={onSignOut}
           >
             🔐 {authSession ? `${authSession.name} [${authSession.role}]` : 'Autenticar PIN'}
           </button>
         </div>
       </header>
 
+      <button className="d26-session-exit" onClick={onSignOut}>Sair / trocar operador</button>
       {/* NAVEGAÇÃO LATERAL COM OS 16 MÓDULOS OFICIAIS E CONTROLE RBAC */}
       <aside className="d26-sidebar">
         {(

@@ -77,6 +77,12 @@ A validação local de 05/11/2026 executou 140 testes, inicialização real das 
 
 O build não gera um instalador Tauri. O empacotamento Windows exige Rust, WebView2 e ferramentas C++; hardware e emissão fiscal precisam de validação própria.
 
+## Aplicativo Windows nativo para teste
+
+A tela de login bloqueia os módulos até autenticação por PIN. O ambiente nativo de teste usa API local e SQLite persistente separado, sem cobranças ou documentos fiscais reais. Consulte [como gerar, abrir e testar](docs/WINDOWS_TEST.md).
+
+Execute npm run build:windows:test no Windows com Rust/MSVC instalados; o script scripts/install-windows-test-shortcut.ps1 cria o atalho que inicia API e janela nativa juntos. O executável não incorpora a API nem substitui a homologação operacional.
+
 ## Segurança, financeiro e preparação da 7B
 
 Leia [revisão e evidências](docs/REVISAO_PRE_7B.md), [segurança](docs/SECURITY.md), [invariantes financeiras](docs/FINANCIAL_INVARIANTS.md), [testes](docs/TESTING.md) e [checklist de produção](docs/PREPRODUCTION_CHECKLIST.md).

@@ -1,0 +1,16 @@
+{
+  "productName": "Deck 26 — Teste Windows",
+  "identifier": "br.com.deck26.desktop.test",
+  "app": {
+    "windows": [{
+      "title": "DECK 26 — Ambiente de Testes · Windows",
+      "width": 1366,
+      "height": 850,
+      "minWidth": 1024,
+      "minHeight": 680,
+      "resizable": true,
+      "fullscreen": false
+    }]
+  },
+  "bundle": {"active": false}
+}

@@ -45,3 +45,7 @@ Thumbs.db
 
 # Projeto Legado Isolado (Preservado sem misturar ao repositório Deck 26)
 _legacy_dessence/
+
+# Artefatos da compilação nativa
+native-target/
+apps/desktop/src-tauri/gen/

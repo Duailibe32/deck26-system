@@ -1,0 +1,40 @@
+name: Windows nativo de teste
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/desktop/**'
+      - 'packages/**'
+      - 'scripts/*windows*'
+      - 'package*.json'
+      - '.github/workflows/windows-test.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  native-test:
+    runs-on: windows-latest
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/native-target
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.13.0'
+          cache: npm
+      - name: Instalar dependências
+        run: npm ci
+      - name: Preparar Rust estável
+        run: rustup default stable
+      - name: Compilar executável nativo de testes
+        run: npm run build:windows:test
+      - name: Disponibilizar executável de teste
+        uses: actions/upload-artifact@v4
+        with:
+          name: deck26-windows-teste
+          path: native-target/release/deck26-desktop.exe
+          if-no-files-found: error
+          retention-days: 14

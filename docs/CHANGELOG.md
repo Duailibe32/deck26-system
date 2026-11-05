@@ -144,3 +144,7 @@ Todas as mudanças relevantes do projeto **DECK 26** são documentadas neste arq
 ## 05/11/2026 — Revisão pré-7B
 
 Correção de inicialização fiscal, autenticação e leitura por perfil, sessões/PIN, sincronização autenticada, tesouraria e custódia, atomicidade do PMS, DRE e fluxo histórico. Prévia interativa com paleta aprovada, botões e logo; Windows com semáforo de mesas e dashboard Recharts. 140 testes e smoke real das APIs. Escopo e limites em REVISAO_PRE_7B.md.
+
+## 05/11/2026 — Teste Windows nativo e login
+
+Tela de acesso dedicada com teclado numérico, mensagens de erro e troca de operador com limpeza da sessão. Compilação Tauri testada no Windows, build.rs e ícones adicionados, Cargo.lock e configuração de teste separada. Inicializador e atalho iniciam API SQLite persistente de testes em loopback; workflow Windows publica artefato de teste. Instruções em WINDOWS_TEST.md.
