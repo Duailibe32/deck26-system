@@ -140,3 +140,7 @@ Todas as mudanças relevantes do projeto **DECK 26** são documentadas neste arq
 ## [Etapa 1] - 2026-11-03
 ### Adicionado
 - Estrutura inicial do monorepositório TypeScript (`apps/desktop`, `apps/local-server`, `apps/cloud-api`, `apps/web`, `packages/contracts`, `packages/ui`).
+
+## 05/11/2026 — Revisão pré-7B
+
+Correção de inicialização fiscal, autenticação e leitura por perfil, sessões/PIN, sincronização autenticada, tesouraria e custódia, atomicidade do PMS, DRE e fluxo histórico. Prévia interativa com paleta aprovada, botões e logo; Windows com semáforo de mesas e dashboard Recharts. 140 testes e smoke real das APIs. Escopo e limites em REVISAO_PRE_7B.md.

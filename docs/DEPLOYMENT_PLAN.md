@@ -1,3 +1,5 @@
+> Revisão da 7A: implantação online ainda pendente. Cloud continua SQLite; DATABASE_URL é recusada e não ativa PostgreSQL. Não publicar API operacional/Vite. Consulte REVISAO_PRE_7B.md e PREPRODUCTION_CHECKLIST.md antes de seguir este plano.
+
 # Plano de Implantação Futura (Windows Definitivo + Hostinger VPS) — DECK 26
 
 ## 1. Visão Geral da Migração

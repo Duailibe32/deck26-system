@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { IsoDateTimeSchema } from './index.js';
+import { IsoDateTimeSchema } from './common.js';
 
 // ============================================================================
 // DECK 26 — PREPARAÇÃO FISCAL (MÓDULO ESTRUTURAL & MULTI-ESTABELECIMENTO)

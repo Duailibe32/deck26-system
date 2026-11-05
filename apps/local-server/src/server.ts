@@ -62,7 +62,8 @@ import {
   FinancialAccountTypeSchema,
   PaymentMethod,
   FiscalDocumentTypeSchema,
-  RoomCommercialStatusSchema
+  RoomCommercialStatusSchema,
+  RoleSchema
 } from '@deck26/contracts';
 import { z } from 'zod';
 import { LocalOperationalStore } from './store.js';
@@ -96,12 +97,20 @@ export function verifySessionToken(token: string | undefined): AuthenticatedSess
   if (!token) return null;
   const secret = resolveTokenSecret();
   const clean = token.replace(/^Bearer\s+/i, '').trim();
-  const [payloadB64, sig] = clean.split('.');
+  const parts = clean.split('.');
+  if (parts.length !== 2) return null;
+  const [payloadB64, sig] = parts;
   if (!payloadB64 || !sig) return null;
   const expectedSig = crypto.createHmac('sha256', secret).update(payloadB64).digest('base64url');
-  if (sig !== expectedSig) return null;
+  const supplied = Buffer.from(sig);
+  const expected = Buffer.from(expectedSig);
+  if (supplied.length !== expected.length || !crypto.timingSafeEqual(supplied, expected)) return null;
   try {
-    return JSON.parse(Buffer.from(payloadB64, 'base64url').toString('utf-8')) as AuthenticatedSession;
+    const session = z.object({ userId: z.string().min(1), name: z.string(), role: RoleSchema, issuedAt: z.number().int() })
+      .parse(JSON.parse(Buffer.from(payloadB64, 'base64url').toString('utf-8')));
+    const age = Date.now() - session.issuedAt;
+    if (age < -60000 || age > 8 * 60 * 60 * 1000) return null;
+    return session;
   } catch {
     return null;
   }
@@ -124,12 +133,14 @@ export async function buildLocalServer(options?: {
   dbPath?: string;
   cloudApiUrl?: string;
   requireStrictAuth?: boolean;
+  demoMode?: boolean;
 }): Promise<{
   app: FastifyInstance;
   store: LocalOperationalStore;
   setCloudApiUrl: (newUrl: string) => void;
 }> {
   const app = Fastify({ logger: false });
+  resolveTokenSecret(); // Fail before opening a production database or listener.
 
   const allowedOrigins = (
     process.env.DECK26_ALLOWED_ORIGINS ??
@@ -142,9 +153,7 @@ export async function buildLocalServer(options?: {
     origin: (origin, cb) => {
       if (
         !origin ||
-        allowedOrigins.includes(origin) ||
-        origin.startsWith('http://192.168.') ||
-        origin.startsWith('http://10.')
+        allowedOrigins.includes(origin)
       ) {
         cb(null, true);
         return;
@@ -164,8 +173,8 @@ export async function buildLocalServer(options?: {
 
   const requireStrictAuth =
     options?.requireStrictAuth ??
-    (process.env.NODE_ENV === 'production' || process.env.DECK26_STRICT_AUTH === 'true');
-  const store = new LocalOperationalStore(dbPath);
+    (dbPath !== ':memory:' || process.env.NODE_ENV === 'production' || process.env.DECK26_STRICT_AUTH === 'true');
+  const store = new LocalOperationalStore(dbPath, options?.demoMode);
   let lastPulledRemoteCursor = 0;
   let lastSyncStatus: {
     online: boolean;
@@ -182,8 +191,11 @@ export async function buildLocalServer(options?: {
   function resolveSession(req: FastifyRequest): AuthenticatedSession | null {
     const authHeader = req.headers.authorization;
     const verified = verifySessionToken(authHeader);
-    if (verified) return verified;
-    if (!requireStrictAuth) {
+    if (verified) {
+      const user = store.db.prepare('SELECT name, role FROM users WHERE id = ? AND active = 1').get(verified.userId) as {name: string; role: UserRole} | undefined;
+      return user && user.role === verified.role ? { ...verified, name: user.name } : null;
+    }
+    if (!requireStrictAuth && !authHeader && ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.ip)) {
       // Fallback seguro apenas para testes de integração internos no próprio loopback quando token não enviado
       return {
         userId: 'usr-owner-01',
@@ -219,7 +231,35 @@ export async function buildLocalServer(options?: {
     pin: z.string().min(4).max(12)
   });
 
+  // Every internal endpoint requires a session, including GET snapshots. Route
+  // handlers still apply their narrower mutation permissions.
+  app.addHook('onRequest', async (req, reply) => {
+    const url = req.url.split('?')[0] ?? '';
+    if (req.method === 'OPTIONS' || url === '/api/health' || url === '/api/auth/login' || url.startsWith('/api/public/')) return;
+    const session = resolveSession(req);
+    if (!session) return reply.code(401).send({error: 'Sessão ausente ou expirada. Entre com seu PIN.'});
+    let permission: Permission | undefined;
+    if (url.startsWith('/api/finance/') && req.method === 'GET') {
+      permission = url.includes('/payables') ? 'finance:manage_payables' : url.includes('/receivables') ? 'finance:manage_receivables' : url.includes('/suppliers') || url.includes('/purchases') ? 'finance:manage_suppliers' : url.includes('/reconciliations') ? 'finance:reconcile' : url.includes('/transactions') || url.includes('/transfers') ? 'finance:view_dre' : 'finance:view_overview';
+    }
+    if (url === '/api/recipes' && req.method === 'GET') permission='stock:adjust';
+    if (url === '/api/cash-sessions/summary') permission='pos:operate';
+    if (url.startsWith('/api/delivery/') && !url.endsWith('/zones')) permission = 'delivery:manage_orders';
+    if (url === '/api/events/stream' || url === '/api/notifications') permission = 'sync:manage';
+    if (permission && !hasPermission(session.role, permission)) return reply.code(403).send({error: 'Seu perfil não permite consultar estes dados.'});
+  });
+
+  const loginAttempts = new Map<string, {count: number; resetAt: number}>();
+
   app.post('/api/auth/login', async (req, reply) => {
+    const now = Date.now();
+    let attempts = loginAttempts.get(req.ip);
+    if (!attempts || now > attempts.resetAt) {
+      if (loginAttempts.size > 10000) for (const [ip, value] of loginAttempts) if (now > value.resetAt) loginAttempts.delete(ip);
+      attempts = {count: 0, resetAt: now + 15 * 60 * 1000};
+      loginAttempts.set(req.ip, attempts);
+    }
+    if (++attempts.count > 10) return reply.code(429).header('Retry-After', '900').send({error: 'Muitas tentativas. Tente novamente em 15 minutos.'});
     const parsed = LoginPinSchema.safeParse(req.body);
     if (!parsed.success) {
       return reply.status(400).send({ error: 'Formato de PIN inválido.' });
@@ -228,6 +268,7 @@ export async function buildLocalServer(options?: {
     if (!user) {
       return reply.status(401).send({ error: 'PIN incorreto ou colaborador inativo.' });
     }
+    loginAttempts.delete(req.ip);
     const session: AuthenticatedSession = {
       userId: user.id,
       name: user.name,
@@ -269,7 +310,10 @@ export async function buildLocalServer(options?: {
   });
 
   // 3. Estado Consolidado para Dashboard, PDV, Mesas, Cozinha, Catálogo, Estoque, Hotel e Impressoras
-  app.get('/api/state', async () => {
+  app.get('/api/state', async (req, reply) => {
+    const session = resolveSession(req);
+    if (!session) return reply.code(401).send({error: 'Não autenticado'});
+    const can = (permission: Permission) => hasPermission(session.role, permission);
     const catalog = store.getCatalog({ includeInactive: true });
     const recipes = store.listProductRecipes();
     const qrTables = store.listDiningTablesQr();
@@ -304,36 +348,36 @@ export async function buildLocalServer(options?: {
     return {
       lanAddresses: getLanIpv4Addresses(),
       cloudSyncState: lastSyncStatus,
-      catalog,
-      recipes,
-      qrTables,
-      tabs,
-      orders,
-      payments,
-      printJobs,
-      stock,
-      hotelRooms,
-      hotelGuests,
-      hotelReservations,
-      hotelStays,
+      catalog: can('catalog:manage') ? catalog : {...catalog,products:catalog.products.filter(p=>p.active).map(p=>({...p,costPriceCents:undefined,internalNotes:''}))},
+      recipes: can('stock:adjust') ? recipes : [],
+      qrTables: can('tabs:manage') ? qrTables : [],
+      tabs: can('tabs:manage') ? tabs.filter(tab => tab.type !== 'HOTEL_FOLIO' || can('hotel:view_pii')) : [],
+      orders: orders.filter(order => order.channel !== 'HOTEL_ROOM' || can('hotel:view_pii')).map(order => can('tabs:manage') ? order : {...order, customerNotes: undefined}),
+      payments: can('pos:operate') ? payments : [],
+      printJobs: can('printers:manage') ? printJobs : [],
+      stock: can('stock:adjust') ? stock : { balances: [], recentMovements: [] },
+      hotelRooms: can('hotel:view_pii') ? hotelRooms : hotelRooms.map(room => ({...room, currentGuestName: null, currentGuestId: null, activeStayId: null, activeTabId: null, internalNotes: ''})),
+      hotelGuests: can('hotel:view_pii') ? hotelGuests : [],
+      hotelReservations: can('hotel:manage_reservations') ? hotelReservations : [],
+      hotelStays: can('hotel:view_pii') ? hotelStays : [],
       hotelServices,
-      hotelMetrics,
-      syncEvents,
-      notifications,
+      hotelMetrics: can('hotel:reports') ? hotelMetrics : undefined,
+      syncEvents: can('sync:manage') ? syncEvents : [],
+      notifications: can('sync:manage') ? notifications : [],
       kdsSlaConfig,
-      cashierSummary,
-      auditLogs,
+      cashierSummary: can('pos:operate') ? cashierSummary : undefined,
+      auditLogs: can('staff:manage') ? auditLogs : [],
       deliveryZones,
-      deliveryCouriers,
-      deliveryOrders,
-      deliveryCustomers,
+      deliveryCouriers: can('delivery:manage_orders') ? deliveryCouriers : [],
+      deliveryOrders: can('delivery:manage_orders') ? deliveryOrders : [],
+      deliveryCustomers: can('delivery:manage_orders') ? deliveryCustomers : [],
       costCenters,
       financialCategories,
-      financialAccounts,
-      suppliers,
-      accountsReceivable,
-      accountsPayable,
-      executiveMetrics
+      financialAccounts: can('finance:view_overview') ? financialAccounts : [],
+      suppliers: can('finance:manage_suppliers') ? suppliers : [],
+      accountsReceivable: can('finance:manage_receivables') ? accountsReceivable : [],
+      accountsPayable: can('finance:manage_payables') ? accountsPayable : [],
+      executiveMetrics: can('finance:view_dre') ? executiveMetrics : undefined
     };
   });
 
@@ -430,7 +474,10 @@ export async function buildLocalServer(options?: {
     async (req) => {
       const includeInactive = req.query.includeInactive === 'true';
       const channel = req.query.channel;
-      return store.getCatalog({ includeInactive, channel });
+      const catalog = store.getCatalog({ includeInactive, channel });
+      const session = resolveSession(req);
+      if (session && hasPermission(session.role, 'catalog:manage')) return catalog;
+      return {...catalog, products:catalog.products.map(product=>({...product,costPriceCents:undefined,internalNotes:undefined}))};
     }
   );
 
@@ -499,7 +546,7 @@ export async function buildLocalServer(options?: {
     unitOfMeasure: z.string().optional(),
     priceCents: z.number().int().nonnegative(),
     costPriceCents: z.number().int().nonnegative().optional(),
-    channelPricesCents: z.record(SalesChannelSchema, z.number().int().nonnegative()).optional(),
+    channelPricesCents: z.partialRecord(SalesChannelSchema, z.number().int().nonnegative()).optional(),
     prepStation: PrepStationSchema,
     targetPrinter: z.string().optional(),
     prepTimeMinutes: z.number().int().nonnegative().optional(),
@@ -1814,7 +1861,9 @@ export async function buildLocalServer(options?: {
     amountCents: z.number().int(),
     sourceReferenceType: z.string().optional(),
     sourceReferenceId: z.string().optional(),
-    sourceDetailsJson: z.string().optional()
+    sourceDetailsJson: z.string().optional(),
+    paymentMethod: PaymentMethodSchema.optional(),
+    idempotencyKey: z.string().min(12).optional()
   });
 
   app.post<{ Params: { id: string } }>('/api/hotel/stays/:id/folio/entry', async (req, reply) => {
@@ -2097,7 +2146,7 @@ export async function buildLocalServer(options?: {
     try {
       const response = await fetch(`${cloudApiUrl}/api/sync/batch`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + (process.env.DECK26_SYNC_SECRET ?? '') },
         body: JSON.stringify({
           sourceNodeId: 'deck26-windows-main',
           sourceOrigin: 'WINDOWS_PDV',
@@ -2725,6 +2774,31 @@ export async function buildLocalServer(options?: {
 
   app.get<{ Querystring: { financialAccountId?: string } }>('/api/finance/reconciliations', async (req) => {
     return store.listAccountReconciliations(req.query.financialAccountId);
+  });
+
+  app.get('/api/finance/dashboard/charts', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'finance:view_dre');
+    if (!session) return;
+    const updatedAt = new Date();
+    const dailySales = Array.from({length: 7}, (_, index) => {
+      const day = new Date(updatedAt); day.setUTCDate(day.getUTCDate() - (6-index));
+      const date = day.toISOString().slice(0,10);
+      return {date, salesCents: store.generateDreStatement({startDate:date,endDate:date}).grossRevenueCents};
+    });
+    const occupancy = [
+      {name:'Ocupados',value:0,color:'#f72585'},
+      {name:'Livres',value:0,color:'#4ade80'},
+      {name:'Em limpeza',value:0,color:'#93c5fd'},
+      {name:'Indisponíveis / obras',value:0,color:'#facc15'},
+      {name:'Reservados',value:0,color:'#ba82e0'}
+    ];
+    for (const room of store.listHotelRooms()) {
+      if (!room.active) continue;
+      const unavailable = room.commercialStatus !== 'OPERACIONAL' || room.maintenanceStatus !== 'DISPONIVEL' || room.occupancyStatus === 'BLOQUEADO';
+      const bucket = unavailable ? 3 : room.occupancyStatus === 'OCUPADO' || room.status === 'OCCUPIED' ? 0 : room.housekeepingStatus !== 'LIMPO' ? 2 : room.occupancyStatus === 'RESERVADO' || room.status === 'RESERVED' ? 4 : 1;
+      occupancy[bucket]!.value++;
+    }
+    return {dailySales,occupancy,updatedAt:updatedAt.toISOString()};
   });
 
   app.get<{ Querystring: { startDate?: string; endDate?: string; costCenterId?: string } }>('/api/finance/dre', async (req, reply) => {

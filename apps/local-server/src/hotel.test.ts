@@ -1033,7 +1033,7 @@ describe('DECK 26 — Etapa 5: Bateria Completa dos 35 Testes Obrigatórios do P
 
     try {
       // 1. Abre banco temporário e grava hóspede e quarto
-      const server1 = await buildLocalServer({ dbPath: tempDbPath });
+      const server1 = await buildLocalServer({ requireStrictAuth: false, demoMode: true, dbPath: tempDbPath });
       const guest = server1.store.createHotelGuest({
         fullName: 'Hóspede Persistente',
         documentNumber: '999.888.777-66',
@@ -1051,7 +1051,7 @@ describe('DECK 26 — Etapa 5: Bateria Completa dos 35 Testes Obrigatórios do P
       await server1.app.close();
 
       // 2. Reabre novo servidor com o mesmo arquivo SQLite
-      const server2 = await buildLocalServer({ dbPath: tempDbPath });
+      const server2 = await buildLocalServer({ requireStrictAuth: false, demoMode: true, dbPath: tempDbPath });
       const recoveredGuest = server2.store.findGuestByDocument('999.888.777-66');
       const recoveredRoom = server2.store.getHotelRoomByNumber('301');
 
@@ -1156,7 +1156,7 @@ describe('DECK 26 — Etapa 5: Teste Operacional Completo (Fluxo End-to-End de 2
     const tempDbPath = path.join(os.tmpdir(), `deck26-hotel-e2e-${Date.now()}.sqlite`);
 
     try {
-      const server1 = await buildLocalServer({ dbPath: tempDbPath });
+      const server1 = await buildLocalServer({ requireStrictAuth: false, demoMode: true, dbPath: tempDbPath });
       const store1 = server1.store;
       const app1 = server1.app;
 
@@ -1354,7 +1354,7 @@ describe('DECK 26 — Etapa 5: Teste Operacional Completo (Fluxo End-to-End de 2
       await app1.close();
 
       // 19. Reiniciar servidor e 20. Confirmar persistência e auditoria
-      const server2 = await buildLocalServer({ dbPath: tempDbPath });
+      const server2 = await buildLocalServer({ requireStrictAuth: false, demoMode: true, dbPath: tempDbPath });
       const store2 = server2.store;
 
       const persistedRoom = store2.getHotelRoomByNumber('105')!;

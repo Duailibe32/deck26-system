@@ -1,3 +1,5 @@
+> Atualização de 05/11/2026: antes da migração 0007_hardening, pare os processos que escrevem no banco e copie o SQLite em estado consistente (incluindo WAL/SHM se houver), ou use mecanismo de backup SQLite consistente. Ensaie restauração em caminho isolado e verifique integridade antes de retomar. Não copiar apenas o arquivo principal de um banco ativo. Esta revisão não executou restauração dos dados reais.
+
 # DECK 26 — POLÍTICA DE BACKUP, RECUPERAÇÃO E CONTINGÊNCIA
 
 Este documento descreve as diretrizes operacionais para geração de cópias de segurança atômicas, verificação de integridade e restauração do banco de dados SQLite com WAL (Write-Ahead Logging) do **DECK 26**.

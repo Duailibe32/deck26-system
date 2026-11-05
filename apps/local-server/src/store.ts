@@ -161,9 +161,12 @@ export interface AuditLogEntry {
 
 export class LocalOperationalStore {
   public readonly db: DatabaseSyncType;
+  private transactionDepth = 0;
+  private readonly demoMode: boolean;
   private readonly eventListeners = new Set<(notification: OperationalNotification) => void>();
 
-  constructor(dbFilePath: string = ':memory:') {
+  constructor(dbFilePath: string = ':memory:', demoMode?: boolean) {
+    this.demoMode = demoMode ?? (dbFilePath === ':memory:' || process.env.DECK26_DEMO_MODE === 'true');
     if (dbFilePath !== ':memory:') {
       const dir = path.dirname(dbFilePath);
       if (!fs.existsSync(dir)) {
@@ -182,6 +185,42 @@ export class LocalOperationalStore {
       }
       throw err;
     }
+  }
+
+  private beginTransaction(): void {
+    this.db.exec(this.transactionDepth === 0 ? 'BEGIN IMMEDIATE' : `SAVEPOINT deck26_${this.transactionDepth}`);
+    this.transactionDepth++;
+  }
+  private commitTransaction(): void {
+    if (this.transactionDepth === 0) return;
+    this.db.exec(this.transactionDepth === 1 ? 'COMMIT' : `RELEASE SAVEPOINT deck26_${this.transactionDepth - 1}`);
+    this.transactionDepth--;
+  }
+  private rollbackTransaction(): void {
+    if (this.transactionDepth === 0) return;
+    if (this.transactionDepth === 1) this.db.exec('ROLLBACK');
+    else this.db.exec(`ROLLBACK TO SAVEPOINT deck26_${this.transactionDepth - 1}; RELEASE SAVEPOINT deck26_${this.transactionDepth - 1}`);
+    this.transactionDepth--;
+  }
+  private atomic<T>(operation: () => T): T {
+    this.beginTransaction();
+    try { const result = operation(); this.commitTransaction(); return result; }
+    catch (error) { this.rollbackTransaction(); throw error; }
+  }
+
+  private recordLedgerMovement(input: { accountId: string; amountCents: number; type: 'INCOME' | 'EXPENSE' | 'INTERNAL_TRANSFER_IN' | 'INTERNAL_TRANSFER_OUT'; method: PaymentMethod; referenceType: string; referenceId: string; center: string; actor: string; description: string; category?: string }): void {
+    if (!Number.isSafeInteger(input.amountCents) || input.amountCents <= 0) throw new Error('Valor financeiro deve ser positivo em centavos inteiros seguros.');
+    const account = this.getFinancialAccountById(input.accountId);
+    if (!account || !account.active) throw new Error('Conta financeira inválida ou inativa.');
+    const now = new Date().toISOString();
+    this.db.prepare(`INSERT INTO financial_transactions (id, financial_account_id, type, category_id, cost_center_id, amount_cents, payment_method, reference_type, reference_id, description, accrual_date, settlement_date, registered_by_staff_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(crypto.randomUUID(), input.accountId, input.type, input.category ?? 'cat-rec-rest', input.center, input.amountCents, input.method, input.referenceType, input.referenceId, input.description, now.slice(0,10), now.slice(0,10), input.actor, now);
+    const sign = input.type === 'INCOME' || input.type === 'INTERNAL_TRANSFER_IN' ? 1 : -1;
+    this.db.prepare('UPDATE financial_accounts SET current_balance_cents = current_balance_cents + ?, updated_at = ? WHERE id = ?').run(sign * input.amountCents, now, input.accountId);
+  }
+
+  private paymentAccount(method: PaymentMethod): string {
+    return method === 'CASH' ? 'acc-caixa-geral' : method === 'PIX' ? 'acc-conta-pix' : 'acc-banco-brasil';
   }
 
   private applySqlStatementsIdempotently(sqlContent: string): void {
@@ -313,7 +352,27 @@ export class LocalOperationalStore {
     }
 
     // Garante compatibilidade de bancos criados na Etapa 2 com novos status das Etapas 3, 4, 5 e 6
-    this.db.exec('PRAGMA ignore_check_constraints = ON;');
+    this.db.exec("CREATE TRIGGER IF NOT EXISTS audit_logs_no_update BEFORE UPDATE ON audit_logs BEGIN SELECT RAISE(ABORT, 'Auditoria é somente acréscimo'); END; CREATE TRIGGER IF NOT EXISTS audit_logs_no_delete BEFORE DELETE ON audit_logs BEGIN SELECT RAISE(ABORT, 'Auditoria é somente acréscimo'); END;");
+    this.db.exec('PRAGMA ignore_check_constraints = OFF;');
+    const hardened = this.db.prepare("SELECT version FROM schema_migrations WHERE version = '0007_hardening'").get();
+    if (!hardened) {
+      this.db.exec('PRAGMA foreign_keys = OFF;');
+      try { this.atomic(() => {
+        for (const table of ['print_jobs','catalog_products']) {
+          const row = this.db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?").get(table) as {sql: string};
+          const definitions = this.db.prepare("SELECT sql FROM sqlite_master WHERE tbl_name = ? AND type IN ('index','trigger') AND sql IS NOT NULL").all(table) as {sql: string}[];
+          const replacement = table + '_hardened';
+          let create = row.sql.replace(table, replacement);
+          if (table === 'print_jobs') create = create.replace("'QUEUED', 'PRINTING', 'PRINTED', 'FAILED'", "'QUEUED','PENDING','PRINTING','SENDING','PRINTED','FAILED','UNKNOWN_OUTCOME','CANCELLED'");
+          else create = create.replace("'OFFICIAL_MENU', 'TEST_ONLY'", "'OFFICIAL_MENU','TEST_ONLY','STAGE7A_CARDAPIO_DIGITAL'");
+          this.db.exec(create);
+          this.db.exec('INSERT INTO '+replacement+' SELECT * FROM '+table+'; DROP TABLE '+table+'; ALTER TABLE '+replacement+' RENAME TO '+table+';');
+          for (const definition of definitions) this.db.exec(definition.sql);
+        }
+        if (this.db.prepare('PRAGMA foreign_key_check').all().length) throw new Error('Migração abortada por violação de chave estrangeira.');
+        this.db.prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)').run('0007_hardening', new Date().toISOString());
+      }); } finally { this.db.exec('PRAGMA foreign_keys = ON;'); }
+    }
   }
 
   private defaultPrinterForStation(station: CatalogProduct['prepStation']): PrintJobTarget {
@@ -334,6 +393,10 @@ export class LocalOperationalStore {
   }
 
   private seedBaseCatalogAndInfrastructure(): void {
+    if (!this.demoMode) {
+      this.seedOperationalInfrastructure();
+      return;
+    }
     const now = new Date().toISOString();
 
     // 1. Semeia Categorias oficiais do Deck 26
@@ -895,12 +958,42 @@ export class LocalOperationalStore {
   }
 
   public authenticateByPin(pin: string): { id: string; name: string; role: UserRole } | null {
-    const pinHash = crypto.createHash('sha256').update(`deck26-pin:${pin.trim()}`).digest('hex');
-    const row = this.db
-      .prepare('SELECT id, name, role FROM users WHERE pin_hash = ? AND active = 1 LIMIT 1')
-      .get(pinHash) as { id: string; name: string; role: UserRole } | undefined;
+    if (process.env.NODE_ENV === 'production' && DECK26_INITIAL_STAFF.some(staff => staff.pin === pin)) return null;
+    const users = this.db.prepare('SELECT id, name, role, pin_hash FROM users WHERE active = 1').all() as {id:string;name:string;role:UserRole;pin_hash:string}[];
+    for (const user of users) {
+      if (this.matchesPin(pin, user.pin_hash)) {
+        if (!user.pin_hash.startsWith('scrypt:')) this.db.prepare('UPDATE users SET pin_hash = ? WHERE id = ?').run(this.hashPin(pin),user.id);
+        return {id:user.id,name:user.name,role:user.role};
+      }
+    }
+    return null;
+  }
 
-    return row ?? null;
+  private hashPin(pin: string): string {
+    const salt = crypto.randomBytes(16).toString('hex');
+    return 'scrypt:'+salt+':'+crypto.scryptSync(pin,salt,32).toString('hex');
+  }
+  private matchesPin(pin: string, stored: string): boolean {
+    const parts=stored.split(':');
+    const actual=stored.startsWith('scrypt:') && parts[1] ? crypto.scryptSync(pin,parts[1],32).toString('hex') : crypto.createHash('sha256').update('deck26-pin:'+pin.trim()).digest('hex');
+    const expected=stored.startsWith('scrypt:') ? parts[2]??'' : stored;
+    return actual.length===expected.length && crypto.timingSafeEqual(Buffer.from(actual),Buffer.from(expected));
+  }
+  private seedOperationalInfrastructure(): void {
+    const now=new Date().toISOString();
+    for (const c of DECK26_INITIAL_COST_CENTERS) this.db.prepare('INSERT OR IGNORE INTO cost_centers (id,code,name,description,active) VALUES (?,?,?,?,1)').run(c.id,c.code,c.name,c.description);
+    for (const c of DECK26_INITIAL_FINANCIAL_CATEGORIES) this.db.prepare('INSERT OR IGNORE INTO financial_categories (id,code,name,type,parent_id,active) VALUES (?,?,?,?,?,1)').run(c.id,c.code,c.name,c.type,c.parentId??null);
+    const names:Record<string,string>={'acc-caixa-geral':'Caixa principal','acc-banco-brasil':'Conta de recebimentos por cartão — configurar','acc-conta-pix':'Conta de recebimentos PIX — configurar','acc-carteira-motoboys':'Custódia dos entregadores','acc-cofre-sede':'Cofre'};
+    for (const a of DECK26_INITIAL_FINANCIAL_ACCOUNTS) this.db.prepare('INSERT OR IGNORE INTO financial_accounts (id,name,type,current_balance_cents,initial_balance_cents,active,created_at,updated_at) VALUES (?,?,?,0,0,1,?,?)').run(a.id,names[a.id]??a.name,a.type,now,now);
+    this.db.prepare("INSERT OR IGNORE INTO fiscal_config (id,cnpj,razao_social,nome_fantasia,inscricao_estadual,uf,ambiente,mode,certificate_configured,updated_at) VALUES (1,'','','','','MA','HOMOLOGATION','DISABLED_NOT_CONFIGURED',0,?)").run(now);
+    this.db.prepare('INSERT OR IGNORE INTO kds_sla_config (id,warning_threshold_minutes,delayed_threshold_minutes,updated_at) VALUES (1,10,20,?)').run(now);
+    const pin=process.env.DECK26_BOOTSTRAP_PIN;
+    if (pin) {
+      if (!/^\d{6,12}$/.test(pin) || DECK26_INITIAL_STAFF.some(staff=>staff.pin===pin)) throw new Error('PIN inicial deve ter de 6 a 12 dígitos e não pode ser um PIN demonstrativo.');
+      const owner=this.db.prepare("SELECT pin_hash FROM users WHERE id='usr-owner-01'").get() as {pin_hash:string}|undefined;
+      if (!owner) this.db.prepare("INSERT INTO users (id,name,role,pin_hash,active,created_at) VALUES ('usr-owner-01','Proprietário','OWNER',?,1,?)").run(this.hashPin(pin),now);
+      else if (this.matchesPin('2626',owner.pin_hash)) this.db.prepare("UPDATE users SET pin_hash = ? WHERE id='usr-owner-01'").run(this.hashPin(pin));
+    }
   }
 
   public listStaffProfiles(): Array<{ id: string; name: string; role: UserRole }> {
@@ -1501,7 +1594,7 @@ export class LocalOperationalStore {
     const waiterUserId = input.waiterUserId ?? 'usr-waiter-01';
     const waiterName = input.waiterName ?? 'Garçom Deck 26';
 
-    this.db.exec('BEGIN IMMEDIATE TRANSACTION');
+    this.beginTransaction();
     try {
       const tableRow = this.db
         .prepare('SELECT * FROM dining_tables_qr WHERE table_number = ?')
@@ -1608,7 +1701,7 @@ export class LocalOperationalStore {
         payload: tab
       });
 
-      this.db.exec('COMMIT');
+      this.commitTransaction();
 
       this.createNotification({
         eventType: 'TABLE_OPENED',
@@ -1620,7 +1713,7 @@ export class LocalOperationalStore {
 
       return { table, tab };
     } catch (err) {
-      this.db.exec('ROLLBACK');
+      this.rollbackTransaction();
       throw err;
     }
   }
@@ -1706,7 +1799,7 @@ export class LocalOperationalStore {
       throw new Error('A mesa de destino deve ser diferente da mesa de origem.');
     }
 
-    this.db.exec('BEGIN IMMEDIATE TRANSACTION');
+    this.beginTransaction();
     try {
       const fromTable = this.getDiningTableByNumber(input.fromTableNumber);
       const toTable = this.getDiningTableByNumber(input.toTableNumber);
@@ -1838,7 +1931,7 @@ export class LocalOperationalStore {
         payload: updatedTab
       });
 
-      this.db.exec('COMMIT');
+      this.commitTransaction();
 
       this.createNotification({
         eventType: 'TABLE_TRANSFERRED',
@@ -1850,7 +1943,7 @@ export class LocalOperationalStore {
 
       return { fromTable: updatedFrom, toTable: updatedTo, tab: updatedTab };
     } catch (err) {
-      this.db.exec('ROLLBACK');
+      this.rollbackTransaction();
       throw err;
     }
   }
@@ -1874,7 +1967,7 @@ export class LocalOperationalStore {
       throw new Error('Informe pelo menos uma mesa secundária distinta para unir à mesa principal.');
     }
 
-    this.db.exec('BEGIN IMMEDIATE TRANSACTION');
+    this.beginTransaction();
     try {
       const primaryTable = this.getDiningTableByNumber(input.primaryTableNumber);
       if (!primaryTable) {
@@ -2025,7 +2118,7 @@ export class LocalOperationalStore {
         }
       });
 
-      this.db.exec('COMMIT');
+      this.commitTransaction();
 
       this.createNotification({
         eventType: 'TABLES_JOINED',
@@ -2041,7 +2134,7 @@ export class LocalOperationalStore {
         tab: recalculatedTab
       };
     } catch (err) {
-      this.db.exec('ROLLBACK');
+      this.rollbackTransaction();
       throw err;
     }
   }
@@ -2055,7 +2148,7 @@ export class LocalOperationalStore {
     reason?: string;
     originNode?: OriginNode;
   }): { separatedTable: DiningTableQr; primaryTab: Tab; separatedTab: Tab | null } {
-    this.db.exec('BEGIN IMMEDIATE TRANSACTION');
+    this.beginTransaction();
     try {
       const secTable = this.getDiningTableByNumber(input.tableNumberToSeparate);
       if (!secTable || !secTable.primaryTableNumber || !secTable.activeTabId) {
@@ -2164,7 +2257,7 @@ export class LocalOperationalStore {
         }
       });
 
-      this.db.exec('COMMIT');
+      this.commitTransaction();
 
       return {
         separatedTable: this.getDiningTableByNumber(input.tableNumberToSeparate)!,
@@ -2172,7 +2265,7 @@ export class LocalOperationalStore {
         separatedTab
       };
     } catch (err) {
-      this.db.exec('ROLLBACK');
+      this.rollbackTransaction();
       throw err;
     }
   }
@@ -2510,7 +2603,7 @@ export class LocalOperationalStore {
       version: 1
     };
 
-    this.db.exec('BEGIN IMMEDIATE TRANSACTION');
+    this.beginTransaction();
     try {
       this.db
         .prepare(`
@@ -2598,7 +2691,7 @@ export class LocalOperationalStore {
         payload: order
       });
 
-      this.db.exec('COMMIT');
+      this.commitTransaction();
 
       this.createNotification({
         eventType: 'ORDER_CREATED',
@@ -2620,7 +2713,7 @@ export class LocalOperationalStore {
         idempotentReplay: false
       };
     } catch (err) {
-      this.db.exec('ROLLBACK');
+      this.rollbackTransaction();
       throw err;
     }
   }
@@ -2644,7 +2737,7 @@ export class LocalOperationalStore {
       throw new Error('Informe o motivo da transferência do item (mínimo 3 caracteres).');
     }
 
-    this.db.exec('BEGIN IMMEDIATE TRANSACTION');
+    this.beginTransaction();
     try {
       const itemRow = this.db
         .prepare('SELECT * FROM order_items WHERE id = ?')
@@ -2823,7 +2916,7 @@ export class LocalOperationalStore {
         }
       });
 
-      this.db.exec('COMMIT');
+      this.commitTransaction();
 
       this.createNotification({
         eventType: 'TAB_ITEM_TRANSFERRED',
@@ -2839,7 +2932,7 @@ export class LocalOperationalStore {
         transferredItem
       };
     } catch (err) {
-      this.db.exec('ROLLBACK');
+      this.rollbackTransaction();
       throw err;
     }
   }
@@ -3189,7 +3282,7 @@ export class LocalOperationalStore {
       }
     }
 
-    this.db.exec('BEGIN IMMEDIATE TRANSACTION');
+    this.beginTransaction();
     try {
       const prepStartedAt =
         input.newStatus === 'IN_PREPARATION'
@@ -3348,7 +3441,7 @@ export class LocalOperationalStore {
         payload: updated
       });
 
-      this.db.exec('COMMIT');
+      this.commitTransaction();
 
       if (input.newStatus === 'READY' && existing.status !== 'READY') {
         this.createNotification({
@@ -3376,7 +3469,7 @@ export class LocalOperationalStore {
 
       return updated;
     } catch (err) {
-      this.db.exec('ROLLBACK');
+      this.rollbackTransaction();
       throw err;
     }
   }
@@ -3407,7 +3500,7 @@ export class LocalOperationalStore {
       throw new Error('Informe obrigatoriamente o motivo do desconto ou cortesia.');
     }
 
-    this.db.exec('BEGIN IMMEDIATE TRANSACTION');
+    this.beginTransaction();
     try {
       const tab = this.getTabById(input.tabId);
       if (!tab) throw new Error(`Comanda '${input.tabId}' não encontrada.`);
@@ -3471,10 +3564,10 @@ export class LocalOperationalStore {
         }
       });
 
-      this.db.exec('COMMIT');
+      this.commitTransaction();
       return updatedTab;
     } catch (err) {
-      this.db.exec('ROLLBACK');
+      this.rollbackTransaction();
       throw err;
     }
   }
@@ -3486,7 +3579,7 @@ export class LocalOperationalStore {
     actorUserId: string;
     originNode?: OriginNode;
   }): Tab {
-    this.db.exec('BEGIN IMMEDIATE TRANSACTION');
+    this.beginTransaction();
     try {
       const tab = this.getTabById(input.tabId);
       if (!tab) throw new Error(`Comanda '${input.tabId}' não encontrada.`);
@@ -3528,10 +3621,10 @@ export class LocalOperationalStore {
         }
       });
 
-      this.db.exec('COMMIT');
+      this.commitTransaction();
       return updatedTab;
     } catch (err) {
-      this.db.exec('ROLLBACK');
+      this.rollbackTransaction();
       throw err;
     }
   }
@@ -3664,18 +3757,20 @@ export class LocalOperationalStore {
     operatorUserId?: string;
     originNode?: OriginNode;
   }): { payment: Payment; tab: Tab; printJob: PrintJob; idempotentReplay: boolean } {
+    if (!Number.isSafeInteger(input.amountCents) || input.amountCents <= 0) throw new Error('Pagamento deve ser positivo em centavos inteiros seguros.');
     const existingRow = this.db
       .prepare('SELECT * FROM payments WHERE idempotency_key = ?')
       .get(input.idempotencyKey) as Record<string, unknown> | undefined;
 
     if (existingRow) {
       const payment = this.mapPaymentRow(existingRow);
+      if (payment.tabId !== input.tabId || payment.method !== input.method || payment.amountCents !== input.amountCents) throw new Error("Chave de idempotência reutilizada com dados diferentes.");
       const tab = this.getTabById(payment.tabId)!;
       const printJob = this.getPrintJobsByReference('PAYMENT', payment.id)[0]!;
       return { payment, tab, printJob, idempotentReplay: true };
     }
 
-    this.db.exec('BEGIN IMMEDIATE TRANSACTION');
+    this.beginTransaction();
     try {
       const tab = this.getTabById(input.tabId);
       if (!tab) {
@@ -3721,6 +3816,8 @@ export class LocalOperationalStore {
           if (!itemRow) {
             throw new Error(`Item '${alloc.orderItemId}' não encontrado para alocação de pagamento.`);
           }
+          const owner = this.db.prepare('SELECT tab_id FROM orders WHERE id = ?').get(String(itemRow.order_id)) as {tab_id: string};
+          if (owner.tab_id !== tab.id) throw new Error('Item pertence a outra comanda.');
           const totalQty = Number(itemRow.quantity);
           const paidQty = Number(itemRow.paid_quantity ?? 0);
           const remainingQty = Number((totalQty - paidQty).toFixed(4));
@@ -3806,6 +3903,9 @@ export class LocalOperationalStore {
           payment.createdAt
         );
 
+      if (payment.method !== 'ROOM_CHARGE') {
+        this.recordLedgerMovement({accountId: this.paymentAccount(payment.method), amountCents: payment.amountCents, type:'INCOME', method:payment.method, referenceType:'POS_SALE', referenceId:payment.id, center: tab.type === 'HOTEL_FOLIO' ? 'HOTEL' : 'REST', actor:payment.operatorUserId, description:'Recebimento '+tab.code});
+      }
       const updatedTab = this.recalculateTabInTx(tab.id, input.originNode ?? 'WINDOWS_PDV');
 
       const receiptJob: PrintJob = {
@@ -3867,7 +3967,7 @@ export class LocalOperationalStore {
         payload: payment
       });
 
-      this.db.exec('COMMIT');
+      this.commitTransaction();
 
       this.createNotification({
         eventType: 'PAYMENT_CONFIRMED',
@@ -3879,7 +3979,7 @@ export class LocalOperationalStore {
 
       return { payment, tab: updatedTab, printJob: receiptJob, idempotentReplay: false };
     } catch (err) {
-      this.db.exec('ROLLBACK');
+      this.rollbackTransaction();
       throw err;
     }
   }
@@ -3909,7 +4009,7 @@ export class LocalOperationalStore {
       throw new Error('Informe obrigatoriamente o motivo do estorno do pagamento.');
     }
 
-    this.db.exec('BEGIN IMMEDIATE TRANSACTION');
+    this.beginTransaction();
     try {
       const row = this.db
         .prepare('SELECT * FROM payments WHERE id = ?')
@@ -3925,6 +4025,8 @@ export class LocalOperationalStore {
       }
 
       const now = new Date().toISOString();
+      const originalTx = this.db.prepare("SELECT * FROM financial_transactions WHERE reference_type = 'POS_SALE' AND reference_id = ? AND type = 'INCOME'").get(existingPayment.id) as Record<string, unknown> | undefined;
+      if (originalTx) this.recordLedgerMovement({accountId:String(originalTx.financial_account_id), amountCents:existingPayment.amountCents,type:'EXPENSE',method:existingPayment.method,referenceType:'POS_SALE',referenceId:existingPayment.id,center:String(originalTx.cost_center_id),actor:input.actorUserId,description:'Estorno: '+input.reason});
       this.db
         .prepare(`
           UPDATE payments
@@ -3971,7 +4073,7 @@ export class LocalOperationalStore {
         }
       });
 
-      this.db.exec('COMMIT');
+      this.commitTransaction();
 
       this.createNotification({
         eventType: 'PAYMENT_REFUNDED',
@@ -3983,7 +4085,7 @@ export class LocalOperationalStore {
 
       return { payment: updatedPayment, tab: updatedTab };
     } catch (err) {
-      this.db.exec('ROLLBACK');
+      this.rollbackTransaction();
       throw err;
     }
   }
@@ -4003,7 +4105,7 @@ export class LocalOperationalStore {
   }): { tab: Tab; releasedTables: DiningTableQr[] } {
     const releaseStatus = input.releaseStatus ?? 'LIVRE';
 
-    this.db.exec('BEGIN IMMEDIATE TRANSACTION');
+    this.beginTransaction();
     try {
       const tab = this.recalculateTabInTx(input.tabId, input.originNode ?? 'WINDOWS_PDV');
       if (!tab) {
@@ -4098,7 +4200,7 @@ export class LocalOperationalStore {
         payload: closedTab
       });
 
-      this.db.exec('COMMIT');
+      this.commitTransaction();
 
       this.createNotification({
         eventType: 'TAB_CLOSED',
@@ -4110,7 +4212,7 @@ export class LocalOperationalStore {
 
       return { tab: closedTab, releasedTables };
     } catch (err) {
-      this.db.exec('ROLLBACK');
+      this.rollbackTransaction();
       throw err;
     }
   }
@@ -4211,7 +4313,7 @@ export class LocalOperationalStore {
     openedByUserId: string;
     notes?: string;
   }): CashRegisterSession {
-    this.db.exec('BEGIN IMMEDIATE TRANSACTION');
+    this.beginTransaction();
     try {
       const existingOpen = this.db
         .prepare("SELECT * FROM cash_register_sessions WHERE status = 'OPEN' LIMIT 1")
@@ -4272,10 +4374,10 @@ export class LocalOperationalStore {
         }
       });
 
-      this.db.exec('COMMIT');
+      this.commitTransaction();
       return this.getCashRegisterSessionById(id)!;
     } catch (err) {
-      this.db.exec('ROLLBACK');
+      this.rollbackTransaction();
       throw err;
     }
   }
@@ -4295,7 +4397,7 @@ export class LocalOperationalStore {
       throw new Error('Informe o motivo da movimentação de caixa (sangria/suprimento).');
     }
 
-    this.db.exec('BEGIN IMMEDIATE TRANSACTION');
+    this.beginTransaction();
     try {
       const sessionRow = input.sessionId
         ? (this.db
@@ -4331,6 +4433,9 @@ export class LocalOperationalStore {
           now
         );
 
+      const inflow=['SUPRIMENTO','MANUAL_INFLOW'].includes(input.movementType);
+      this.recordLedgerMovement({accountId:'acc-caixa-geral',amountCents:input.amountCents,type:inflow?'INTERNAL_TRANSFER_IN':'INTERNAL_TRANSFER_OUT',method:'CASH',referenceType:'MANUAL',referenceId:id,center:'ADMIN',actor:input.createdByUserId,description:'Movimentação de caixa: '+input.reason});
+      if (input.movementType === 'SANGRIA') this.recordLedgerMovement({accountId:'acc-cofre-sede',amountCents:input.amountCents,type:'INTERNAL_TRANSFER_IN',method:'CASH',referenceType:'MANUAL',referenceId:id,center:'ADMIN',actor:input.createdByUserId,description:'Custódia da sangria: '+input.reason});
       this.recordAuditLog({
         actorUserId: input.createdByUserId,
         action: `CASH_MOVEMENT_${input.movementType}`,
@@ -4344,7 +4449,7 @@ export class LocalOperationalStore {
         }
       });
 
-      this.db.exec('COMMIT');
+      this.commitTransaction();
 
       const session = this.getCashRegisterSessionById(sessionId)!;
       const movement: CashRegisterMovement = {
@@ -4367,7 +4472,7 @@ export class LocalOperationalStore {
 
       return { movement, session };
     } catch (err) {
-      this.db.exec('ROLLBACK');
+      this.rollbackTransaction();
       throw err;
     }
   }
@@ -4378,7 +4483,7 @@ export class LocalOperationalStore {
     closedByUserId: string;
     notes?: string;
   }): CashRegisterSession {
-    this.db.exec('BEGIN IMMEDIATE TRANSACTION');
+    this.beginTransaction();
     try {
       const sessionRow = input.sessionId
         ? (this.db
@@ -4434,10 +4539,10 @@ export class LocalOperationalStore {
         }
       });
 
-      this.db.exec('COMMIT');
+      this.commitTransaction();
       return this.getCashRegisterSessionById(sessionId)!;
     } catch (err) {
-      this.db.exec('ROLLBACK');
+      this.rollbackTransaction();
       throw err;
     }
   }
@@ -4817,7 +4922,7 @@ export class LocalOperationalStore {
     const now = new Date().toISOString();
     const idemKey = input.idempotencyKey ?? `manual-stock-${crypto.randomUUID()}`;
 
-    this.db.exec('BEGIN IMMEDIATE TRANSACTION');
+    this.beginTransaction();
     try {
       const mov = this.recordStockDeltaInTx({
         idempotencyKey: idemKey,
@@ -4849,10 +4954,10 @@ export class LocalOperationalStore {
         payload: mov
       });
 
-      this.db.exec('COMMIT');
+      this.commitTransaction();
       return { movement: mov, idempotentReplay: false };
     } catch (err) {
-      this.db.exec('ROLLBACK');
+      this.rollbackTransaction();
       throw err;
     }
   }
@@ -4876,7 +4981,7 @@ export class LocalOperationalStore {
     const original = this.mapStockMovementRow(row);
     const now = new Date().toISOString();
 
-    this.db.exec('BEGIN IMMEDIATE TRANSACTION');
+    this.beginTransaction();
     try {
       const reversal = this.recordStockDeltaInTx({
         idempotencyKey: `reversal-mov-${original.id}`,
@@ -4896,10 +5001,10 @@ export class LocalOperationalStore {
         .prepare('UPDATE stock_movements SET reversed_by_movement_id = ? WHERE id = ?')
         .run(reversal.id, original.id);
 
-      this.db.exec('COMMIT');
+      this.commitTransaction();
       return reversal;
     } catch (err) {
-      this.db.exec('ROLLBACK');
+      this.rollbackTransaction();
       throw err;
     }
   }
@@ -5560,6 +5665,8 @@ export class LocalOperationalStore {
       };
     }
 
+    const stays=this.listHotelStays({roomNumber,status:'ACTIVE'});
+    if (stays.some(stay=>areDateIntervalsOverlapping(checkInDate,checkOutDate,stay.checkInAt.slice(0,10),stay.checkOutScheduledAt.slice(0,10)))) return {available:false,conflictReason:'Conflito com hospedagem ativa.'};
     return { available: true };
   }
 
@@ -5579,6 +5686,7 @@ export class LocalOperationalStore {
     notes?: string;
     operatorUserId: string;
   }): HotelReservation {
+    return this.atomic(() => {
     const room = this.getHotelRoomByNumber(input.roomNumber);
     if (!room) {
       throw new Error(`Apartamento ${input.roomNumber} não encontrado.`);
@@ -5655,6 +5763,8 @@ export class LocalOperationalStore {
     });
 
     return created;
+
+    });
   }
 
   public cancelHotelReservation(
@@ -5715,6 +5825,7 @@ export class LocalOperationalStore {
       operatorUserId: string;
     }
   ): HotelReservation {
+    return this.atomic(() => {
     const existing = this.getHotelReservationById(id);
     if (!existing) {
       throw new Error(`Reserva '${id}' não encontrada.`);
@@ -5771,6 +5882,8 @@ export class LocalOperationalStore {
     });
 
     return updated;
+
+    });
   }
 
   // ============================================================================
@@ -5861,6 +5974,7 @@ export class LocalOperationalStore {
     operatorUserId: string;
     operatorName: string;
   }): { stay: HotelStay; room: HotelRoom; folioTab: Tab; firstFolioEntry: HotelFolioEntry } {
+    return this.atomic(() => {
     const room = this.getHotelRoomByNumber(input.roomNumber);
     if (!room) {
       throw new Error(`Apartamento ${input.roomNumber} não cadastrado.`);
@@ -5883,6 +5997,9 @@ export class LocalOperationalStore {
       throw new Error(`Hóspede '${input.guestId}' não encontrado.`);
     }
 
+    if (room.housekeepingStatus !== 'LIMPO' || room.occupancyStatus === 'BLOQUEADO') throw new Error('Quarto bloqueado ou aguardando liberação da limpeza.');
+    const availability = this.checkRoomAvailability(input.roomNumber, (input.checkInAt ?? new Date().toISOString()).slice(0,10), input.checkOutScheduledAt.slice(0,10), input.reservationId);
+    if (!availability.available) throw new Error(availability.conflictReason);
     const now = new Date().toISOString();
     const checkInTime = input.checkInAt || now;
     const nights = calculateNightsCount(checkInTime, input.checkOutScheduledAt);
@@ -6004,6 +6121,8 @@ export class LocalOperationalStore {
     });
 
     return { stay, room: updatedRoom, folioTab, firstFolioEntry };
+
+    });
   }
 
   // Método legado compatível para check-in rápido
@@ -6038,6 +6157,7 @@ export class LocalOperationalStore {
       allowOverrideWithAudit?: boolean;
     }
   ): { stay: HotelStay; room: HotelRoom; folioTab: Tab; balanceCents: number } {
+    return this.atomic(() => {
     const stay = this.getHotelStayById(stayId);
     if (!stay) {
       throw new Error(`Estadia '${stayId}' não encontrada.`);
@@ -6056,6 +6176,10 @@ export class LocalOperationalStore {
       );
     }
 
+    if (totals.balanceCents !== 0) {
+      const actor = this.db.prepare('SELECT role FROM users WHERE id = ? AND active = 1').get(input.operatorUserId) as {role: string} | undefined;
+      if (!['OWNER','MANAGER'].includes(actor?.role ?? '') || (input.notes?.trim().length ?? 0) < 10) throw new Error('Saída com dívida exige gerente e justificativa de pelo menos 10 caracteres.');
+    }
     const now = new Date().toISOString();
 
     // Encerra estadia
@@ -6135,10 +6259,12 @@ export class LocalOperationalStore {
       action: 'HOTEL_CHECKOUT',
       entityType: 'HOTEL_STAY',
       entityId: stay.id,
-      metadata: { stayCode: stay.stayCode, roomNumber: stay.roomNumber, balanceCents: totals.balanceCents }
+      metadata: { stayCode: stay.stayCode, roomNumber: stay.roomNumber, balanceCents: totals.balanceCents, reason: input.notes?.trim() ?? null }
     });
 
     return { stay: updatedStay, room: updatedRoom, folioTab: updatedTab, balanceCents: totals.balanceCents };
+
+    });
   }
 
   // ============================================================================
@@ -6177,14 +6303,30 @@ export class LocalOperationalStore {
     sourceReferenceType?: string;
     sourceReferenceId?: string;
     sourceDetailsJson?: string;
+    paymentMethod?: PaymentMethod;
+    idempotencyKey?: string;
     operatorUserId: string;
     operatorName: string;
   }): HotelFolioEntry {
+    return this.atomic(() => {
+    if (input.idempotencyKey) {
+      const prior = this.db.prepare("SELECT * FROM hotel_folio_entries WHERE source_reference_type = 'FOLIO_PAYMENT' AND source_reference_id = ?").get(input.idempotencyKey) as Record<string, unknown> | undefined;
+      if (prior) { if (String(prior.stay_id) !== input.stayId || Number(prior.amount_cents) !== input.amountCents) throw new Error('Chave de folio reutilizada com dados diferentes.'); return this.mapHotelFolioEntryRow(prior); }
+      input = {...input,sourceReferenceType:'FOLIO_PAYMENT',sourceReferenceId:input.idempotencyKey};
+    }
     const stay = this.getHotelStayById(input.stayId);
     if (!stay) {
       throw new Error(`Estadia '${input.stayId}' não encontrada.`);
     }
 
+    if (stay.status !== 'ACTIVE') throw new Error('Hospedagem encerrada não pode receber lançamentos.');
+    if (!Number.isSafeInteger(input.amountCents) || (input.amountCents === 0 && input.entryType !== 'ROOM_RATE')) throw new Error('Lançamento deve usar centavos inteiros não nulos.');
+    if (['PAYMENT','DISCOUNT','REVERSAL'].includes(input.entryType) && input.amountCents >= 0) throw new Error('Créditos do folio devem ser negativos.');
+    if (!['PAYMENT','DISCOUNT','REVERSAL','ADJUSTMENT'].includes(input.entryType) && input.amountCents < 0) throw new Error('Débitos do folio devem ser positivos.');
+    if (input.entryType === 'PAYMENT') {
+      const balance = calculateStayFolioTotals(this.listFolioEntriesByStayId(stay.id)).balanceCents;
+      if (-input.amountCents > balance) throw new Error('Pagamento excede o saldo do folio.');
+    }
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
     const staff = this.db.prepare('SELECT name FROM users WHERE id = ?').get(input.operatorUserId) as { name?: string } | undefined;
@@ -6238,7 +6380,14 @@ export class LocalOperationalStore {
       payload: entry
     });
 
+    if (input.entryType === 'PAYMENT') {
+      const method = input.paymentMethod ?? 'CASH';
+      if (method === 'ROOM_CHARGE') throw new Error('Transferência para quarto não é recebimento do folio.');
+      this.recordLedgerMovement({accountId:this.paymentAccount(method),amountCents:-input.amountCents,type:'INCOME',method,referenceType:'MANUAL',referenceId:id,center:'HOTEL',actor:input.operatorUserId,description:input.description,category:'cat-rec-hotel-diarias'});
+    }
     return entry;
+
+    });
   }
 
   // Seção 10: Integração Restaurante -> Folio do Quarto
@@ -6248,6 +6397,7 @@ export class LocalOperationalStore {
     operatorUserId: string;
     operatorName: string;
   }): { folioEntry: HotelFolioEntry; restaurantTab: Tab; payment: Payment } {
+    return this.atomic(() => {
     const tab = this.getTabById(input.restaurantTabId);
     if (!tab) {
       throw new Error(`Comanda '${input.restaurantTabId}' não encontrada.`);
@@ -6337,6 +6487,8 @@ export class LocalOperationalStore {
     });
 
     return { folioEntry, restaurantTab: updatedTab, payment };
+
+    });
   }
 
   // ============================================================================
@@ -6394,6 +6546,7 @@ export class LocalOperationalStore {
     operatorUserId: string;
     operatorName: string;
   }): { consumption: HotelMinibarConsumption; folioEntry: HotelFolioEntry } {
+    return this.atomic(() => {
     const stay = this.getHotelStayById(input.stayId);
     if (!stay) {
       throw new Error(`Estadia '${input.stayId}' não encontrada.`);
@@ -6463,6 +6616,8 @@ export class LocalOperationalStore {
     };
 
     return { consumption, folioEntry };
+
+    });
   }
 
   public restockMinibarItem(input: {
@@ -6536,6 +6691,7 @@ export class LocalOperationalStore {
     operatorUserId: string;
     operatorName: string;
   }): { order: HotelServiceOrder; folioEntry: HotelFolioEntry } {
+    return this.atomic(() => {
     const stay = this.getHotelStayById(input.stayId);
     if (!stay) {
       throw new Error(`Estadia '${input.stayId}' não encontrada.`);
@@ -6596,6 +6752,8 @@ export class LocalOperationalStore {
     };
 
     return { order, folioEntry };
+
+    });
   }
 
   // ============================================================================
@@ -7025,6 +7183,7 @@ export class LocalOperationalStore {
   }
 
   public applyRemoteSyncEvent(event: SyncOutboxEvent): { applied: boolean; duplicate: boolean } {
+    if (crypto.createHash('sha256').update(event.payloadJson).digest('hex') !== event.checksumSha256) throw new Error('Checksum remoto inválido.');
     const alreadyApplied = this.db
       .prepare('SELECT idempotency_key FROM sync_inbox_applied WHERE idempotency_key = ?')
       .get(event.idempotencyKey) as { idempotency_key?: string } | undefined;
@@ -7347,8 +7506,8 @@ export class LocalOperationalStore {
       .get(sessionId) as { total: number };
     const sangriasCents = Number(outflowRow.total ?? 0);
 
-    const expectedCashCents =
-      openingBalanceCents + cashSalesNetCents + suprimentosCents - sangriasCents;
+    const extra = this.db.prepare("SELECT COALESCE(SUM(CASE WHEN type IN ('INCOME','INTERNAL_TRANSFER_IN') THEN amount_cents ELSE -amount_cents END),0) AS total FROM financial_transactions WHERE financial_account_id='acc-caixa-geral' AND reference_type != 'POS_SALE' AND reference_id NOT IN (SELECT id FROM cash_register_movements) AND created_at >= ? AND created_at <= ?").get(String(r.opened_at),r.closed_at ? String(r.closed_at) : new Date().toISOString()) as {total:number};
+    const expectedCashCents = openingBalanceCents + cashSalesNetCents + suprimentosCents - sangriasCents + extra.total;
 
     return {
       id: sessionId,
@@ -7687,6 +7846,7 @@ export class LocalOperationalStore {
     waiterId?: string;
     courierId?: string;
   }): { deliveryOrder: DeliveryOrder; baseOrder: Order } {
+    return this.atomic(() => {
     const now = new Date().toISOString();
 
     let customer: DeliveryCustomer;
@@ -7818,6 +7978,8 @@ export class LocalOperationalStore {
 
     const deliveryOrder = this.getDeliveryOrderById(deliveryOrderId)!;
     return { deliveryOrder, baseOrder };
+
+    });
   }
 
   public updateDeliveryOrderStatus(
@@ -7826,9 +7988,12 @@ export class LocalOperationalStore {
     actorUserId: string,
     reason?: string
   ): DeliveryOrder {
+    return this.atomic(() => {
     const order = this.getDeliveryOrderById(deliveryOrderId);
     if (!order) throw new Error(`Pedido delivery '${deliveryOrderId}' não encontrado.`);
 
+    if (newStatus === order.status) return order;
+    if (['ENTREGUE','CANCELADO'].includes(order.status)) throw new Error('Pedido encerrado; use um estorno financeiro explícito.');
     const now = new Date().toISOString();
     let dispatchedAt = order.dispatchedAt;
     let deliveredAt = order.deliveredAt;
@@ -7849,7 +8014,7 @@ export class LocalOperationalStore {
       if (receivable) {
         this.payAccountReceivable(receivable.id!, {
           amountCents: order.totalCents,
-          financialAccountId: 'acc-caixa-geral',
+          financialAccountId: order.paymentMethodDeclared === 'CASH' && order.courierId ? 'acc-carteira-motoboys' : this.paymentAccount(order.paymentMethodDeclared),
           paymentMethod: order.paymentMethodDeclared,
           actorUserId,
           settlementDate: now.slice(0, 10),
@@ -7900,11 +8065,18 @@ export class LocalOperationalStore {
     );
 
     return this.getDeliveryOrderById(deliveryOrderId)!;
+
+    });
   }
 
   public dispatchDeliveryOrder(deliveryOrderId: string, courierId: string, actorUserId: string): DeliveryOrder {
+    return this.atomic(() => {
     const courier = this.getDeliveryCourierById(courierId);
     if (!courier) throw new Error(`Entregador '${courierId}' não encontrado.`);
+    const order=this.getDeliveryOrderById(deliveryOrderId);
+    if (!order || ['ENTREGUE','CANCELADO'].includes(order.status)) throw new Error('Pedido não pode ser despachado.');
+    if (order.courierId === courierId && order.status === 'SAIU_PARA_ENTREGA') return order;
+    if (!courier.active || courier.status !== 'DISPONIVEL') throw new Error('Entregador indisponível.');
     const now = new Date().toISOString();
     this.db.prepare(`
       UPDATE delivery_orders
@@ -7913,6 +8085,8 @@ export class LocalOperationalStore {
     `).run(courier.id, courier.name, courier.feePerDeliveryCents, now, now, deliveryOrderId);
     this.updateDeliveryCourierStatus(courier.id, 'EM_ENTREGA');
     return this.getDeliveryOrderById(deliveryOrderId)!;
+
+    });
   }
 
   public settleCourierDeliveries(params: {
@@ -7923,18 +8097,20 @@ export class LocalOperationalStore {
     shiftId?: string;
     notes?: string;
   }): DeliverySettlement {
+    return this.atomic(() => {
     const courier = this.getDeliveryCourierById(params.courierId);
     if (!courier) throw new Error(`Entregador '${params.courierId}' não encontrado.`);
     const account = this.getFinancialAccountById(params.financialAccountId);
     if (!account) throw new Error(`Conta financeira '${params.financialAccountId}' não encontrada.`);
 
+    if (!params.deliveryOrderIds.length || new Set(params.deliveryOrderIds).size !== params.deliveryOrderIds.length) throw new Error('Informe pedidos únicos para o acerto.');
     const orders: DeliveryOrder[] = [];
     let totalCashCollectedCents = 0;
     let totalCourierFeesCents = 0;
 
     for (const orderId of params.deliveryOrderIds) {
       const o = this.getDeliveryOrderById(orderId);
-      if (!o) continue;
+      if (!o || o.courierId !== params.courierId || o.status !== 'ENTREGUE' || o.settlementId) throw new Error('Pedido inválido, de outro entregador, não entregue ou já acertado.');
       orders.push(o);
       if (o.paymentMethodDeclared === 'CASH') {
         totalCashCollectedCents += o.totalCents;
@@ -7973,40 +8149,17 @@ export class LocalOperationalStore {
       this.db.prepare('UPDATE delivery_orders SET settlement_id = ?, updated_at = ? WHERE id = ?').run(settlementId, now, orderId);
     }
 
-    if (netAmountSettledCents !== 0) {
-      const txId = `tx-${crypto.randomUUID().slice(0, 8)}`;
-      const txType: FinancialTransactionType = netAmountSettledCents > 0 ? 'INCOME' : 'EXPENSE';
-      const amountAbs = Math.abs(netAmountSettledCents);
-
-      this.db.prepare(`
-        INSERT INTO financial_transactions (
-          id, financial_account_id, type, category_id, cost_center_id,
-          amount_cents, payment_method, reference_type, reference_id,
-          description, accrual_date, settlement_date, registered_by_staff_id, created_at
-        ) VALUES (?, ?, ?, 'cat-rec-deliv', 'DELIV', ?, 'CASH', 'DELIVERY_SETTLEMENT', ?, ?, ?, ?, ?, ?)
-      `).run(
-        txId,
-        account.id,
-        txType,
-        amountAbs,
-        settlementId,
-        `Prestação de contas entregador ${courier.name} (${orders.length} entregas)`,
-        now.slice(0, 10),
-        now.slice(0, 10),
-        params.actorUserId,
-        now
-      );
-
-      this.db.prepare(`
-        UPDATE financial_accounts
-        SET current_balance_cents = current_balance_cents + ?, updated_at = ?
-        WHERE id = ?
-      `).run(netAmountSettledCents, now, account.id);
+    if (totalCashCollectedCents > 0) {
+      this.recordLedgerMovement({accountId:'acc-carteira-motoboys',amountCents:totalCashCollectedCents,type:'INTERNAL_TRANSFER_OUT',method:'CASH',referenceType:'DELIVERY_SETTLEMENT',referenceId:settlementId,center:'DELIV',actor:params.actorUserId,description:'Entrega de custódia '+courier.name,category:'cat-rec-deliv'});
+      this.recordLedgerMovement({accountId:account.id,amountCents:totalCashCollectedCents,type:'INTERNAL_TRANSFER_IN',method:'CASH',referenceType:'DELIVERY_SETTLEMENT',referenceId:settlementId,center:'DELIV',actor:params.actorUserId,description:'Recebimento de custódia '+courier.name,category:'cat-rec-deliv'});
     }
+    if (totalCourierFeesCents > 0) this.recordLedgerMovement({accountId:account.id,amountCents:totalCourierFeesCents,type:'EXPENSE',method:'CASH',referenceType:'DELIVERY_SETTLEMENT',referenceId:settlementId,center:'DELIV',actor:params.actorUserId,description:'Remuneração entregador '+courier.name,category:'cat-custo-entregas'});
 
     this.updateDeliveryCourierStatus(courier.id, 'DISPONIVEL');
     const settlementRow = this.db.prepare('SELECT * FROM delivery_settlements WHERE id = ?').get(settlementId) as Record<string, unknown>;
     return this.mapDeliverySettlementRow(settlementRow);
+
+    });
   }
 
   public listDeliverySettlements(courierId?: string): DeliverySettlement[] {
@@ -8223,8 +8376,11 @@ export class LocalOperationalStore {
       notes?: string;
     }
   ): { accountReceivable: AccountsReceivable; transaction: FinancialTransaction } {
+    return this.atomic(() => {
     const ar = this.getAccountReceivableById(id);
     if (!ar) throw new Error(`Conta a receber '${id}' não encontrada.`);
+    if (ar.status === 'CANCELED') throw new Error('Conta a receber cancelada.');
+    if (!Number.isSafeInteger(params.amountCents) || params.amountCents > ar.remainingAmountCents) throw new Error('Valor excede o saldo a receber ou não é inteiro.');
     if (ar.status === 'PAID') throw new Error(`Conta a receber '${id}' já está totalmente quitada.`);
     if (params.amountCents <= 0) throw new Error('Valor de pagamento deve ser positivo.');
 
@@ -8274,6 +8430,8 @@ export class LocalOperationalStore {
     const updatedAr = this.getAccountReceivableById(id)!;
     const txRow = this.db.prepare('SELECT * FROM financial_transactions WHERE id = ?').get(txId) as Record<string, unknown>;
     return { accountReceivable: updatedAr, transaction: this.mapFinancialTransactionRow(txRow) };
+
+    });
   }
 
   public listAccountsPayable(filters?: {
@@ -8361,11 +8519,13 @@ export class LocalOperationalStore {
       notes?: string;
     }
   ): { accountPayable: AccountsPayable; transaction: FinancialTransaction } {
+    return this.atomic(() => {
     const ap = this.getAccountPayableById(id);
     if (!ap) throw new Error(`Conta a pagar '${id}' não encontrada.`);
     if (ap.status === 'PAID') throw new Error(`Conta a pagar '${id}' já está totalmente quitada.`);
     if (params.amountCents <= 0) throw new Error('Valor de pagamento deve ser positivo.');
 
+    if (ap.status === 'CANCELED' || !Number.isSafeInteger(params.amountCents) || params.amountCents <= 0 || params.amountCents > ap.remainingAmountCents) throw new Error('Pagamento inválido para o saldo a pagar.');
     const account = this.getFinancialAccountById(params.financialAccountId);
     if (!account) throw new Error(`Conta financeira '${params.financialAccountId}' não encontrada.`);
 
@@ -8412,6 +8572,8 @@ export class LocalOperationalStore {
     const updatedAp = this.getAccountPayableById(id)!;
     const txRow = this.db.prepare('SELECT * FROM financial_transactions WHERE id = ?').get(txId) as Record<string, unknown>;
     return { accountPayable: updatedAp, transaction: this.mapFinancialTransactionRow(txRow) };
+
+    });
   }
 
   public listFinancialTransactions(filters?: {
@@ -8450,6 +8612,7 @@ export class LocalOperationalStore {
     reason: string;
     actorUserId: string;
   }): { transfer: FinancialTransfer; debitTransaction: FinancialTransaction; creditTransaction: FinancialTransaction } {
+    return this.atomic(() => {
     if (params.fromAccountId === params.toAccountId) {
       throw new Error('A conta de origem e destino devem ser diferentes.');
     }
@@ -8517,6 +8680,8 @@ export class LocalOperationalStore {
       debitTransaction: this.mapFinancialTransactionRow(debitRow),
       creditTransaction: this.mapFinancialTransactionRow(creditRow)
     };
+
+    });
   }
 
   public listFinancialTransfers(): FinancialTransfer[] {
@@ -8653,6 +8818,7 @@ export class LocalOperationalStore {
     adjustBalance?: boolean;
     notes?: string;
   }): AccountReconciliation {
+    return this.atomic(() => {
     const account = this.getFinancialAccountById(params.financialAccountId);
     if (!account) throw new Error(`Conta financeira '${params.financialAccountId}' não encontrada.`);
 
@@ -8717,6 +8883,8 @@ export class LocalOperationalStore {
 
     const row = this.db.prepare('SELECT * FROM account_reconciliations WHERE id = ?').get(recId) as Record<string, unknown>;
     return this.mapAccountReconciliationRow(row);
+
+    });
   }
 
   public listAccountReconciliations(financialAccountId?: string): AccountReconciliation[] {
@@ -8735,166 +8903,65 @@ export class LocalOperationalStore {
   // ETAPA 6: DRE GERENCIAL, FLUXO DE CAIXA E RELATÓRIOS
   // ============================================================================
 
-  public generateDreStatement(params: {
-    startDate: string;
-    endDate: string;
-    costCenterId?: string | null;
-  }): DreStatement {
-    const startDay = params.startDate.slice(0, 10);
-    const endDay = params.endDate.slice(0, 10);
-
-    let restGrossRevenue = 0;
-    let deductionsCents = 0;
-
-    const tabSql = `
-      SELECT subtotal_cents, service_fee_cents, discount_cents, total_cents
-      FROM tabs
-      WHERE date(COALESCE(closed_at, opened_at)) >= ? AND date(COALESCE(closed_at, opened_at)) <= ? AND status = 'CLOSED'
-    `;
-    const tabs = this.db.prepare(tabSql).all(startDay, endDay) as Array<{
-      subtotal_cents: number;
-      service_fee_cents: number;
-      discount_cents: number;
-      total_cents: number;
-    }>;
-    for (const t of tabs) {
-      restGrossRevenue += (t.subtotal_cents + t.service_fee_cents);
-      deductionsCents += t.discount_cents;
-    }
-
-    let deliveryGrossRevenue = 0;
-    const delivOrders = this.db.prepare(`
-      SELECT items_subtotal_cents, delivery_fee_cents, discount_cents, total_cents
-      FROM delivery_orders
-      WHERE date(created_at) >= ? AND date(created_at) <= ? AND status = 'ENTREGUE'
-    `).all(startDay, endDay) as Array<{
-      items_subtotal_cents: number;
-      delivery_fee_cents: number;
-      discount_cents: number;
-      total_cents: number;
-    }>;
-    for (const d of delivOrders) {
-      deliveryGrossRevenue += (d.items_subtotal_cents + d.delivery_fee_cents);
-      deductionsCents += d.discount_cents;
-    }
-
-    let hotelGrossRevenue = 0;
-    const hotelFolios = this.db.prepare(`
-      SELECT entry_type, amount_cents
-      FROM hotel_folio_entries
-      WHERE date(created_at) >= ? AND date(created_at) <= ?
-        AND (source_reference_type IS NULL OR source_reference_type != 'TAB')
-        AND entry_type IN ('ROOM_RATE', 'MINIBAR', 'SERVICE', 'ADJUSTMENT')
-        AND amount_cents > 0
-    `).all(startDay, endDay) as Array<{
-      entry_type: string;
-      amount_cents: number;
-    }>;
-    for (const h of hotelFolios) {
-      hotelGrossRevenue += h.amount_cents;
-    }
-
-    const folioDiscounts = this.db.prepare(`
-      SELECT amount_cents
-      FROM hotel_folio_entries
-      WHERE date(created_at) >= ? AND date(created_at) <= ?
-        AND entry_type = 'DISCOUNT'
-    `).all(startDay, endDay) as Array<{ amount_cents: number }>;
-    for (const fd of folioDiscounts) {
-      deductionsCents += Math.abs(fd.amount_cents);
-    }
-
-    const manualAr = this.db.prepare(`
-      SELECT cost_center_id, total_amount_cents
-      FROM accounts_receivable
-      WHERE date(accrual_date) >= ? AND date(accrual_date) <= ? AND origin = 'MANUAL' AND status != 'CANCELED'
-    `).all(startDay, endDay) as Array<{ cost_center_id: string; total_amount_cents: number }>;
-    let otherRevenue = 0;
-    for (const m of manualAr) {
-      otherRevenue += m.total_amount_cents;
-    }
-
-    const revenueByCostCenter: Record<string, number> = {
-      REST: Math.round(restGrossRevenue * 0.7),
-      BAR: Math.round(restGrossRevenue * 0.3),
-      DELIV: deliveryGrossRevenue,
-      HOTEL: hotelGrossRevenue,
-      ADMIN: otherRevenue
+  public generateDreStatement(params: {startDate: string; endDate: string; costCenterId?: string | null}): DreStatement {
+    const startDay = params.startDate.slice(0,10), endDay = params.endDate.slice(0,10);
+    if (startDay > endDay) throw new Error('Período inválido.');
+    const centers = ['REST','BAR','DELIV','HOTEL','ADMIN'];
+    if (params.costCenterId && !centers.includes(params.costCenterId)) throw new Error('Centro de custo inválido.');
+    const revenueByCostCenter: Record<string,number> = Object.fromEntries(centers.map(c=>[c,0]));
+    const deductions: Record<string,number> = {...revenueByCostCenter};
+    const costs: Record<string,number> = {...revenueByCostCenter};
+    const expenses: Record<string,number> = {...revenueByCostCenter};
+    const financial: Record<string,number> = {...revenueByCostCenter};
+    const expensesByCategory: Record<string,number> = {};
+    const add = (map: Record<string,number>, center: string, amount: number) => { const key = centers.includes(center) ? center : 'ADMIN'; map[key] = (map[key] ?? 0) + amount; };
+    const rows = (sql: string, ...values: (string|number)[]) => this.db.prepare(sql).all(...values) as Record<string,unknown>[];
+    const weightsForOrder = (id: string) => {
+      const items = rows("SELECT prep_station, total_item_cents FROM order_items WHERE order_id = ? AND status != 'CANCELLED'",id);
+      const weights: Record<string,number> = {};
+      for (const item of items) add(weights, String(item.prep_station).startsWith('BAR') ? 'BAR' : 'REST',Number(item.total_item_cents));
+      return weights;
     };
-
-    let grossRevenueCents = restGrossRevenue + deliveryGrossRevenue + hotelGrossRevenue + otherRevenue;
-
-    if (params.costCenterId && revenueByCostCenter[params.costCenterId] !== undefined) {
-      grossRevenueCents = revenueByCostCenter[params.costCenterId]!;
+    const allocate = (map: Record<string,number>, amount: number, weights: Record<string,number>) => {
+      const entries = Object.entries(weights).filter(([,v])=>v>0); const total = entries.reduce((n,[,v])=>n+v,0);
+      if (!total) { add(map,'REST',amount); return; }
+      let used=0; entries.forEach(([c,v],index)=>{const share=index===entries.length-1 ? amount-used : Math.round(amount*v/total);used+=share;add(map,c,share);});
+    };
+    // Revenue comes from completed services/sales, never from receipts or transfers.
+    for (const tab of rows("SELECT * FROM tabs WHERE type != 'HOTEL_FOLIO' AND status = 'CLOSED' AND date(closed_at) BETWEEN ? AND ?",startDay,endDay)) {
+      const weights: Record<string,number> = {};
+      for (const order of rows("SELECT id FROM orders WHERE tab_id = ? AND status != 'CANCELLED'",String(tab.id))) for (const [c,v] of Object.entries(weightsForOrder(String(order.id)))) add(weights,c,v);
+      allocate(revenueByCostCenter,Number(tab.subtotal_cents)+Number(tab.service_fee_cents),weights);
+      allocate(deductions,Number(tab.discount_cents),weights);
     }
-
-    let directCostsCents = 0;
-    const movements = this.db.prepare(`
-      SELECT sm.quantity_delta, COALESCE(sm.unit_cost_cents, cp.cost_price_cents, 0) as unit_cost_cents, sm.movement_type
-      FROM stock_movements sm
-      LEFT JOIN catalog_products cp ON cp.id = sm.product_id
-      WHERE date(sm.created_at) >= ? AND date(sm.created_at) <= ?
-        AND sm.movement_type IN ('SALE_DEDUCTION', 'RECIPE_CONSUMPTION', 'MINIBAR_RESTOCK')
-    `).all(startDay, endDay) as Array<{
-      quantity_delta: number;
-      unit_cost_cents: number;
-      movement_type: string;
-    }>;
-    for (const m of movements) {
-      const cost = m.unit_cost_cents || 0;
-      directCostsCents += Math.round(Math.abs(m.quantity_delta) * cost);
+    for (const order of rows("SELECT * FROM delivery_orders WHERE status = 'ENTREGUE' AND date(COALESCE(delivered_at,created_at)) BETWEEN ? AND ?",startDay,endDay)) {
+      add(revenueByCostCenter,'DELIV',Number(order.items_subtotal_cents)+Number(order.delivery_fee_cents));
+      add(deductions,'DELIV',Number(order.discount_cents)); add(costs,'DELIV',Number(order.courier_fee_cents));
     }
-
-    const courierFees = this.db.prepare(`
-      SELECT SUM(courier_fee_cents) as total_courier
-      FROM delivery_orders
-      WHERE date(created_at) >= ? AND date(created_at) <= ? AND status = 'ENTREGUE'
-    `).get(startDay, endDay) as { total_courier?: number };
-    directCostsCents += (courierFees?.total_courier ?? 0);
-
-    let operationalExpensesCents = 0;
-    const expensesByCategory: Record<string, number> = {};
-
-    const expenses = this.db.prepare(`
-      SELECT ap.category_id, fc.name as category_name, SUM(ap.total_amount_cents) as total
-      FROM accounts_payable ap
-      JOIN financial_categories fc ON fc.id = ap.category_id
-      WHERE date(ap.accrual_date) >= ? AND date(ap.accrual_date) <= ?
-        AND fc.type = 'EXPENSE_OP' AND ap.status != 'CANCELED'
-      GROUP BY ap.category_id, fc.name
-    `).all(startDay, endDay) as Array<{ category_id: string; category_name: string; total: number }>;
-
-    for (const exp of expenses) {
-      operationalExpensesCents += exp.total;
-      expensesByCategory[exp.category_name] = exp.total;
+    for (const entry of rows("SELECT * FROM hotel_folio_entries WHERE date(created_at) BETWEEN ? AND ? AND (source_reference_type IS NULL OR source_reference_type != 'TAB')",startDay,endDay)) {
+      const type=String(entry.entry_type), amount=Number(entry.amount_cents);
+      if (type==='PAYMENT') continue;
+      const center=type==='RESTAURANT_ORDER'?'REST':'HOTEL';
+      if (['DISCOUNT','REVERSAL'].includes(type) || amount<0) add(deductions,center,Math.abs(amount));
+      else add(revenueByCostCenter,center,amount);
     }
-
-    let financialResultCents = 0;
-    const finTxs = this.db.prepare(`
-      SELECT ft.type, ft.amount_cents
-      FROM financial_transactions ft
-      LEFT JOIN financial_categories fc ON fc.id = ft.category_id
-      WHERE date(ft.accrual_date) >= ? AND date(ft.accrual_date) <= ?
-        AND fc.type = 'FINANCIAL_RESULT'
-    `).all(startDay, endDay) as Array<{ type: string; amount_cents: number }>;
-
-    for (const f of finTxs) {
-      if (f.type === 'INCOME') financialResultCents += f.amount_cents;
-      else if (f.type === 'EXPENSE') financialResultCents -= f.amount_cents;
+    for (const ar of rows("SELECT cost_center_id, total_amount_cents FROM accounts_receivable WHERE origin = 'MANUAL' AND status != 'CANCELED' AND date(accrual_date) BETWEEN ? AND ?",startDay,endDay)) add(revenueByCostCenter,String(ar.cost_center_id),Number(ar.total_amount_cents));
+    // Snapshot costs follow the originating channel. Mixed restaurant/bar orders
+    // allocate shared ingredient costs by their actual item values (integer remainder).
+    for (const movement of rows("SELECT sm.*, COALESCE(sm.unit_cost_cents, original.unit_cost_cents, cp.cost_price_cents, 0) AS cost FROM stock_movements sm LEFT JOIN stock_movements original ON original.reversed_by_movement_id = sm.id LEFT JOIN catalog_products cp ON cp.id = sm.product_id WHERE date(sm.created_at) BETWEEN ? AND ? AND (sm.movement_type IN ('SALE_DEDUCTION','RECIPE_CONSUMPTION','WASTE_OR_LOSS') OR (sm.movement_type = 'REVERSAL_ENTRY' AND original.movement_type IN ('SALE_DEDUCTION','RECIPE_CONSUMPTION','WASTE_OR_LOSS')))",startDay,endDay)) {
+      const amount=Math.round(-Number(movement.quantity_delta)*Number(movement.cost));
+      const channel=String(movement.origin_channel);
+      if (['DELIVERY','PICKUP'].includes(channel)) add(costs,'DELIV',amount);
+      else if (channel==='HOTEL_ROOM') add(costs,'HOTEL',amount);
+      else allocate(costs,amount,weightsForOrder(String(movement.reference_entity_id)));
     }
-
-    return calculateDreStatement({
-      grossRevenueCents,
-      deductionsCents,
-      directCostsCents,
-      operationalExpensesCents,
-      financialResultCents,
-      periodStart: startDay,
-      periodEnd: endDay,
-      costCenterId: params.costCenterId,
-      revenueByCostCenter,
-      expensesByCategory
-    });
+    for (const ap of rows("SELECT ap.cost_center_id, ap.total_amount_cents, fc.name FROM accounts_payable ap JOIN financial_categories fc ON fc.id=ap.category_id WHERE fc.type='EXPENSE_OP' AND ap.status != 'CANCELED' AND date(ap.accrual_date) BETWEEN ? AND ?",startDay,endDay)) {
+      const center=String(ap.cost_center_id);add(expenses,center,Number(ap.total_amount_cents));
+      if (!params.costCenterId || params.costCenterId===center) expensesByCategory[String(ap.name)]=(expensesByCategory[String(ap.name)]??0)+Number(ap.total_amount_cents);
+    }
+    for (const tx of rows("SELECT ft.* FROM financial_transactions ft JOIN financial_categories fc ON fc.id=ft.category_id WHERE fc.type='FINANCIAL_RESULT' AND date(ft.accrual_date) BETWEEN ? AND ?",startDay,endDay)) add(financial,String(tx.cost_center_id),Number(tx.amount_cents)*(tx.type==='INCOME'?1:-1));
+    const sum=(map: Record<string,number>)=> params.costCenterId ? map[params.costCenterId]??0 : Object.values(map).reduce((n,v)=>n+v,0);
+    return calculateDreStatement({grossRevenueCents:sum(revenueByCostCenter),deductionsCents:sum(deductions),directCostsCents:sum(costs),operationalExpensesCents:sum(expenses),financialResultCents:sum(financial),periodStart:startDay,periodEnd:endDay,costCenterId:params.costCenterId,revenueByCostCenter,expensesByCategory});
   }
 
   public generateCashFlowRealized(params: {
@@ -8940,18 +9007,25 @@ export class LocalOperationalStore {
       }
     }
 
+    // Opening capital from accounts created during the period must reconcile the balance equation.
+    const newAccounts = this.db.prepare("SELECT initial_balance_cents FROM financial_accounts WHERE date(created_at) > ? AND date(created_at) <= ?"+(params.accountId?' AND id = ?':'')).all(startDay,endDay,...(params.accountId?[params.accountId]:[])) as Array<{initial_balance_cents:number}>;
+    for (const account of newAccounts) {
+      const capital = Number(account.initial_balance_cents);
+      if (capital > 0) { totalInflowsCents += capital; inflowsByCategory['Capital inicial de contas'] = (inflowsByCategory['Capital inicial de contas'] ?? 0)+capital; inflowsByPaymentMethod['OPENING_CAPITAL'] = (inflowsByPaymentMethod['OPENING_CAPITAL'] ?? 0)+capital; }
+      if (capital < 0) { totalOutflowsCents -= capital; outflowsByCategory['Saldo inicial devedor'] = (outflowsByCategory['Saldo inicial devedor'] ?? 0)-capital; }
+    }
     const netCashFlowCents = totalInflowsCents - totalOutflowsCents;
 
-    let totalCurrentBalance = 0;
-    if (params.accountId) {
-      const acc = this.getFinancialAccountById(params.accountId);
-      totalCurrentBalance = acc ? acc.currentBalanceCents : 0;
-    } else {
-      const accs = this.listFinancialAccounts();
-      totalCurrentBalance = accs.reduce((sum, a) => sum + a.currentBalanceCents, 0);
-    }
-    const closingBalanceCents = totalCurrentBalance;
-    const openingBalanceCents = closingBalanceCents - netCashFlowCents;
+    const accountCondition = params.accountId ? ' AND financial_account_id = ?' : '';
+    const balanceAt = (day: string, inclusive: boolean) => {
+      const op = inclusive ? '<=' : '<';
+      const accountFilter = params.accountId ? ' AND id = ?' : '';
+      const initial = this.db.prepare('SELECT COALESCE(SUM(initial_balance_cents),0) AS value FROM financial_accounts WHERE date(created_at) <= ?'+accountFilter).get(day,...(params.accountId?[params.accountId]:[])) as {value:number};
+      const changes = this.db.prepare("SELECT COALESCE(SUM(CASE WHEN type IN ('INCOME','INTERNAL_TRANSFER_IN') THEN amount_cents ELSE -amount_cents END),0) AS value FROM financial_transactions WHERE date(settlement_date) "+op+' ?'+accountCondition).get(day,...(params.accountId?[params.accountId]:[])) as {value:number};
+      return initial.value+changes.value;
+    };
+    const openingBalanceCents=balanceAt(startDay,false);
+    const closingBalanceCents=balanceAt(endDay,true);
 
     return {
       periodStart: startDay,
@@ -9038,10 +9112,8 @@ export class LocalOperationalStore {
     const today = new Date().toISOString().slice(0, 10);
     const monthStart = today.slice(0, 7) + '-01';
 
-    const todayTabSales = (this.db.prepare(`
-      SELECT SUM(total_cents) as total FROM tabs
-      WHERE (date(closed_at) = ? OR date(opened_at) = ?) AND status = 'CLOSED'
-    `).get(today, today) as { total?: number })?.total ?? 0;
+    const todayDre = this.generateDreStatement({startDate:today,endDate:today});
+    const monthDre = this.generateDreStatement({startDate:monthStart,endDate:today});
 
     const todayDelivOrders = this.db.prepare(`
       SELECT COUNT(*) as count, SUM(total_cents) as total
@@ -9074,13 +9146,13 @@ export class LocalOperationalStore {
 
     const monthInflows = (this.db.prepare(`
       SELECT SUM(amount_cents) as total FROM financial_transactions
-      WHERE date(settlement_date) >= ? AND type IN ('INCOME', 'INTERNAL_TRANSFER_IN')
-    `).get(monthStart) as { total?: number })?.total ?? 0;
+      WHERE date(settlement_date) BETWEEN ? AND ? AND type = 'INCOME'
+    `).get(monthStart, today) as { total?: number })?.total ?? 0;
 
     const monthOutflows = (this.db.prepare(`
       SELECT SUM(amount_cents) as total FROM financial_transactions
-      WHERE date(settlement_date) >= ? AND type IN ('EXPENSE', 'INTERNAL_TRANSFER_OUT')
-    `).get(monthStart) as { total?: number })?.total ?? 0;
+      WHERE date(settlement_date) BETWEEN ? AND ? AND type = 'EXPENSE'
+    `).get(monthStart, today) as { total?: number })?.total ?? 0;
 
     const arOverdue = (this.db.prepare(`
       SELECT SUM(remaining_amount_cents) as total FROM accounts_receivable
@@ -9096,14 +9168,14 @@ export class LocalOperationalStore {
     const treasuryTotal = accounts.reduce((sum, a) => sum + a.currentBalanceCents, 0);
 
     return {
-      todaySalesCents: todayTabSales + (todayDelivOrders?.total ?? 0),
+      todaySalesCents: todayDre.grossRevenueCents,
       todayDeliveryOrdersCount: todayDelivOrders?.count ?? 0,
       activeDeliveryOrdersCount: activeDelivOrdersCount,
-      todayHotelRevenueCents: todayHotelRev,
+      todayHotelRevenueCents: todayDre.revenueByCostCenter['HOTEL'] ?? 0,
       currentOccupancyRatePercent: occupancyRate,
       monthRealizedRevenueCents: monthInflows,
       monthRealizedExpensesCents: monthOutflows,
-      monthEstimatedNetProfitCents: monthInflows - monthOutflows,
+      monthEstimatedNetProfitCents: monthDre.netProfitCents,
       accountsReceivableOverdueCents: arOverdue,
       accountsPayableDueTodayCents: apDueToday,
       treasuryTotalBalanceCents: treasuryTotal

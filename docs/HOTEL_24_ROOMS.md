@@ -4,7 +4,13 @@
 **Documento:** `docs/HOTEL_24_ROOMS.md`  
 **Versão:** 1.0.0 (Etapa 7A)  
 **Data:** 05/11/2026  
-**Status:** Implementado e Coberto por 13 Testes Automatizados
+**Status:** Estrutura de demonstração implementada. Cadastro real pendente de confirmação do hotel.
+
+> A quantidade de 12 unidades existentes e 12 em construção foi informada pelo usuário.
+> Números, nomes, pavimentos, categorias, camas, comodidades e tarifas presentes neste
+> documento e no seed são exemplos provisórios, não um levantamento do hotel real.
+> A distribuição efetiva do seed está na tabela abaixo, e não corresponde à divisão
+> 101–112 operacionais / 201–212 em obras citada no relatório executivo externo.
 
 ---
 

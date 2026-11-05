@@ -670,8 +670,8 @@ describe('@deck26/local-server & @deck26/cloud-api — Bateria Completa dos 18 T
     const cloudDbFile = path.join(tempDir, 'cloud.sqlite');
 
     try {
-      const { app: local1, store: store1 } = await buildLocalServer({ dbPath: localDbFile });
-      const { app: cloud1, closeDb: closeCloud1 } = await buildCloudApiServer({ dbPath: cloudDbFile });
+      const { app: local1, store: store1 } = await buildLocalServer({ requireStrictAuth: false, demoMode: true, dbPath: localDbFile });
+      const { app: cloud1, closeDb: closeCloud1 } = await buildCloudApiServer({ allowInsecureTestAccess: true, dbPath: cloudDbFile });
 
       store1.updateCatalogProduct('prd-exec-panelada', { priceCents: 3300 });
       store1.createOrder({
@@ -699,8 +699,8 @@ describe('@deck26/local-server & @deck26/cloud-api — Bateria Completa dos 18 T
       await cloud1.close();
       closeCloud1();
 
-      const { app: local2, store: store2 } = await buildLocalServer({ dbPath: localDbFile });
-      const { app: cloud2, getLedger: getLedger2, closeDb: closeCloud2 } = await buildCloudApiServer({
+      const { app: local2, store: store2 } = await buildLocalServer({ requireStrictAuth: false, demoMode: true, dbPath: localDbFile });
+      const { app: cloud2, getLedger: getLedger2, closeDb: closeCloud2 } = await buildCloudApiServer({ allowInsecureTestAccess: true,
         dbPath: cloudDbFile
       });
 
@@ -758,7 +758,7 @@ describe('@deck26/local-server & @deck26/cloud-api — Bateria Completa dos 18 T
 
   it('17. Sincronização após desconexão: criar produto e vender localmente com VPS desconectada e sincronizar depois sem duplicação', async () => {
     const { app: localApp, store: localStore } = await buildLocalServer({ dbPath: ':memory:' });
-    const { app: cloudApp, getLedger, closeDb } = await buildCloudApiServer({ dbPath: ':memory:' });
+    const { app: cloudApp, getLedger, closeDb } = await buildCloudApiServer({ allowInsecureTestAccess: true, dbPath: ':memory:' });
 
     // Desconexão simulada: tentativa de sync falha mas mantém fila local
     const unreachableSync = await localApp.inject({
@@ -1859,7 +1859,7 @@ describe('@deck26/local-server — Bateria Completa dos 34 Testes Obrigatórios 
     const cloudDbFile = path.join(tempDir, 'cloud-stage4.sqlite');
 
     try {
-      const { app, store } = await buildLocalServer({ dbPath: localDbFile });
+      const { app, store } = await buildLocalServer({ requireStrictAuth: false, demoMode: true, dbPath: localDbFile });
 
       // Passo 1: Abrir turno de caixa com fundo inicial de R$ 200,00 (20000c)
       const step1 = await app.inject({
@@ -2088,8 +2088,8 @@ describe('@deck26/local-server — Bateria Completa dos 34 Testes Obrigatórios 
       await app.close();
       store.close();
 
-      const { app: appRestarted, store: storeRestarted } = await buildLocalServer({ dbPath: localDbFile });
-      const { app: cloudApp, getLedger, closeDb: closeCloudDb } = await buildCloudApiServer({ dbPath: cloudDbFile });
+      const { app: appRestarted, store: storeRestarted } = await buildLocalServer({ requireStrictAuth: false, demoMode: true, dbPath: localDbFile });
+      const { app: cloudApp, getLedger, closeDb: closeCloudDb } = await buildCloudApiServer({ allowInsecureTestAccess: true, dbPath: cloudDbFile });
 
       const persistedTab = storeRestarted.getTabById(mainTabId)!;
       expect(persistedTab.status).toBe('CLOSED');

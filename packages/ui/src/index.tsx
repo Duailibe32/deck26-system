@@ -33,86 +33,7 @@ export const Deck26Logo: React.FC<Deck26LogoProps> = ({
   const isPinkRing = variant === 'pink-ring';
   return (
     <div style={{ display: 'inline-flex', alignItems: 'center', gap: '12px', userSelect: 'none' }}>
-      <svg
-        width={size}
-        height={size}
-        viewBox="0 0 120 120"
-        fill="none"
-        xmlns="http://www.w3.org/2000/svg"
-        role="img"
-        aria-label="Logomarca Deck 26"
-      >
-        <circle
-          cx="60"
-          cy="60"
-          r="57"
-          fill={isPinkRing ? '#FFFFFF' : '#111111'}
-          stroke="#F72585"
-          strokeWidth={isPinkRing ? '6' : '3.5'}
-        />
-        <text
-          x="18"
-          y="58"
-          fill={isPinkRing ? '#F72585' : '#FFFFFF'}
-          fontFamily="Impact, Oswald, 'Arial Black', sans-serif"
-          fontWeight="900"
-          fontSize="44"
-          letterSpacing="-1"
-        >
-          D
-        </text>
-        <text
-          x="44"
-          y="49"
-          fill={isPinkRing ? '#F72585' : '#FFFFFF'}
-          fontFamily="Impact, Oswald, 'Arial Black', sans-serif"
-          fontWeight="900"
-          fontSize="35"
-        >
-          e
-        </text>
-        <rect
-          x="44"
-          y="54"
-          width="19"
-          height="4.2"
-          rx="1.5"
-          fill="#F72585"
-        />
-        <text
-          x="65"
-          y="58"
-          fill={isPinkRing ? '#F72585' : '#FFFFFF'}
-          fontFamily="Impact, Oswald, 'Arial Black', sans-serif"
-          fontWeight="900"
-          fontSize="44"
-          letterSpacing="-1"
-        >
-          CK
-        </text>
-        <text
-          x="53.5"
-          y="81"
-          fill={isPinkRing ? '#7209B7' : '#FFFFFF'}
-          fontFamily="Impact, Oswald, 'Arial Black', sans-serif"
-          fontWeight="900"
-          fontSize="24"
-          textAnchor="middle"
-        >
-          2
-        </text>
-        <text
-          x="53.5"
-          y="104"
-          fill="#F72585"
-          fontFamily="Impact, Oswald, 'Arial Black', sans-serif"
-          fontWeight="900"
-          fontSize="24"
-          textAnchor="middle"
-        >
-          6
-        </text>
-      </svg>
+      <span role="img" aria-label="Logomarca Deck 26" style={{position:'relative',display:'inline-block',flexShrink:0,width:size,height:size,borderRadius:'50%',overflow:'hidden',background:'#000',outline:isPinkRing?'2px solid #f72585':undefined}}><img src="/brand/deck26-original.jpg" alt="" style={{position:'absolute',width:'152%',maxWidth:'none',height:'auto',left:'-26%',top:'-96%'}}/></span>
 
       {variant !== 'compact' && (
         <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.15 }}>
@@ -153,3 +74,6 @@ export interface MenuPriceBadgeProps {
 export const MenuPriceBadge: React.FC<MenuPriceBadgeProps> = ({ cents }) => {
   return <span className="d26-price-tag">{formatBrlCents(cents)}</span>;
 };
+
+export { FinancialCharts } from './FinancialCharts.js';
+export type { DailySalesPoint, RoomOccupancyPoint } from './FinancialCharts.js';

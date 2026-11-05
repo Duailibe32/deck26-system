@@ -1,10 +1,12 @@
+> Atualização de 05/11/2026: use Node >=22.13, npm ci e as instruções atuais do README. Configure segredos e bootstrap antes de iniciar; DECK26_DEMO_MODE=false não cria fixtures. Os scripts das APIs carregam .env da raiz. Não usar banco operacional para testes.
+
 # Guia de Configuração e Execução Local (Windows 11) — DECK 26
 
 ## 1. Requisitos do Ambiente Local
 
 - **Sistema Operacional**: Windows 11 (64-bit)
 - **Memória RAM**: 8 GB mínimo (16 GB recomendado)
-- **Node.js**: versão `22.5.0` ou superior (suporte nativo ao módulo `node:sqlite`)
+- **Node.js**: versão `22.13.0` ou superior (suporte nativo ao módulo `node:sqlite`)
 - **npm**: versão `10.0.0` ou superior
 - **Git**: versão `2.40+`
 - *(Opcional para empacotamento nativo `.exe`)*: Rust (`cargo` / `rustc`), Microsoft Edge WebView2 e Microsoft C++ Build Tools para compilação do binário Tauri 2.

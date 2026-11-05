@@ -14,13 +14,14 @@
  */
 
 import { z } from 'zod';
+import { IsoDateTimeSchema } from './common.js';
+export { IsoDateTimeSchema } from './common.js';
 
 // ============================================================================
 // 1. IDENTIFICADORES E METADADOS DE AUDITORIA
 // ============================================================================
 
 export const UuidSchema = z.string().uuid();
-export const IsoDateTimeSchema = z.string().datetime({ offset: true }).or(z.string().min(10));
 
 export const OriginNodeSchema = z.enum([
   'WINDOWS_PDV',      // Computador principal Windows (Tauri / Local Server)
@@ -433,7 +434,7 @@ export const CatalogProductSchema = z.object({
   unitOfMeasure: z.string().optional(),
   priceCents: z.number().int().nonnegative(), // Preço base de venda em centavos
   costPriceCents: z.number().int().nonnegative().optional(), // Preço de custo em centavos
-  channelPricesCents: z.record(SalesChannelSchema, z.number().int().nonnegative()).optional(),
+  channelPricesCents: z.partialRecord(SalesChannelSchema, z.number().int().nonnegative()).optional(),
   availableChannels: z.array(SalesChannelSchema).min(1),
   prepStation: PrepStationSchema,
   targetPrinter: z.string().optional(),
@@ -1005,7 +1006,7 @@ export const HotelGuestSchema = z.object({
   email: z.string().default(''),
   nationality: z.string().default('Brasileira'),
   birthDate: z.string().nullable().optional(),
-  address: HotelGuestAddressSchema.optional().default({}),
+  address: HotelGuestAddressSchema.optional().default(() => HotelGuestAddressSchema.parse({})),
   notes: z.string().default(''),
   totalStaysCount: z.number().int().nonnegative().default(0),
   createdAt: IsoDateTimeSchema,
@@ -2054,7 +2055,7 @@ export function calculateGrossMarginPercent(priceCents: number, costPriceCents?:
 // ============================================================================
 
 export function formatBrlCents(cents: number): string {
-  const reais = (cents / 100).toFixed(2).replace('.', ',');
+  const reais = new Intl.NumberFormat('pt-BR', {minimumFractionDigits:2,maximumFractionDigits:2}).format(cents / 100);
   return `R$ ${reais}`;
 }
 

@@ -13,7 +13,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@deck26/contracts": "*"
+    "@deck26/contracts": "*",
+    "recharts": "^3.10.1"
   },
   "peerDependencies": {
     "react": "^18.3.1",

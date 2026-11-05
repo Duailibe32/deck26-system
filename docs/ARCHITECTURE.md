@@ -1,3 +1,5 @@
+> Estado revisado em 05/11/2026: interfaces React, APIs Fastify e persistência SQLite. Cloud é simulador; PostgreSQL e sincronização integral não implementados. Autenticação protege leituras e mutações; web comercial é demo localStorage independente. Veja REVISAO_PRE_7B.md.
+
 # Arquitetura do Sistema — DECK 26
 
 ## 1. Visão Geral

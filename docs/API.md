@@ -1,3 +1,5 @@
+> Revisão da 7A: rotas internas exigem Bearer de sessão válido e permissão apropriada. GET /api/finance/dashboard/charts exige finance:view_dre e retorna dailySales (sete dias UTC, centavos), occupancy (contagens exclusivas) e updatedAt. GET /api/finance/dashboard mantém as métricas executivas existentes. Sync cloud exige DECK26_SYNC_SECRET. Veja SECURITY.md.
+
 # Documentação de Endpoints das APIs — DECK 26
 
 ## 1. Servidor Operacional Local (`apps/local-server` — Porta `4000`)

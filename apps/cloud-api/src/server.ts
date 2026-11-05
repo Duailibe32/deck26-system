@@ -37,13 +37,38 @@ export interface CloudLedgerRecord {
 
 export async function buildCloudApiServer(options?: {
   dbPath?: string;
+  syncSecret?: string;
+  allowInsecureTestAccess?: boolean;
 }): Promise<{
   app: FastifyInstance;
   getLedger: () => CloudLedgerRecord[];
   closeDb: () => void;
 }> {
+  if (process.env.DATABASE_URL) throw new Error('O adaptador PostgreSQL ainda não está implementado. Não configure DATABASE_URL neste simulador SQLite.');
   const app = Fastify({ logger: false });
-  await app.register(cors, { origin: true });
+  const publicAttempts=new Map<string,{count:number;reset:number}>();
+  app.addHook('onRequest',async(req,reply)=>{
+    if(req.method!=='POST'||!req.url.startsWith('/api/public/'))return;
+    const now=Date.now();let value=publicAttempts.get(req.ip);
+    if(!value||now>value.reset){for(const [key,item] of publicAttempts)if(now>item.reset)publicAttempts.delete(key);if(publicAttempts.size>=10000)return reply.code(429).send({error:'Tente novamente em instantes.'});value={count:0,reset:now+60000};publicAttempts.set(req.ip,value);}
+    if(++value.count>30)return reply.code(429).header('Retry-After','60').send({error:'Limite de pedidos por minuto excedido.'});
+  });
+  const syncSecret = options?.syncSecret ?? process.env.DECK26_SYNC_SECRET;
+  const testAccess = options?.allowInsecureTestAccess === true && process.env.NODE_ENV !== 'production';
+  if (!syncSecret && !testAccess) throw new Error('Configure DECK26_SYNC_SECRET para autenticar os nós de sincronização.');
+  const allowedOrigins = (process.env.DECK26_ALLOWED_ORIGINS ?? '').split(',').filter(Boolean);
+  await app.register(cors, {origin: allowedOrigins});
+  app.addHook('onRequest', async (req, reply) => {
+    if (!req.url.startsWith('/api/sync/') && !req.url.startsWith('/api/owner/')) return;
+    if (testAccess) return;
+    const actual = Buffer.from(req.headers.authorization ?? '');
+    const expected = Buffer.from('Bearer ' + syncSecret);
+    if (actual.length !== expected.length || !crypto.timingSafeEqual(actual, expected)) return reply.code(401).send({error:'Nó não autenticado.'});
+  });
+  app.setErrorHandler((error, _req, reply) => {
+    const detail = error as {statusCode?:number;message?:string};
+    reply.code(detail.statusCode ?? 400).send({error: detail.statusCode === 500 ? 'Erro interno.' : detail.message ?? 'Pedido inválido.'});
+  });
 
   const dbPath =
     options?.dbPath ??
@@ -117,6 +142,7 @@ export async function buildCloudApiServer(options?: {
       .get(event.idempotencyKey) as Record<string, unknown> | undefined;
 
     if (existingRow) {
+      if (existingRow.checksum_sha256 !== event.checksumSha256) throw new Error('Chave de sincronização reutilizada com dados diferentes.');
       return { record: mapLedgerRow(existingRow), duplicate: true, conflict: null };
     }
 
@@ -197,9 +223,7 @@ export async function buildCloudApiServer(options?: {
     return {
       service: 'deck26-cloud-api-vps',
       host: 'Hostinger VPS Simulator (Persistent Disk Mode)',
-      databaseEngine: process.env.DATABASE_URL
-        ? 'PostgreSQL (DATABASE_URL configured)'
-        : `Persistent Disk SQLite (${path.basename(dbPath)}) + PostgreSQL Migration Ready`,
+      databaseEngine: `SQLite (${path.basename(dbPath)})`,
       totalSyncedEvents: total,
       currentCursor,
       timestamp: new Date().toISOString()
@@ -209,7 +233,7 @@ export async function buildCloudApiServer(options?: {
   app.get('/api/public/catalog', async () => ({
     establishment: 'DECK 26 — Hotel Auto Posto Milla',
     categories: DECK26_INITIAL_CATEGORIES,
-    products: DECK26_INITIAL_PRODUCTS
+    products: DECK26_INITIAL_PRODUCTS.filter(p=>p.active && p.dataSource!=='TEST_ONLY').map(p=>({...p,costPriceCents:undefined,internalNotes:''}))
   }));
 
   app.post('/api/sync/batch', async (req, reply) => {
@@ -219,10 +243,17 @@ export async function buildCloudApiServer(options?: {
     }
 
     const { lastPulledRemoteCursor, events } = parsed.data;
+    for (const event of events) {
+      const digest = crypto.createHash('sha256').update(event.payloadJson).digest('hex');
+      if (digest !== event.checksumSha256) return reply.code(400).send({error:'Checksum inválido.'});
+      try { JSON.parse(event.payloadJson); } catch { return reply.code(400).send({error:'Evento JSON inválido.'}); }
+    }
     const ackedEventIds: string[] = [];
     const duplicateEventIds: string[] = [];
     const conflicts: SyncBatchPushResponse['conflicts'] = [];
 
+    db.exec('BEGIN IMMEDIATE');
+    try {
     for (const ev of events) {
       const result = appendToCloudLedger(ev);
       if (result.duplicate) {
@@ -251,7 +282,9 @@ export async function buildCloudApiServer(options?: {
       newRemoteCursor: currentCursor
     };
 
+    db.exec('COMMIT');
     return reply.status(200).send(responsePayload);
+    } catch (error) { db.exec('ROLLBACK'); throw error; }
   });
 
   const CreateCloudOrderSchema = z.object({
@@ -265,7 +298,7 @@ export async function buildCloudApiServer(options?: {
       .array(
         z.object({
           productId: z.string().min(1),
-          quantity: z.number().positive(),
+          quantity: z.number().positive().max(100),
           notes: z.string().optional(),
           modifiers: z
             .array(
@@ -280,7 +313,7 @@ export async function buildCloudApiServer(options?: {
             .optional()
         })
       )
-      .min(1)
+      .min(1).max(100)
   });
 
   app.post('/api/public/orders', async (req, reply) => {
@@ -289,25 +322,47 @@ export async function buildCloudApiServer(options?: {
       return reply.status(400).send({ error: 'Pedido online inválido', issues: parsed.error.issues });
     }
 
+    if (!['QR_TABLE','DELIVERY','PICKUP'].includes(parsed.data.channel)) return reply.code(400).send({error:'Canal público inválido.'});
+    if (parsed.data.channel === 'QR_TABLE') {
+      const seed = process.env.DECK26_QR_SEED_SECRET ?? process.env.DECK26_AUTH_SECRET ?? (testAccess ? 'deck26-qr-table-seed-dev' : '');
+      const table = parsed.data.tableNumber;
+      if (!seed || !table || table > 20) return reply.code(403).send({error:'Mesa inválida.'});
+      const secret = crypto.createHmac('sha256', seed).update(`MESA-${table}`).digest('hex').slice(0,24);
+      const expected = `d26qr_m${String(table).padStart(2,'0')}_${secret}`;
+      if (parsed.data.qrToken !== expected) return reply.code(403).send({error:'QR inválido.'});
+    }
+    const prior = db.prepare('SELECT * FROM sync_event_ledger WHERE idempotency_key = ?').get(parsed.data.idempotencyKey) as Record<string,unknown> | undefined;
+    const requestHash=crypto.createHash('sha256').update(JSON.stringify(parsed.data)).digest('hex');
+    if (prior) {
+      const order=JSON.parse(String(prior.payload_json));
+      if (order.requestHash !== requestHash) return reply.code(409).send({error:'Chave de pedido reutilizada com dados diferentes.'});
+      return reply.code(200).send({order,cursorSeq:Number(prior.cursor_seq),duplicate:true});
+    }
+
     const now = new Date().toISOString();
     const orderId = crypto.randomUUID();
     const enrichedItems = parsed.data.items.map((item) => {
       const prod = DECK26_INITIAL_PRODUCTS.find((p) => p.id === item.productId);
-      if (!prod) {
+      if (!prod || !prod.active || !prod.availableChannels.includes(parsed.data.channel)) {
         throw new Error(`Produto ${item.productId} inválido`);
       }
       const unitPriceCents = resolveChannelPriceCents(prod, parsed.data.channel);
       const modifiers = (item.modifiers ?? []).map((m) => {
         const grp = prod.modifierGroups.find((g) => g.id === m.groupId);
         const opt = grp?.options.find((o) => o.id === m.optionId);
+        if (!grp || !opt || grp.available === false || opt.available === false) throw new Error('Adicional inválido.');
         return {
           groupId: m.groupId,
           groupName: grp?.name ?? m.groupName,
           optionId: m.optionId,
           optionName: opt?.name ?? m.optionName,
-          priceDeltaCents: opt ? opt.priceDeltaCents : (m.priceDeltaCents ?? 0)
+          priceDeltaCents: opt.priceDeltaCents
         };
       });
+      for (const group of prod.modifierGroups) {
+        const selected=modifiers.filter(m=>m.groupId===group.id);
+        if (new Set(selected.map(m=>m.optionId)).size!==selected.length || selected.length<group.minSelect || selected.length>group.maxSelect) throw new Error('Seleção de adicionais inválida.');
+      }
       const modifiersTotalCents = modifiers.reduce((acc, m) => acc + m.priceDeltaCents, 0);
       return {
         id: crypto.randomUUID(),
@@ -327,6 +382,7 @@ export async function buildCloudApiServer(options?: {
 
     const totalOrderCents = enrichedItems.reduce((acc, i) => acc + i.totalItemCents, 0);
     const payloadObj = {
+      requestHash,
       id: orderId,
       tabId: null,
       channel: parsed.data.channel,

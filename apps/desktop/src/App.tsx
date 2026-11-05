@@ -1,3 +1,5 @@
+import { FinancialDashboard } from './FinancialDashboard.js';
+import { tableSignal } from './tableSignals.js';
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   BillSplitMode,
@@ -171,8 +173,8 @@ const GROUP_LABELS: Record<string, string> = {
 
 export const DesktopApp: React.FC = () => {
   const localApiBase = useMemo(() => {
-    const host = window.location.hostname || '127.0.0.1';
-    return `http://${host}:4000`;
+    const host = window.location.protocol === 'tauri:' || window.location.hostname === 'tauri.localhost' ? '127.0.0.1' : window.location.hostname || '127.0.0.1';
+    return import.meta.env.VITE_LOCAL_API_URL || `http://${host}:4000`;
   }, []);
 
   const [activeModule, setActiveModule] = useState<SystemModuleId>(() => {
@@ -186,7 +188,7 @@ export const DesktopApp: React.FC = () => {
   // Autenticação Real por PIN no Backend
   const [authSession, setAuthSession] = useState<AuthSessionInfo | null>(null);
   const [pinInput, setPinInput] = useState<string>('2626');
-  const [showPinModal, setShowPinModal] = useState<boolean>(false);
+  const [showPinModal, setShowPinModal] = useState<boolean>(true);
 
   const [serverConnected, setServerConnected] = useState<boolean>(false);
   const [feedbackBanner, setFeedbackBanner] = useState<string | null>(null);
@@ -382,7 +384,7 @@ export const DesktopApp: React.FC = () => {
   const [maintSeverity, setMaintSeverity] = useState<'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL'>('MEDIUM');
   const [maintBlockRoom, setMaintBlockRoom] = useState<boolean>(true);
 
-  const activeRole: UserRole = authSession?.role ?? 'OWNER';
+  const activeRole: UserRole = authSession?.role ?? 'WAITER';
 
   function getAuthHeaders(): Record<string, string> {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -420,7 +422,8 @@ export const DesktopApp: React.FC = () => {
 
   async function refreshState() {
     try {
-      const res = await fetch(`${localApiBase}/api/state`);
+      const res = await fetch(`${localApiBase}/api/state`, {headers: getAuthHeaders()});
+      if (res.status === 401) { setAuthSession(null); setShowPinModal(true); }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as ServerStateSnapshot;
       setSnapshot(data);
@@ -431,26 +434,23 @@ export const DesktopApp: React.FC = () => {
   }
 
   useEffect(() => {
+    if (!authSession) return;
     refreshState();
-    authenticateWithPin('2626');
     const timer = setInterval(refreshState, 4000);
 
     // Conexão SSE em tempo real (Etapa 4 — Seção 16)
-    let eventSource: EventSource | null = null;
+
     try {
-      eventSource = new EventSource(`${localApiBase}/api/events/stream`);
-      eventSource.addEventListener('operational_event', () => {
-        refreshState();
-      });
+      // Poll with the Authorization header; native EventSource cannot send it.
     } catch {
       // Fallback para polling caso SSE não esteja disponível
     }
 
     return () => {
       clearInterval(timer);
-      if (eventSource) eventSource.close();
+
     };
-  }, [localApiBase]);
+  }, [localApiBase, authSession]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
@@ -1705,7 +1705,7 @@ export const DesktopApp: React.FC = () => {
       <header className="d26-topbar">
         <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
           <Deck26Logo size={42} showHotelSubtitle />
-          <span className="d26-badge d26-badge-purple">Windows 11 • Tauri 2</span>
+          <span className="d26-badge d26-badge-purple">Estação de trabalho</span>
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
@@ -1715,7 +1715,7 @@ export const DesktopApp: React.FC = () => {
             </span>
           )}
           <span className={`d26-badge ${serverConnected ? 'd26-badge-success' : 'd26-badge-warning'}`}>
-            ● {serverConnected ? `SQLite Local Ativo (Porta 4000)` : 'Iniciando Servidor Local...'}
+            ● {serverConnected ? 'Operação conectada' : 'Aguardando conexão'}
           </span>
 
           <span
@@ -1779,7 +1779,7 @@ export const DesktopApp: React.FC = () => {
             className="d26-card"
             style={{
               border: '1px solid #7209B7',
-              background: 'linear-gradient(135deg, #1A1A1A 0%, #1F112B 100%)',
+              background: '#222222',
               display: 'flex',
               justifyContent: 'space-between',
               alignItems: 'center',
@@ -1789,12 +1789,10 @@ export const DesktopApp: React.FC = () => {
           >
             <div>
               <h3 style={{ fontSize: '0.98rem' }}>
-                🔐 Autenticação de Operador por PIN (Validado no Backend com Token HMAC)
+                Acesse sua estação de trabalho
               </h3>
               <p style={{ fontSize: '0.78rem', color: 'var(--d26-gray-300)', marginTop: '3px' }}>
-                PINs de Desenvolvimento: Proprietário <code>2626</code> | Gerente <code>1010</code> | Caixa{' '}
-                <code>2020</code> | Garçom <code>3030</code> | Cozinha <code>4040</code> | Recepção{' '}
-                <code>5050</code>
+                Digite seu PIN pessoal para acessar as funções autorizadas do seu perfil.
               </p>
             </div>
             <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
@@ -1803,6 +1801,9 @@ export const DesktopApp: React.FC = () => {
                 className="d26-input"
                 style={{ width: '130px' }}
                 placeholder="Digite o PIN"
+                aria-label="PIN do operador"
+                inputMode="numeric"
+                onKeyDown={e=>{if(e.key==='Enter')void authenticateWithPin(pinInput);}}
                 value={pinInput}
                 onChange={(e) => setPinInput(e.target.value)}
               />
@@ -1951,8 +1952,8 @@ export const DesktopApp: React.FC = () => {
           <div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
               <h1 style={{ fontSize: '1.35rem', fontWeight: 800 }}>{currentModuleDef.title}</h1>
-              <span className="d26-badge d26-badge-pink">Primary #F72585</span>
-              <span className="d26-badge d26-badge-purple">Tertiary #7209B7</span>
+
+
             </div>
             <p style={{ color: 'var(--d26-gray-300)', fontSize: '0.86rem', marginTop: '4px' }}>
               {currentModuleDef.description}
@@ -1960,10 +1961,10 @@ export const DesktopApp: React.FC = () => {
           </div>
           <div style={{ display: 'flex', gap: '10px' }}>
             <button className="d26-btn d26-btn-secondary" onClick={refreshState}>
-              ↻ Atualizar Estado Local
+              ↻ Atualizar
             </button>
             <button className="d26-btn d26-btn-primary" onClick={handleTriggerCloudSync}>
-              ⇄ Sincronizar com VPS Simulada
+              ⇄ Sincronizar
             </button>
           </div>
         </div>
@@ -1973,6 +1974,7 @@ export const DesktopApp: React.FC = () => {
            ===================================================================== */}
         {activeModule === 'dashboard' && (
           <>
+            {authSession && hasPermission(activeRole, 'finance:view_dre') && <FinancialDashboard apiBase={localApiBase} token={authSession.token}/>}
             <div className="d26-grid-kpi">
               <div className="d26-card">
                 <span style={{ color: 'var(--d26-gray-400)', fontSize: '0.78rem' }}>
@@ -1994,13 +1996,13 @@ export const DesktopApp: React.FC = () => {
               </div>
               <div className="d26-card">
                 <span style={{ color: 'var(--d26-gray-400)', fontSize: '0.78rem' }}>
-                  FATURAMENTO RECEBIDO (TURNO)
+                  RECEBIMENTOS DO RESTAURANTE
                 </span>
                 <div className="d26-kpi-value">
-                  {formatBrlCents(snapshot.payments.reduce((acc, p) => acc + p.amountCents, 0))}
+                  {formatBrlCents(snapshot.payments.filter(p=>p.status==='CONFIRMED').reduce((acc, p) => acc + p.amountCents, 0))}
                 </div>
                 <span style={{ fontSize: '0.76rem', color: '#D8B4FE' }}>
-                  {snapshot.payments.length} pagamento(s) confirmado(s)
+                  {snapshot.payments.filter(p=>p.status==='CONFIRMED').length} pagamento(s) confirmado(s)
                 </span>
               </div>
               <div className="d26-card">
@@ -2017,78 +2019,7 @@ export const DesktopApp: React.FC = () => {
             </div>
 
             <div className="d26-split-2">
-              <div className="d26-card">
-                <h2 style={{ fontSize: '1rem', marginBottom: '12px' }}>
-                  Ambiente Local de Desenvolvimento (Windows 11 — Persistência Dual SQLite)
-                </h2>
-                <table className="d26-table">
-                  <thead>
-                    <tr>
-                      <th>Serviço</th>
-                      <th>Porta</th>
-                      <th>Persistência</th>
-                      <th>Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr>
-                      <td>
-                        <strong>1. Servidor Operacional Local</strong>
-                      </td>
-                      <td>
-                        <code>127.0.0.1:4000</code>
-                      </td>
-                      <td>
-                        <code>data/deck26-local.sqlite</code>
-                      </td>
-                      <td>
-                        <span className="d26-badge d26-badge-success">Ativo</span>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td>
-                        <strong>2. Interface Windows (PDV / Caixa / Mesas)</strong>
-                      </td>
-                      <td>
-                        <code>localhost:5173</code>
-                      </td>
-                      <td>Consome API Local</td>
-                      <td>
-                        <span className="d26-badge d26-badge-pink">Ativo</span>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td>
-                        <strong>3. Servidor de Nuvem Simulado (VPS)</strong>
-                      </td>
-                      <td>
-                        <code>127.0.0.1:4100</code>
-                      </td>
-                      <td>
-                        <code>data/deck26-cloud-vps.sqlite</code>
-                      </td>
-                      <td>
-                        <span className="d26-badge d26-badge-purple">
-                          {pendingOutboxCount} na Outbox
-                        </span>
-                      </td>
-                    </tr>
-                    <tr>
-                      <td>
-                        <strong>4. Cardápio Digital QR Code / Delivery</strong>
-                      </td>
-                      <td>
-                        <code>localhost:5174</code>
-                      </td>
-                      <td>Token QR Seguro + API Local/VPS</td>
-                      <td>
-                        <span className="d26-badge d26-badge-outline-pink">Pronto</span>
-                      </td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-
+              <div className="d26-card"><h2 style={{fontSize:'1rem',marginBottom:12}}>Sua operação, em um só lugar</h2><p style={{color:'var(--d26-gray-300)',lineHeight:1.8,fontSize:13}}>Acompanhe as mesas, o preparo dos pedidos e as hospedagens. Recebimentos, transferências e estornos permanecem vinculados à sua origem.</p><div style={{display:'flex',gap:10,marginTop:20,flexWrap:'wrap'}}><span className={serverConnected?'d26-badge d26-badge-success':'d26-badge d26-badge-warning'}>{serverConnected?'Operação local conectada':'Conexão local indisponível'}</span><span className="d26-badge d26-badge-purple">{pendingOutboxCount} evento(s) aguardando sincronização</span></div><p style={{color:'var(--d26-gray-400)',fontSize:12,marginTop:18,lineHeight:1.8}}>A emissão fiscal permanece em demonstração. Confira caixa e recebimentos com os comprovantes da operação.</p></div>
               <div className="d26-card">
                 <h2 style={{ fontSize: '1rem', marginBottom: '12px' }}>Acesso Rápido aos Módulos</h2>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px' }}>
@@ -3739,10 +3670,10 @@ export const DesktopApp: React.FC = () => {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap', gap: '10px' }}>
                 <div>
                   <h2 style={{ fontSize: '1.05rem' }}>
-                    Mapa Operacional de Mesas em Tempo Real (Estado Físico × Estado Financeiro)
+                    Mapa de mesas
                   </h2>
                   <p style={{ fontSize: '0.78rem', color: 'var(--d26-gray-400)' }}>
-                    Proteção transacional contra abertura duplicada, transferência auditada, junção/separação de mesas e liberação controlada.
+                    Acompanhe o atendimento e identifique rapidamente as mesas que precisam de atenção.
                   </p>
                 </div>
                 <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
@@ -3882,7 +3813,7 @@ export const DesktopApp: React.FC = () => {
                 </div>
               </div>
 
-              {/* GRADE VISUAL DE MESAS */}
+              <div className="d26-table-legend" aria-label="Legenda das situações de mesa"><span className="d26-table-free">● Livre</span><span className="d26-table-occupied">● Ocupada / em atendimento</span><span className="d26-table-payment">● Aguardando pagamento</span><span className="d26-table-cleaning">● Em limpeza</span><span className="d26-table-unavailable">● Indisponível</span></div>
               <div className="d26-product-grid">
                 {(snapshot.qrTables ?? [])
                   .filter((qt) => {
@@ -3904,6 +3835,7 @@ export const DesktopApp: React.FC = () => {
                   })
                   .map((qt) => {
                     const phys = qt.physicalStatus ?? 'LIVRE';
+                    const signal = tableSignal(phys);
                     const linkedTab = snapshot.tabs.find((t) => t.id === qt.activeTabId);
                     const remaining = linkedTab
                       ? Math.max(0, linkedTab.totalCents - linkedTab.paidCents)
@@ -3920,17 +3852,8 @@ export const DesktopApp: React.FC = () => {
                     return (
                       <div
                         key={qt.tableNumber}
-                        className="d26-product-card"
-                        style={{
-                          borderLeft:
-                            phys === 'LIVRE'
-                              ? '4px solid #34D399'
-                              : phys === 'AGUARDANDO_PAGAMENTO'
-                                ? '4px solid #FBBF24'
-                                : phys === 'LIMPEZA'
-                                  ? '4px solid #60A5FA'
-                                  : '4px solid #F72585'
-                        }}
+                        className={`d26-product-card d26-table-signal d26-table-${signal.tone}`}
+                        aria-label={`Mesa ${qt.tableNumber}: ${signal.label}`}
                       >
                         <div>
                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
@@ -3938,15 +3861,9 @@ export const DesktopApp: React.FC = () => {
                               Mesa {String(qt.tableNumber).padStart(2, '0')}
                             </strong>
                             <span
-                              className={`d26-badge ${
-                                phys === 'LIVRE'
-                                  ? 'd26-badge-success'
-                                  : phys === 'AGUARDANDO_PAGAMENTO'
-                                    ? 'd26-badge-warning'
-                                    : 'd26-badge-pink'
-                              }`}
+                              className={`d26-badge d26-table-status d26-table-${signal.tone}`}
                             >
-                              {phys}
+                              <span aria-hidden="true">{signal.icon}</span> {signal.label}
                             </span>
                           </div>
 
@@ -4049,7 +3966,7 @@ export const DesktopApp: React.FC = () => {
             <div className="d26-split-2">
               <div className="d26-card">
                 <h2 style={{ fontSize: '1rem', marginBottom: '12px' }}>
-                  Comandas Acumuladas (Entidade Tab)
+                  Resumo das comandas
                 </h2>
                 <table className="d26-table">
                   <thead>
@@ -6298,16 +6215,7 @@ export const DesktopApp: React.FC = () => {
       </main>
 
       {/* RODAPÉ TÉCNICO DO PROGRAMA WINDOWS */}
-      <footer className="d26-statusbar">
-        <div>
-          <strong>DECK 26</strong> • Paleta Oficial: Rosa <code>#F72585</code> | Preto{' '}
-          <code>#111111</code> | Roxo <code>#7209B7</code> | Neutro <code>#1A1A1A</code> • Plus
-          Jakarta Sans
-        </div>
-        <div>
-          Segurança Ativa: Loopback Local <code>127.0.0.1</code> + Autenticação por PIN HMAC
-        </div>
-      </footer>
+      <footer className="d26-statusbar"><span>DECK 26 · Restaurante, bar & hospitalidade</span><span>{authSession?'Sessão autenticada · '+authSession.name:'Entre para acessar a operação'}</span></footer>
     </div>
   );
 };
