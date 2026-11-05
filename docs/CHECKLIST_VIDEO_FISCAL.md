@@ -4,7 +4,7 @@ Data da preparação: 05/11/2026. Este roteiro demonstra a base fiscal e o simul
 
 ## Como abrir
 
-Use o atalho **DECK 26 - Ensaio Fiscal**. O navegador abre http://127.0.0.1:4802. PIN exclusivo da apresentação: **536821**. A pasta `%USERPROFILE%\Deck26\EnsaioFiscal` é separada dos dados operacionais. Mantenha aberta a janela do lançador; ao terminar, confirme OK para desligar somente o ensaio.
+Use o atalho **DECK 26 - Ensaio Fiscal**. O navegador abre http://127.0.0.1:4802. PIN exclusivo da apresentação: **536821**. A pasta `%USERPROFILE%\Deck26\EnsaioFiscal` é separada dos dados operacionais. Mantenha aberta a janela do lançador; ao terminar, clique em Encerrar apresentação para desligar somente o ensaio.
 
 ## Vídeo sugerido: 5 a 8 minutos
 
@@ -52,7 +52,7 @@ Use o atalho **DECK 26 - Ensaio Fiscal**. O navegador abre http://127.0.0.1:4802
 - [ ] Atualizar a página, entrar novamente e conferir que o histórico permanece.
 - [ ] Confirmar que caixa, recebimentos e documentos fiscais reais não foram criados pelos ensaios.
 - [ ] Encerrar o vídeo explicando as pendências: A1, dados da empresa, tributação, assinatura/XSD, conexão real, eventos, contingência oficial e homologação.
-- [ ] Fechar o navegador e confirmar OK na janela do lançador para desligar apenas o ensaio.
+- [ ] Fechar o navegador e clicar em Encerrar apresentação na janela do lançador para desligar apenas o ensaio.
 
 ## O que ainda não está implementado
 
