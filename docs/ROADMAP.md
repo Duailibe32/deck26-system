@@ -27,9 +27,7 @@
 
 ## Próximas Etapas Planejadas
 
-- **Etapa 7 — Homologação de Hardware, Fiscal SEFAZ e Deploy em Produção**:
-  - Integração com impressoras térmicas físicas ESC/POS, Certificado Digital A1 para NFC-e/NF-e e publicação na Hostinger VPS com PostgreSQL 16.
-- **Etapa 6.5 — Auditoria Geral, Correção de Falhas, Homologação Operacional e Preparação para Produção (Concluída)**:
+- **Etapa 6.5 — Auditoria Geral, Correção de Falhas, Homologação Operacional e Preparação para Produção**:
   - Auditoria profunda em 13 fases abrangendo integridade referencial, concorrência, consistência contábil e segurança;
   - Resolução de flakiness de datas em testes automatizados (`new Date()` vs datas fixas);
   - Refatoração da query de DRE para isolamento estrito de diárias hoteleiras, garantindo que lançamentos de `PAYMENT` no folio não reduzam receita bruta e que `ROOM_CHARGE` não duplique faturamento;
@@ -37,3 +35,21 @@
   - Modo estrito de autenticação ativado automaticamente em produção (`NODE_ENV === 'production'`);
   - 103 testes automatizados aprovados (100% de sucesso);
   - Criação dos documentos `AUDIT_STAGE_6_5.md`, `FINANCIAL_INVARIANTS.md`, `OPERATIONAL_ACCEPTANCE.md`, `PREPRODUCTION_CHECKLIST.md` e `BACKUP_AND_RECOVERY.md`.
+- **Etapa 7A — Demonstração Online Comercial + Hotel (24 Apartamentos) + Cardápio Oficial (93 Produtos) + Preparação Fiscal Multi-CNPJ**:
+  - **Hotel Auto Posto Milla (24 Apartamentos)**: 12 operacionais ativos (Aptos 101-112) e 12 em construção civil (Aptos 201-212) com commercialStatus `EM_CONSTRUCAO`; bloqueio estrito de reservas, check-ins e lançamento de diárias para quartos em obras; exclusão matemática dos quartos em obras do denominador de Taxa de Ocupação % e RevPAR; assistente modal desktop completo para edição gerencial de atributos, tarifas e transição de status;
+  - **Cardápio Oficial DECK 26 (93 Produtos)**: Catálogo oficial com exatamente 93 produtos em 10 categorias estruturadas (Pratos Executivos: 11, Tapiocas: 7, Para Qualquer Hora: 7, Cuscuz Recheado: 7, Pastéis: 8, Lanches: 9, Petiscos: 21, Cafeteria: 7, Sucos 300ml: 9, Vitaminas 300ml: 7); SKUs padronizados, preços por canal, estações de preparo e metadados fiscais; pendência documental catalogada para `D26-CZ-005` ("Cuscuz de carne de sol sem catupiry");
+  - **Demonstração Online Comercial (Mobile-First)**: Interface responsiva em `apps/web` com 7 módulos operacionais completos (Dashboard, Cardápio 93 itens com busca e filtros, Mesas & Salão, Hotel 24 apts, Delivery Próprio, DRE & Caixa e Simulador Fiscal); tarja persistente de dados fictícios sem risco de confusão operacional; modo de fallback autônomo com zero backend, garantindo funcionamento contínuo mesmo com servidor desligado;
+  - **Preparação Fiscal Multi-Estabelecimento**: Segregação formal de estabelecimentos: Restaurante (CNPJ Matriz `12345678000190` - ICMS/NFC-e Mod 65) vs Hotel (CNPJ Filial `12345678000271` - ISS/NFS-e Municipal); distinção jurídica e funcional entre Comanda de Mesa, Pré-Conta conferencial (sem validade fiscal), Comprovante de Pagamento (máquina POS) e Documento Fiscal eletrônico; simulação de emissão com chave de acesso de 44 dígitos e tarja legal "SEM VALIDADE FISCAL - DEMO";
+  - **Testes & Qualidade**: 16 novos testes automatizados (3 em contracts + 13 em stage7a), elevando a suíte total para **119 testes automatizados 100% aprovados**; typecheck e build completos em todos os 6 pacotes do monorepositório.
+
+---
+
+## Próximas Etapas Planejadas
+
+- **Etapa 7B — Publicação da Demonstração na Nuvem (Vercel / Netlify)**:
+  - Publicação do frontend `apps/web` no plano gratuito sem custos de servidor;
+  - Disponibilização do link público e QR Code para apresentação comercial a clientes.
+- **Etapa 8 — Homologação de Hardware, Fiscal SEFAZ e Deploy em Produção**:
+  - Integração com impressoras térmicas físicas ESC/POS via Spooler Windows;
+  - Emissão real de NFC-e (Mod 65) e NFS-e com Certificado Digital A1;
+  - Implantação do servidor cloud em VPS com banco de dados PostgreSQL 16+.

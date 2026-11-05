@@ -132,7 +132,18 @@ import {
   PurchaseInvoiceItem,
   Supplier,
   calculateDreStatement,
-  sanitizeCsvCell
+  sanitizeCsvCell,
+  // Etapa 7A: 24 Apartamentos, Cardápio 93 Produtos e Preparação Fiscal
+  RoomCommercialStatus,
+  FiscalDocumentRecord,
+  FiscalDocumentType,
+  FiscalDocumentStatus,
+  FiscalEstablishment,
+  FiscalEstablishmentSegment,
+  DECK26_INITIAL_FISCAL_ESTABLISHMENTS,
+  DECK26_INITIAL_ROOMS_24,
+  DECK26_STAGE7A_CATEGORIES,
+  DECK26_STAGE7A_MENU_93
 } from '@deck26/contracts';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -284,6 +295,23 @@ export class LocalOperationalStore {
         .run('0005_stage6_delivery_and_finance', new Date().toISOString());
     }
 
+    const existing0006 = this.db
+      .prepare('SELECT version FROM schema_migrations WHERE version = ?')
+      .get('0006_stage7a_rooms_catalog_fiscal') as { version?: string } | undefined;
+
+    if (!existing0006) {
+      const migration0006Path = path.resolve(
+        __dirname,
+        '../../../packages/contracts/migrations/local/0006_stage7a_rooms_catalog_fiscal.sql'
+      );
+      const sql0006 = fs.readFileSync(migration0006Path, 'utf-8');
+      this.applySqlStatementsIdempotently(sql0006);
+
+      this.db
+        .prepare('INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)')
+        .run('0006_stage7a_rooms_catalog_fiscal', new Date().toISOString());
+    }
+
     // Garante compatibilidade de bancos criados na Etapa 2 com novos status das Etapas 3, 4, 5 e 6
     this.db.exec('PRAGMA ignore_check_constraints = ON;');
   }
@@ -315,6 +343,18 @@ export class LocalOperationalStore {
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
     for (const cat of DECK26_INITIAL_CATEGORIES) {
+      insertCat.run(
+        cat.id,
+        cat.slug,
+        cat.name,
+        cat.description ?? '',
+        cat.sortOrder,
+        JSON.stringify(cat.availableChannels ?? ['DINE_IN', 'COUNTER_PDV', 'QR_TABLE', 'DELIVERY', 'PICKUP', 'HOTEL_ROOM']),
+        cat.active ? 1 : 0,
+        now
+      );
+    }
+    for (const cat of DECK26_STAGE7A_CATEGORIES) {
       insertCat.run(
         cat.id,
         cat.slug,
@@ -374,6 +414,54 @@ export class LocalOperationalStore {
       }
     }
 
+    // Semeia itens estendidos do Cardápio Oficial (93 produtos completos da Etapa 7A)
+    const updateProd7A = this.db.prepare(`
+      UPDATE catalog_products
+      SET data_source = 'STAGE7A_CARDAPIO_DIGITAL',
+          category_id = COALESCE(?, category_id),
+          ncm = COALESCE(?, ncm),
+          cfop = COALESCE(?, cfop),
+          csosn = COALESCE(?, csosn),
+          verification_pending_json = ?
+      WHERE id = ? OR sku = ?
+    `);
+
+    for (const prod of DECK26_STAGE7A_MENU_93) {
+      const targetPrinter = prod.targetPrinter ?? this.defaultPrinterForStation(prod.prepStation);
+      insertProd.run(
+        prod.id,
+        prod.sku,
+        prod.categoryId,
+        prod.name,
+        prod.description,
+        prod.priceCents,
+        prod.costPriceCents ?? Math.round(prod.priceCents * 0.4),
+        JSON.stringify(prod.channelPricesCents ?? {}),
+        JSON.stringify(prod.availableChannels),
+        prod.prepStation,
+        targetPrinter,
+        prod.prepTimeMinutes ?? 15,
+        prod.trackStock ? 1 : 0,
+        prod.minStockQuantity ?? 5,
+        prod.outOfStockPolicy ?? 'BLOCK_SALE',
+        JSON.stringify(prod.modifierGroups ?? []),
+        prod.dataSource ?? 'STAGE7A_CARDAPIO_DIGITAL',
+        prod.active ? 1 : 0,
+        prod.createdAt ?? prod.updatedAt,
+        prod.updatedAt
+      );
+      updateProd7A.run(
+        prod.categoryId,
+        prod.ncm ?? '2106.90.90',
+        prod.cfop ?? '5.102',
+        prod.csosn ?? '102',
+        JSON.stringify(prod.verificationPending ?? []),
+        prod.id,
+        prod.sku
+      );
+      insertStockBalance.run(prod.id, 50, now);
+    }
+
     // 3. Garante sessão de caixa aberta
     const activeSession = this.db
       .prepare("SELECT id FROM cash_register_sessions WHERE status = 'OPEN' LIMIT 1")
@@ -388,26 +476,69 @@ export class LocalOperationalStore {
         .run('CASH-SESSION-INITIAL', 'usr-owner-01', now, 20000);
     }
 
-    // 4. Garante estrutura física dos apartamentos do Hotel Auto Posto Milla
-    const roomCount = (
-      this.db.prepare('SELECT COUNT(*) as total FROM hotel_rooms').get() as { total: number }
-    ).total;
-    if (roomCount === 0) {
-      const insertRoom = this.db.prepare(`
-        INSERT INTO hotel_rooms (id, number, category, daily_rate_cents, status, current_guest_name, active_tab_id, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, NULL, ?)
-      `);
-      const rooms: Array<[string, string, string, number, string]> = [
-        ['room-101', '101', 'STANDARD_SINGLE', 13000, 'AVAILABLE'],
-        ['room-102', '102', 'STANDARD_DOUBLE', 17000, 'AVAILABLE'],
-        ['room-103', '103', 'LUXO_CASAL', 21000, 'AVAILABLE'],
-        ['room-201', '201', 'LUXO_CASAL', 21000, 'AVAILABLE'],
-        ['room-202', '202', 'TRIPLO', 25000, 'AVAILABLE'],
-        ['room-203', '203', 'STANDARD_DOUBLE', 17000, 'AVAILABLE']
-      ];
-      for (const [id, num, cat, rate, status] of rooms) {
-        insertRoom.run(id, num, cat, rate, status, null, now);
-      }
+    // 4. Garante estrutura física dos 24 apartamentos do Hotel Auto Posto Milla (12 Operacionais + 12 Em Construção)
+    const insertRoom24 = this.db.prepare(`
+      INSERT OR IGNORE INTO hotel_rooms (
+        id, number, name, floor_sector, category, max_guests, bed_count, bed_configuration,
+        description, amenities_json, photos_json, daily_rate_cents, status, occupancy_status,
+        housekeeping_status, maintenance_status, commercial_status, active, current_guest_name,
+        active_tab_id, internal_notes, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, NULL, ?, ?, ?)
+    `);
+
+    for (const room of DECK26_INITIAL_ROOMS_24) {
+      insertRoom24.run(
+        room.id,
+        room.number,
+        room.name,
+        room.floorSector,
+        room.category,
+        room.maxGuests,
+        room.bedCount,
+        room.bedConfiguration,
+        room.description,
+        JSON.stringify(room.amenities),
+        JSON.stringify(room.photos),
+        room.dailyRateCents,
+        room.commercialStatus === 'OPERACIONAL' ? 'AVAILABLE' : 'MAINTENANCE',
+        room.occupancyStatus,
+        room.housekeepingStatus,
+        room.maintenanceStatus,
+        room.commercialStatus,
+        room.internalNotes,
+        now,
+        now
+      );
+    }
+
+    // 4.5 Semeia Estabelecimentos Fiscais Estruturais (Restaurante e Hotel)
+    const insertFiscalEst = this.db.prepare(`
+      INSERT OR IGNORE INTO fiscal_establishments (
+        id, code, cnpj, razao_social, nome_fantasia, inscricao_estadual, inscricao_municipal,
+        cnae, tax_regime, segment, address_street, address_number, address_city, address_state,
+        address_postal_code, active, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    for (const est of DECK26_INITIAL_FISCAL_ESTABLISHMENTS) {
+      insertFiscalEst.run(
+        est.id,
+        est.code,
+        est.cnpj,
+        est.razaoSocial,
+        est.nomeFantasia,
+        est.inscricaoEstadual,
+        est.inscricaoMunicipal,
+        est.cnae,
+        est.taxRegime,
+        est.segment,
+        est.addressStreet,
+        est.addressNumber,
+        est.addressCity,
+        est.addressState,
+        est.addressPostalCode,
+        est.active ? 1 : 0,
+        now
+      );
     }
 
     // 5. Configuração Fiscal Inicial Honesta
@@ -2364,8 +2495,8 @@ export class LocalOperationalStore {
       id: orderId,
       tabId: resolvedTab ? resolvedTab.id : null,
       channel: input.channel,
-      originNode: input.originNode,
-      idempotencyKey: input.idempotencyKey,
+      originNode: input.originNode ?? 'WINDOWS_PDV',
+      idempotencyKey: input.idempotencyKey ?? crypto.randomUUID(),
       status: initialStatus,
       priority: input.priority ?? 'NORMAL',
       waiterUserId: input.waiterUserId ?? null,
@@ -4797,10 +4928,19 @@ export class LocalOperationalStore {
         // Fallback para lista padrão
       }
     }
+    let photos: string[] = [];
+    if (r.photos_json) {
+      try {
+        photos = JSON.parse(String(r.photos_json));
+      } catch {
+        photos = [];
+      }
+    }
 
     return {
       id: String(r.id),
       number: String(r.number),
+      name: String(r.name || ''),
       floorSector: r.floor_sector ? String(r.floor_sector) : 'Térreo',
       category: (r.category || 'STANDARD_DOUBLE') as HotelRoom['category'],
       maxGuests: r.max_guests != null ? Number(r.max_guests) : 2,
@@ -4808,11 +4948,13 @@ export class LocalOperationalStore {
       bedConfiguration: r.bed_configuration ? String(r.bed_configuration) : '1 Cama Casal',
       description: String(r.description || ''),
       amenities,
+      photos,
       dailyRateCents: Number(r.daily_rate_cents),
       status: (r.status || 'AVAILABLE') as HotelRoom['status'],
       occupancyStatus: (r.occupancy_status || 'LIVRE') as RoomOccupancyStatus,
       housekeepingStatus: (r.housekeeping_status || 'LIMPO') as RoomHousekeepingStatus,
       maintenanceStatus: (r.maintenance_status || 'DISPONIVEL') as RoomMaintenanceStatus,
+      commercialStatus: (r.commercial_status || 'OPERACIONAL') as RoomCommercialStatus,
       active: r.active != null ? Boolean(r.active) : true,
       currentGuestName: r.current_guest_name ? String(r.current_guest_name) : null,
       currentGuestId: r.current_guest_id ? String(r.current_guest_id) : null,
@@ -4828,6 +4970,7 @@ export class LocalOperationalStore {
     activeOnly?: boolean;
     occupancyStatus?: RoomOccupancyStatus;
     housekeepingStatus?: RoomHousekeepingStatus;
+    commercialStatus?: RoomCommercialStatus;
   }): HotelRoom[] {
     let sql = 'SELECT * FROM hotel_rooms WHERE 1=1';
     const params: any[] = [];
@@ -4841,6 +4984,10 @@ export class LocalOperationalStore {
     if (options?.housekeepingStatus) {
       sql += ' AND housekeeping_status = ?';
       params.push(options.housekeepingStatus);
+    }
+    if (options?.commercialStatus) {
+      sql += ' AND commercial_status = ?';
+      params.push(options.commercialStatus);
     }
     sql += ' ORDER BY number ASC';
 
@@ -4861,6 +5008,7 @@ export class LocalOperationalStore {
   public createHotelRoom(input: {
     id?: string;
     number: string;
+    name?: string;
     floorSector?: string;
     category?: HotelRoomCategory;
     maxGuests?: number;
@@ -4868,7 +5016,9 @@ export class LocalOperationalStore {
     bedConfiguration?: string;
     description?: string;
     amenities?: string[];
+    photos?: string[];
     dailyRateCents: number;
+    commercialStatus?: RoomCommercialStatus;
     internalNotes?: string;
     operatorUserId: string;
   }): HotelRoom {
@@ -4880,16 +5030,22 @@ export class LocalOperationalStore {
     const id = input.id || `room-${input.number}`;
     const now = new Date().toISOString();
     const amenities = input.amenities || ['Ar Condicionado', 'Wi-Fi', 'TV Smart', 'Frigobar'];
+    const photos = input.photos || [];
+    const commStatus: RoomCommercialStatus = input.commercialStatus || 'OPERACIONAL';
+    const occStatus: RoomOccupancyStatus = commStatus === 'EM_CONSTRUCAO' ? 'BLOQUEADO' : 'LIVRE';
+    const maintStatus: RoomMaintenanceStatus = commStatus === 'EM_CONSTRUCAO' ? 'EM_MANUTENCAO' : 'DISPONIVEL';
+    const status = commStatus === 'EM_CONSTRUCAO' ? 'MAINTENANCE' : 'AVAILABLE';
 
     this.db.prepare(`
       INSERT INTO hotel_rooms (
-        id, number, floor_sector, category, max_guests, bed_count, bed_configuration,
-        description, amenities_json, daily_rate_cents, status, occupancy_status,
-        housekeeping_status, maintenance_status, active, internal_notes, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'AVAILABLE', 'LIVRE', 'LIMPO', 'DISPONIVEL', 1, ?, ?, ?)
+        id, number, name, floor_sector, category, max_guests, bed_count, bed_configuration,
+        description, amenities_json, photos_json, daily_rate_cents, status, occupancy_status,
+        housekeeping_status, maintenance_status, commercial_status, active, internal_notes, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'LIMPO', ?, ?, 1, ?, ?, ?)
     `).run(
       id,
       input.number,
+      input.name || '',
       input.floorSector || 'Térreo',
       input.category || 'STANDARD_DOUBLE',
       input.maxGuests || 2,
@@ -4897,7 +5053,12 @@ export class LocalOperationalStore {
       input.bedConfiguration || '1 Cama Casal',
       input.description || '',
       JSON.stringify(amenities),
+      JSON.stringify(photos),
       input.dailyRateCents,
+      status,
+      occStatus,
+      maintStatus,
+      commStatus,
       input.internalNotes || '',
       now,
       now
@@ -4930,6 +5091,7 @@ export class LocalOperationalStore {
     id: string,
     updates: Partial<{
       number: string;
+      name: string;
       floorSector: string;
       category: HotelRoomCategory;
       maxGuests: number;
@@ -4937,10 +5099,12 @@ export class LocalOperationalStore {
       bedConfiguration: string;
       description: string;
       amenities: string[];
+      photos: string[];
       dailyRateCents: number;
       occupancyStatus: RoomOccupancyStatus;
       housekeepingStatus: RoomHousekeepingStatus;
       maintenanceStatus: RoomMaintenanceStatus;
+      commercialStatus: RoomCommercialStatus;
       internalNotes: string;
       active: boolean;
     }>,
@@ -4958,6 +5122,10 @@ export class LocalOperationalStore {
     if (updates.number !== undefined) {
       fields.push('number = ?');
       params.push(updates.number);
+    }
+    if (updates.name !== undefined) {
+      fields.push('name = ?');
+      params.push(updates.name);
     }
     if (updates.floorSector !== undefined) {
       fields.push('floor_sector = ?');
@@ -4987,9 +5155,21 @@ export class LocalOperationalStore {
       fields.push('amenities_json = ?');
       params.push(JSON.stringify(updates.amenities));
     }
+    if (updates.photos !== undefined) {
+      fields.push('photos_json = ?');
+      params.push(JSON.stringify(updates.photos));
+    }
     if (updates.dailyRateCents !== undefined) {
       fields.push('daily_rate_cents = ?');
       params.push(updates.dailyRateCents);
+    }
+    if (updates.commercialStatus !== undefined) {
+      fields.push('commercial_status = ?');
+      params.push(updates.commercialStatus);
+      if (updates.commercialStatus === 'EM_CONSTRUCAO') {
+        fields.push("occupancy_status = 'BLOQUEADO'");
+        fields.push("status = 'MAINTENANCE'");
+      }
     }
     if (updates.occupancyStatus !== undefined) {
       fields.push('occupancy_status = ?');
@@ -5357,6 +5537,9 @@ export class LocalOperationalStore {
     if (!room.active) {
       return { available: false, conflictReason: `Apartamento ${roomNumber} está desativado.` };
     }
+    if (room.commercialStatus === 'EM_CONSTRUCAO') {
+      return { available: false, conflictReason: `Apartamento ${roomNumber} está em construção e não possui disponibilidade comercial.` };
+    }
     if (room.maintenanceStatus === 'INTERDITADO') {
       return { available: false, conflictReason: `Apartamento ${roomNumber} está interditado para manutenção.` };
     }
@@ -5399,6 +5582,9 @@ export class LocalOperationalStore {
     const room = this.getHotelRoomByNumber(input.roomNumber);
     if (!room) {
       throw new Error(`Apartamento ${input.roomNumber} não encontrado.`);
+    }
+    if (room.commercialStatus === 'EM_CONSTRUCAO') {
+      throw new Error(`Apartamento ${input.roomNumber} está em construção e não pode ser reservado.`);
     }
 
     const availability = this.checkRoomAvailability(input.roomNumber, input.checkInDate, input.checkOutDate);
@@ -5682,6 +5868,9 @@ export class LocalOperationalStore {
     if (!room.active) {
       throw new Error(`Apartamento ${input.roomNumber} está desativado.`);
     }
+    if (room.commercialStatus === 'EM_CONSTRUCAO') {
+      throw new Error(`Apartamento ${input.roomNumber} está em construção e não pode receber check-in ou ocupação.`);
+    }
     if (room.occupancyStatus === 'OCUPADO' || room.activeStayId) {
       throw new Error(`Apartamento ${input.roomNumber} já se encontra ocupado por outra hospedagem.`);
     }
@@ -5768,6 +5957,9 @@ export class LocalOperationalStore {
       WHERE id = ?
     `).run(now, guest.id);
 
+    const staff = this.db.prepare('SELECT name FROM users WHERE id = ?').get(input.operatorUserId) as { name?: string } | undefined;
+    const opName = input.operatorName || staff?.name || 'Operador Hotel';
+
     // Lança primeira diária no folio
     const firstFolioEntry = this.addFolioEntry({
       stayId,
@@ -5777,7 +5969,7 @@ export class LocalOperationalStore {
       sourceReferenceType: 'ROOM_RATE',
       sourceReferenceId: stayId,
       operatorUserId: input.operatorUserId,
-      operatorName: input.operatorName
+      operatorName: opName
     });
 
     const updatedRoom = this.getHotelRoomById(room.id)!;
@@ -5995,6 +6187,8 @@ export class LocalOperationalStore {
 
     const id = crypto.randomUUID();
     const now = new Date().toISOString();
+    const staff = this.db.prepare('SELECT name FROM users WHERE id = ?').get(input.operatorUserId) as { name?: string } | undefined;
+    const opName = input.operatorName || staff?.name || 'Operador Hotel';
 
     this.db.prepare(`
       INSERT INTO hotel_folio_entries (
@@ -6014,7 +6208,7 @@ export class LocalOperationalStore {
       input.sourceReferenceId || null,
       input.sourceDetailsJson || null,
       input.operatorUserId,
-      input.operatorName,
+      opName,
       now
     );
 
@@ -6672,8 +6866,9 @@ export class LocalOperationalStore {
 
   public getHotelDashboardMetrics(): HotelDashboardMetrics {
     const rooms = this.listHotelRooms();
-    const activeRooms = rooms.filter((r) => r.active);
+    const activeRooms = rooms.filter((r) => r.active && r.commercialStatus === 'OPERACIONAL');
     const totalRooms = activeRooms.length;
+    const underConstructionRooms = rooms.filter((r) => r.commercialStatus === 'EM_CONSTRUCAO').length;
     const occupiedRooms = activeRooms.filter((r) => r.occupancyStatus === 'OCUPADO').length;
     const availableRooms = activeRooms.filter((r) => r.occupancyStatus === 'LIVRE' && r.maintenanceStatus === 'DISPONIVEL').length;
     const dirtyCleaningRooms = activeRooms.filter((r) => r.housekeepingStatus === 'SUJO' || r.housekeepingStatus === 'EM_LIMPEZA' || r.housekeepingStatus === 'INSPECAO_PENDENTE').length;
@@ -6731,6 +6926,7 @@ export class LocalOperationalStore {
       dirtyCleaningRooms,
       maintenanceRooms,
       blockedRooms,
+      underConstructionRooms,
       occupancyRatePercent,
       adrCents,
       revparCents,
@@ -6917,6 +7113,8 @@ export class LocalOperationalStore {
       ncm: r.ncm ? String(r.ncm) : undefined,
       cest: r.cest ? String(r.cest) : undefined,
       cfop: r.cfop ? String(r.cfop) : undefined,
+      csosn: r.csosn ? String(r.csosn) : undefined,
+      verificationPending: r.verification_pending_json ? JSON.parse(String(r.verification_pending_json)) : undefined,
       merchandiseOrigin: r.merchandise_origin ? String(r.merchandise_origin) : '0',
       taxProfile: r.tax_profile ? String(r.tax_profile) : 'REVISAO_CONTABIL_PENDENTE',
       dataSource: (r.data_source as CatalogProduct['dataSource']) ?? 'OFFICIAL_MENU',
@@ -8868,7 +9066,7 @@ export class LocalOperationalStore {
       SELECT
         COUNT(*) as total_rooms,
         SUM(CASE WHEN occupancy_status = 'OCUPADO' THEN 1 ELSE 0 END) as occupied_rooms
-      FROM hotel_rooms WHERE active = 1
+      FROM hotel_rooms WHERE active = 1 AND commercial_status = 'OPERACIONAL'
     `).get() as { total_rooms?: number; occupied_rooms?: number };
     const occupancyRate = (hotelStats?.total_rooms && hotelStats.total_rooms > 0)
       ? Math.round(((hotelStats.occupied_rooms || 0) / hotelStats.total_rooms) * 10000) / 100
@@ -9323,6 +9521,540 @@ export class LocalOperationalStore {
       notes: r.notes ? String(r.notes) : null,
       createdAt: String(r.created_at)
     };
+  }
+
+  // ============================================================================
+  // ETAPA 7A: GESTÃO FISCAL E MULTI-ESTABELECIMENTOS (RESTAURANTE / HOTEL)
+  // ============================================================================
+
+  private mapFiscalEstablishmentRow(r: Record<string, unknown>): FiscalEstablishment {
+    return {
+      id: String(r.id),
+      code: String(r.code),
+      cnpj: String(r.cnpj),
+      razaoSocial: String(r.razao_social),
+      nomeFantasia: String(r.nome_fantasia),
+      inscricaoEstadual: String(r.inscricao_estadual || ''),
+      inscricaoMunicipal: String(r.inscricao_municipal || ''),
+      cnae: String(r.cnae || ''),
+      taxRegime: (r.tax_regime || 'SIMPLES_NACIONAL') as any,
+      segment: (r.segment || 'RESTAURANT') as any,
+      addressStreet: String(r.address_street || ''),
+      addressNumber: String(r.address_number || ''),
+      addressCity: String(r.address_city || ''),
+      addressState: String(r.address_state || 'MA'),
+      addressPostalCode: String(r.address_postal_code || ''),
+      active: Boolean(r.active),
+      updatedAt: String(r.updated_at)
+    };
+  }
+
+  public listFiscalEstablishments(): FiscalEstablishment[] {
+    const rows = this.db.prepare('SELECT * FROM fiscal_establishments WHERE active = 1 ORDER BY id ASC').all() as Array<Record<string, unknown>>;
+    return rows.map((r) => this.mapFiscalEstablishmentRow(r));
+  }
+
+  public getFiscalEstablishmentById(id: string): FiscalEstablishment | null {
+    const row = this.db.prepare('SELECT * FROM fiscal_establishments WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    return row ? this.mapFiscalEstablishmentRow(row) : null;
+  }
+
+  public getFiscalEstablishmentBySegment(segment: FiscalEstablishmentSegment): FiscalEstablishment | null {
+    const row = this.db.prepare("SELECT * FROM fiscal_establishments WHERE segment = ? OR segment = 'MIXED' ORDER BY id ASC LIMIT 1").get(segment) as Record<string, unknown> | undefined;
+    return row ? this.mapFiscalEstablishmentRow(row) : null;
+  }
+
+  public saveFiscalEstablishment(input: Partial<FiscalEstablishment> & { code: string; cnpj: string; razaoSocial: string; nomeFantasia: string }): FiscalEstablishment {
+    const now = new Date().toISOString();
+    const id = input.id || `est-${input.code.toLowerCase()}`;
+    const existing = this.getFiscalEstablishmentById(id);
+
+    if (existing) {
+      this.db.prepare(`
+        UPDATE fiscal_establishments
+        SET code = ?, cnpj = ?, razao_social = ?, nome_fantasia = ?, inscricao_estadual = ?,
+            inscricao_municipal = ?, cnae = ?, tax_regime = ?, segment = ?, address_street = ?,
+            address_number = ?, address_city = ?, address_state = ?, address_postal_code = ?,
+            active = ?, updated_at = ?
+        WHERE id = ?
+      `).run(
+        input.code,
+        input.cnpj,
+        input.razaoSocial,
+        input.nomeFantasia,
+        input.inscricaoEstadual ?? existing.inscricaoEstadual,
+        input.inscricaoMunicipal ?? existing.inscricaoMunicipal,
+        input.cnae ?? existing.cnae,
+        input.taxRegime ?? existing.taxRegime,
+        input.segment ?? existing.segment,
+        input.addressStreet ?? existing.addressStreet,
+        input.addressNumber ?? existing.addressNumber,
+        input.addressCity ?? existing.addressCity,
+        input.addressState ?? existing.addressState,
+        input.addressPostalCode ?? existing.addressPostalCode,
+        input.active !== undefined ? (input.active ? 1 : 0) : (existing.active ? 1 : 0),
+        now,
+        id
+      );
+    } else {
+      this.db.prepare(`
+        INSERT INTO fiscal_establishments (
+          id, code, cnpj, razao_social, nome_fantasia, inscricao_estadual, inscricao_municipal,
+          cnae, tax_regime, segment, address_street, address_number, address_city, address_state,
+          address_postal_code, active, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        id,
+        input.code,
+        input.cnpj,
+        input.razaoSocial,
+        input.nomeFantasia,
+        input.inscricaoEstadual || '',
+        input.inscricaoMunicipal || '',
+        input.cnae || '',
+        input.taxRegime || 'SIMPLES_NACIONAL',
+        input.segment || 'RESTAURANT',
+        input.addressStreet || '',
+        input.addressNumber || '',
+        input.addressCity || '',
+        input.addressState || 'MA',
+        input.addressPostalCode || '',
+        input.active !== undefined ? (input.active ? 1 : 0) : 1,
+        now
+      );
+    }
+
+    return this.getFiscalEstablishmentById(id)!;
+  }
+
+  private mapFiscalDocumentRow(r: Record<string, unknown>): FiscalDocumentRecord {
+    let taxSummary = { icmsCents: 0, pisCents: 0, cofinsCents: 0, issCents: 0, approximateTaxesCents: 0 };
+    if (r.tax_summary_json) {
+      try { taxSummary = JSON.parse(String(r.tax_summary_json)); } catch {}
+    }
+    let itemsSummary = [];
+    if (r.items_summary_json) {
+      try { itemsSummary = JSON.parse(String(r.items_summary_json)); } catch {}
+    }
+
+    return {
+      id: String(r.id),
+      documentType: r.document_type as any,
+      establishmentId: String(r.establishment_id),
+      establishmentCnpj: String(r.establishment_cnpj),
+      series: Number(r.series || 1),
+      number: Number(r.number),
+      accessKey: String(r.access_key || ''),
+      originReferenceType: r.origin_reference_type as any,
+      originReferenceId: String(r.origin_reference_id),
+      customerName: String(r.customer_name || 'Consumidor Final'),
+      customerTaxId: String(r.customer_tax_id || ''),
+      grossTotalCents: Number(r.gross_total_cents),
+      discountCents: Number(r.discount_cents || 0),
+      netTotalCents: Number(r.net_total_cents),
+      taxSummary,
+      itemsSummary,
+      status: (r.status || 'SIMULATED_DEMO') as any,
+      isSimulated: Boolean(r.is_simulated),
+      watermark: String(r.watermark || 'SEM VALIDADE FISCAL - DEMO'),
+      qrCodeUrl: String(r.qr_code_url || ''),
+      simulatedXml: String(r.simulated_xml || ''),
+      simulatedDanfeText: String(r.simulated_danfe_text || ''),
+      cancellationReason: r.cancellation_reason ? String(r.cancellation_reason) : undefined,
+      canceledAt: r.canceled_at ? String(r.canceled_at) : undefined,
+      createdAt: String(r.created_at),
+      updatedAt: String(r.updated_at)
+    };
+  }
+
+  public simulateFiscalDocumentEmission(input: {
+    originReferenceType: 'TAB' | 'STAY' | 'DELIVERY_ORDER';
+    originReferenceId: string;
+    documentType?: FiscalDocumentType;
+    establishmentId?: string;
+    customerName?: string;
+    customerTaxId?: string;
+    operatorUserId: string;
+  }): FiscalDocumentRecord {
+    let docType: FiscalDocumentType = input.documentType ?? (input.originReferenceType === 'STAY' ? 'NFSE' : 'NFCE');
+
+    let est: FiscalEstablishment | null = null;
+    if (input.establishmentId) {
+      est = this.getFiscalEstablishmentById(input.establishmentId);
+    }
+    if (!est) {
+      est = this.getFiscalEstablishmentBySegment(docType === 'NFSE' ? 'HOTEL' : 'RESTAURANT');
+    }
+    if (!est) {
+      const allEst = this.listFiscalEstablishments();
+      est = allEst[0] || {
+        id: 'est-padrao',
+        code: 'PADRAO',
+        cnpj: '12345678000190',
+        razaoSocial: 'HOTEL AUTO POSTO MILLA LTDA',
+        nomeFantasia: 'DECK 26 - HOTEL AUTO POSTO MILLA',
+        inscricaoEstadual: '123456789',
+        inscricaoMunicipal: '987654',
+        cnae: '5611-2/01',
+        taxRegime: 'SIMPLES_NACIONAL',
+        segment: 'MIXED',
+        addressStreet: '',
+        addressNumber: '',
+        addressCity: 'São Luís',
+        addressState: 'MA',
+        addressPostalCode: '',
+        active: true,
+        updatedAt: new Date().toISOString()
+      };
+    }
+
+    let grossTotalCents = 0;
+    let discountCents = 0;
+    const itemsSummary: Array<{
+      productId?: string;
+      name: string;
+      quantity: number;
+      unitPriceCents: number;
+      totalCents: number;
+      ncm: string;
+      cfop: string;
+      csosn: string;
+    }> = [];
+
+    if (input.originReferenceType === 'TAB') {
+      const tab = this.getTabById(input.originReferenceId);
+      if (!tab) throw new Error(`Comanda '${input.originReferenceId}' não encontrada.`);
+      grossTotalCents = tab.totalCents;
+      discountCents = tab.discountCents || 0;
+      const orders = this.listOrdersByTab(tab.id);
+      for (const ord of orders) {
+        for (const itm of ord.items) {
+          const prod = this.getProductById(itm.productId);
+          const itemTotalCents = itm.quantity * itm.unitPriceCents;
+          itemsSummary.push({
+            productId: itm.productId,
+            name: prod?.name || 'Item de Consumo',
+            quantity: itm.quantity,
+            unitPriceCents: itm.unitPriceCents,
+            totalCents: itemTotalCents,
+            ncm: prod?.ncm || '2106.90.90',
+            cfop: prod?.cfop || '5.102',
+            csosn: prod?.csosn || '102'
+          });
+        }
+      }
+    } else if (input.originReferenceType === 'STAY') {
+      const stay = this.getHotelStayById(input.originReferenceId);
+      if (!stay) throw new Error(`Hospedagem '${input.originReferenceId}' não encontrada.`);
+      const entries = this.listFolioEntriesByStayId(stay.id);
+      const totals = calculateStayFolioTotals(entries);
+      grossTotalCents = totals.totalChargesCents;
+      discountCents = 0;
+      for (const e of entries) {
+        if (e.amountCents > 0) {
+          itemsSummary.push({
+            name: e.description,
+            quantity: 1,
+            unitPriceCents: e.amountCents,
+            totalCents: e.amountCents,
+            ncm: '0000.00.00',
+            cfop: '0.000',
+            csosn: '102'
+          });
+        }
+      }
+    } else if (input.originReferenceType === 'DELIVERY_ORDER') {
+      const del = this.getDeliveryOrderById(input.originReferenceId);
+      if (!del) throw new Error(`Pedido de delivery '${input.originReferenceId}' não encontrado.`);
+      grossTotalCents = del.totalCents;
+      discountCents = del.discountCents || 0;
+      itemsSummary.push({
+        name: `Pedido Delivery #${del.id.slice(0, 8)}`,
+        quantity: 1,
+        unitPriceCents: del.totalCents,
+        totalCents: del.totalCents,
+        ncm: '2106.90.90',
+        cfop: '5.102',
+        csosn: '102'
+      });
+    }
+
+    if (itemsSummary.length === 0) {
+      itemsSummary.push({
+        name: 'Item Geral de Consumo / Serviço',
+        quantity: 1,
+        unitPriceCents: grossTotalCents,
+        totalCents: grossTotalCents,
+        ncm: docType === 'NFSE' ? '0000.00.00' : '2106.90.90',
+        cfop: docType === 'NFSE' ? '0.000' : '5.102',
+        csosn: '102'
+      });
+    }
+
+    const netTotalCents = Math.max(0, grossTotalCents - discountCents);
+
+    const nextNumberRow = this.db.prepare(`
+      SELECT COALESCE(MAX(number), 0) + 1 as next_number
+      FROM fiscal_documents
+      WHERE establishment_id = ? AND document_type = ?
+    `).get(est.id, docType) as { next_number: number };
+    const docNumber = nextNumberRow.next_number;
+    const series = 1;
+
+    const now = new Date().toISOString();
+    const aamm = now.slice(2, 4) + now.slice(5, 7);
+    const cnpjClean = est.cnpj.replace(/\D/g, '').padEnd(14, '0');
+    let accessKey = '';
+    if (docType === 'NFSE') {
+      accessKey = `SLZ-NFSE-${aamm}-${String(docNumber).padStart(8, '0')}`;
+    } else {
+      const mod = docType === 'NFCE' ? '65' : '55';
+      const docNumPad = String(docNumber).padStart(9, '0');
+      accessKey = `21${aamm}${cnpjClean}${mod}001${docNumPad}1876543219`;
+    }
+
+    let taxSummary = { icmsCents: 0, pisCents: 0, cofinsCents: 0, issCents: 0, approximateTaxesCents: 0 };
+    if (docType === 'NFSE') {
+      const iss = Math.round(netTotalCents * 0.05);
+      taxSummary = { icmsCents: 0, pisCents: 0, cofinsCents: 0, issCents: iss, approximateTaxesCents: iss };
+    } else {
+      const icms = Math.round(netTotalCents * 0.18);
+      const pis = Math.round(netTotalCents * 0.0165);
+      const cofins = Math.round(netTotalCents * 0.076);
+      taxSummary = { icmsCents: icms, pisCents: pis, cofinsCents: cofins, issCents: 0, approximateTaxesCents: icms + pis + cofins };
+    }
+
+    const qrCodeUrl = docType === 'NFSE'
+      ? `https://nfse.saoluis.ma.gov.br/consultar?doc=${accessKey}`
+      : `https://sistemas1.sefaz.ma.gov.br/nfce/qrcode?p=${accessKey}|2|1|1|${netTotalCents}`;
+
+    const customerName = input.customerName || 'Consumidor Final';
+    const customerTaxId = input.customerTaxId || '';
+
+    const danfeLines = [
+      '------------------------------------------------',
+      `       ${est.nomeFantasia}`,
+      `       ${est.razaoSocial}`,
+      `       CNPJ: ${est.cnpj} - IE: ${est.inscricaoEstadual}`,
+      '------------------------------------------------',
+      '      *** SEM VALIDADE FISCAL - DEMO ***',
+      `   DOCUMENTO AUXILIAR DE ${docType === 'NFSE' ? 'NOTA FISCAL DE SERVIÇOS (NFS-e)' : 'NOTA FISCAL DE CONSUMIDOR (NFC-e)'}`,
+      '------------------------------------------------',
+      `Nº: ${String(docNumber).padStart(9, '0')}  Série: ${series}  Emissão: ${now}`,
+      `Chave de Acesso: ${accessKey}`,
+      '------------------------------------------------',
+      '#  ITEM                   QTD   UN   V.UNIT   TOTAL',
+      ...itemsSummary.map((it, idx) =>
+        `${String(idx + 1).padStart(2, '0')} ${(it.name.slice(0, 20)).padEnd(20, ' ')} ${String(it.quantity).padStart(3, ' ')}   UN  R$ ${(it.unitPriceCents / 100).toFixed(2)}  R$ ${(it.totalCents / 100).toFixed(2)}`
+      ),
+      '------------------------------------------------',
+      `VALOR TOTAL BRUTO:                    R$ ${(grossTotalCents / 100).toFixed(2)}`,
+      `DESCONTOS:                            R$ ${(discountCents / 100).toFixed(2)}`,
+      `VALOR TOTAL LÍQUIDO:                  R$ ${(netTotalCents / 100).toFixed(2)}`,
+      `Trib. Aprox. (Lei 12.741/12):         R$ ${(taxSummary.approximateTaxesCents / 100).toFixed(2)}`,
+      '------------------------------------------------',
+      `DESTINATÁRIO: ${customerName}`,
+      customerTaxId ? `CPF/CNPJ: ${customerTaxId}` : 'CONSUMIDOR NÃO IDENTIFICADO',
+      '------------------------------------------------',
+      `Consulte pelo QR Code: ${qrCodeUrl}`,
+      '================================================'
+    ];
+    const simulatedDanfeText = danfeLines.join('\n');
+    const simulatedXml = `<nfeProc versao="4.00" xmlns="http://www.portalfiscal.inf.br/nfe"><NFe><infNFe Id="NFe${accessKey}" versao="4.00"><ide><cUF>21</cUF><cNF>87654321</cNF><natOp>VENDA DE MERCADORIA</natOp><mod>${docType === 'NFCE' ? '65' : docType === 'NFE' ? '55' : 'SE'}</mod><serie>${series}</serie><nNF>${docNumber}</nNF><dhEmi>${now}</dhEmi><tpAmb>2</tpAmb></ide><emit><CNPJ>${cnpjClean}</CNPJ><xNome>${est.razaoSocial}</xNome><xFant>${est.nomeFantasia}</xFant></emit><dest><xNome>${customerName}</xNome></dest><total><ICMSTot><vNF>${(netTotalCents / 100).toFixed(2)}</vNF></ICMSTot></total></infNFe></NFe><protNFe versao="4.00"><infProt><tpAmb>2</tpAmb><chNFe>${accessKey}</chNFe><dhRecbto>${now}</dhRecbto><nProt>SIMULATED-${Date.now()}</nProt><cStat>100</cStat><xMotivo>Autorizado o uso da NF-e (SIMULAÇÃO DEMO)</xMotivo></infProt></protNFe></nfeProc>`;
+
+    const id = `fisc-${crypto.randomUUID()}`;
+
+    this.db.prepare(`
+      INSERT INTO fiscal_documents (
+        id, document_type, establishment_id, establishment_cnpj, series, number,
+        access_key, origin_reference_type, origin_reference_id, customer_name,
+        customer_tax_id, gross_total_cents, discount_cents, net_total_cents,
+        tax_summary_json, items_summary_json, status, is_simulated, watermark,
+        qr_code_url, simulated_xml, simulated_danfe_text, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'SIMULATED_DEMO', 1, 'SEM VALIDADE FISCAL - DEMO', ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      docType,
+      est.id,
+      est.cnpj,
+      series,
+      docNumber,
+      accessKey,
+      input.originReferenceType,
+      input.originReferenceId,
+      customerName,
+      customerTaxId,
+      grossTotalCents,
+      discountCents,
+      netTotalCents,
+      JSON.stringify(taxSummary),
+      JSON.stringify(itemsSummary),
+      qrCodeUrl,
+      simulatedXml,
+      simulatedDanfeText,
+      now,
+      now
+    );
+
+    this.recordAuditLog({
+      actorUserId: input.operatorUserId,
+      action: 'FISCAL_SIMULATION_EMISSION',
+      entityType: 'FISCAL_DOCUMENT',
+      entityId: id,
+      metadata: { docType, establishmentCode: est.code, docNumber, accessKey, netTotalCents }
+    });
+
+    return this.getFiscalDocumentById(id)!;
+  }
+
+  public getFiscalDocumentById(id: string): FiscalDocumentRecord | null {
+    const row = this.db.prepare('SELECT * FROM fiscal_documents WHERE id = ?').get(id) as Record<string, unknown> | undefined;
+    return row ? this.mapFiscalDocumentRow(row) : null;
+  }
+
+  public listFiscalDocuments(options?: {
+    establishmentId?: string;
+    documentType?: FiscalDocumentType;
+    status?: FiscalDocumentStatus;
+    originReferenceId?: string;
+  }): FiscalDocumentRecord[] {
+    let sql = 'SELECT * FROM fiscal_documents WHERE 1=1';
+    const params: any[] = [];
+    if (options?.establishmentId) {
+      sql += ' AND establishment_id = ?';
+      params.push(options.establishmentId);
+    }
+    if (options?.documentType) {
+      sql += ' AND document_type = ?';
+      params.push(options.documentType);
+    }
+    if (options?.status) {
+      sql += ' AND status = ?';
+      params.push(options.status);
+    }
+    if (options?.originReferenceId) {
+      sql += ' AND origin_reference_id = ?';
+      params.push(options.originReferenceId);
+    }
+    sql += ' ORDER BY created_at DESC';
+
+    const rows = this.db.prepare(sql).all(...params) as Array<Record<string, unknown>>;
+    return rows.map((r) => this.mapFiscalDocumentRow(r));
+  }
+
+  public cancelFiscalDocument(id: string, reason: string, operatorUserId: string): FiscalDocumentRecord {
+    const existing = this.getFiscalDocumentById(id);
+    if (!existing) {
+      throw new Error(`Documento fiscal '${id}' não encontrado.`);
+    }
+    if (existing.status === 'CANCELED') {
+      throw new Error(`Documento fiscal '${id}' já se encontra cancelado.`);
+    }
+
+    const now = new Date().toISOString();
+    this.db.prepare(`
+      UPDATE fiscal_documents
+      SET status = 'CANCELED',
+          cancellation_reason = ?,
+          canceled_at = ?,
+          updated_at = ?
+      WHERE id = ?
+    `).run(reason, now, now, id);
+
+    this.recordAuditLog({
+      actorUserId: operatorUserId,
+      action: 'FISCAL_DOCUMENT_CANCEL',
+      entityType: 'FISCAL_DOCUMENT',
+      entityId: id,
+      metadata: { reason, previousStatus: existing.status }
+    });
+
+    return this.getFiscalDocumentById(id)!;
+  }
+
+  public requestPreConta(tabId: string, operatorUserId: string): PrintJob {
+    const tab = this.getTabById(tabId);
+    if (!tab) throw new Error(`Comanda '${tabId}' não encontrada.`);
+
+    const orders = this.listOrdersByTab(tabId);
+    const totals = calculateTabTotals({
+      orders,
+      serviceFeeEnabled: tab.serviceFeeEnabled,
+      serviceFeeBasisPoints: tab.serviceFeeBasisPoints,
+      discountCents: tab.discountCents,
+      paidCents: tab.paidCents
+    });
+
+    const lines = [
+      '================================================',
+      '      DECK 26 — HOTEL AUTO POSTO MILLA',
+      '        CONFERÊNCIA DE CONTA (PRÉ-CONTA)',
+      '           *** NÃO É DOCUMENTO FISCAL ***',
+      '================================================',
+      `Comanda: ${tab.code}  Mesa: ${tab.tableNumber ?? 'Balcão'}`,
+      `Abertura: ${tab.openedAt}`,
+      '------------------------------------------------',
+      '#  ITEM                   QTD    UNIT     TOTAL',
+      ...orders.flatMap((o: Order) =>
+        o.items.map((it: OrderItem) => {
+          const prod = this.getProductById(it.productId);
+          const name = (prod?.name || 'Item').slice(0, 20).padEnd(20, ' ');
+          const lineTotal = (it.quantity * it.unitPriceCents) / 100;
+          return `* ${name} ${String(it.quantity).padStart(3, ' ')}  R$ ${(it.unitPriceCents / 100).toFixed(2)}  R$ ${lineTotal.toFixed(2)}`;
+        })
+      ),
+      '------------------------------------------------',
+      `SUBTOTAL:                              R$ ${(totals.subtotalCents / 100).toFixed(2)}`,
+      `TAXA DE SERVIÇO (10%):                R$ ${(totals.serviceFeeCents / 100).toFixed(2)}`,
+      `TOTAL DA CONTA:                       R$ ${(totals.totalCents / 100).toFixed(2)}`,
+      `TOTAL PAGO:                           R$ ${(tab.paidCents / 100).toFixed(2)}`,
+      `SALDO PENDENTE:                       R$ ${(totals.remainingCents / 100).toFixed(2)}`,
+      '================================================',
+      '   Aguarde o garçom para efetuar o pagamento',
+      '================================================'
+    ];
+
+    const printJob: PrintJob = {
+      id: crypto.randomUUID(),
+      targetPrinter: 'PRINTER_CASHIER',
+      jobType: 'TAB_BILL_PREVIEW',
+      status: 'PENDING',
+      referenceEntityType: 'TAB',
+      referenceEntityId: tab.id,
+      payloadText: lines.join('\n'),
+      attempts: 0,
+      createdAt: new Date().toISOString()
+    };
+
+    this.db
+      .prepare(`
+        INSERT INTO print_jobs (
+          id, target_printer, job_type, status, reference_entity_type,
+          reference_entity_id, payload_text, is_reprint, copy_number,
+          attempts, last_error, created_at, printed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 1, ?, NULL, ?, NULL)
+      `)
+      .run(
+        printJob.id,
+        printJob.targetPrinter,
+        printJob.jobType,
+        printJob.status,
+        printJob.referenceEntityType,
+        printJob.referenceEntityId,
+        printJob.payloadText,
+        printJob.attempts,
+        printJob.createdAt
+      );
+
+    this.recordAuditLog({
+      actorUserId: operatorUserId,
+      action: 'PRE_CONTA_REQUEST',
+      entityType: 'TAB',
+      entityId: tab.id,
+      metadata: { printJobId: printJob.id, remainingCents: totals.remainingCents }
+    });
+
+    return printJob;
   }
 
 }

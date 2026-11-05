@@ -60,7 +60,9 @@ import {
   DeliveryOriginSchema,
   DeliveryTypeSchema,
   FinancialAccountTypeSchema,
-  PaymentMethod
+  PaymentMethod,
+  FiscalDocumentTypeSchema,
+  RoomCommercialStatusSchema
 } from '@deck26/contracts';
 import { z } from 'zod';
 import { LocalOperationalStore } from './store.js';
@@ -826,6 +828,19 @@ export async function buildLocalServer(options?: {
     }
   });
 
+  app.post<{ Params: { id: string } }>('/api/tabs/:id/pre-conta', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'tabs:manage');
+    if (!session) return;
+    try {
+      const result = store.requestPreConta(req.params.id, session.userId);
+      return reply.send(result);
+    } catch (err) {
+      return reply.status(400).send({
+        error: err instanceof Error ? err.message : 'Não foi possível emitir pré-conta de conferência'
+      });
+    }
+  });
+
   const ApplyDiscountBodySchema = z.object({
     discountType: DiscountTypeSchema,
     discountCents: z.number().int().nonnegative().optional(),
@@ -1472,11 +1487,12 @@ export async function buildLocalServer(options?: {
 
   // 11.1 Apartamentos / Quartos
   app.get('/api/hotel/rooms', async (req, reply) => {
-    const q = req.query as { activeOnly?: string; occupancyStatus?: string; housekeepingStatus?: string };
+    const q = req.query as { activeOnly?: string; occupancyStatus?: string; housekeepingStatus?: string; commercialStatus?: string };
     const rooms = store.listHotelRooms({
       activeOnly: q.activeOnly === 'true',
       occupancyStatus: q.occupancyStatus as any,
-      housekeepingStatus: q.housekeepingStatus as any
+      housekeepingStatus: q.housekeepingStatus as any,
+      commercialStatus: q.commercialStatus as any
     });
     return reply.send({ rooms });
   });
@@ -1490,6 +1506,9 @@ export async function buildLocalServer(options?: {
   const CreateHotelRoomSchema = z.object({
     id: z.string().optional(),
     number: z.string().min(1),
+    name: z.string().optional(),
+    photos: z.array(z.string()).optional(),
+    commercialStatus: RoomCommercialStatusSchema.optional(),
     floorSector: z.string().optional(),
     category: HotelRoomCategorySchema.optional(),
     maxGuests: z.number().int().min(1).optional(),
@@ -2746,6 +2765,89 @@ export async function buildLocalServer(options?: {
     reply.header('Content-Type', 'text/csv; charset=utf-8');
     reply.header('Content-Disposition', `attachment; filename="deck26_${reportType}_${new Date().toISOString().slice(0, 10)}.csv"`);
     return reply.send(csvData);
+  });
+
+  // ============================================================================
+  // 14. MÓDULO FISCAL PREPARATÓRIO — NFC-E / NF-E / NFS-E / MULTI-ESTABELECIMENTO
+  // ============================================================================
+
+  app.get('/api/fiscal/establishments', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'fiscal:configure');
+    if (!session) return;
+    return reply.send({ establishments: store.listFiscalEstablishments() });
+  });
+
+  app.post('/api/fiscal/establishments', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'fiscal:configure');
+    if (!session) return;
+    try {
+      const establishment = store.saveFiscalEstablishment(req.body as any);
+      return reply.status(201).send({ establishment });
+    } catch (err) {
+      return reply.status(400).send({ error: err instanceof Error ? err.message : 'Erro ao salvar dados fiscais do estabelecimento' });
+    }
+  });
+
+  const SimulateFiscalEmissionSchema = z.object({
+    establishmentId: z.string().optional(),
+    documentType: FiscalDocumentTypeSchema.optional(),
+    originReferenceType: z.enum(['TAB', 'STAY', 'DELIVERY_ORDER']),
+    originReferenceId: z.string().min(1),
+    customerTaxId: z.string().optional(),
+    customerDocument: z.string().optional(),
+    customerName: z.string().optional()
+  });
+
+  app.post('/api/fiscal/simulate', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'pos:operate');
+    if (!session) return;
+    const parsed = SimulateFiscalEmissionSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ error: 'Parâmetros inválidos para emissão fiscal', issues: parsed.error.issues });
+    }
+    try {
+      const doc = store.simulateFiscalDocumentEmission({
+        ...parsed.data,
+        customerTaxId: parsed.data.customerTaxId || parsed.data.customerDocument,
+        operatorUserId: session.userId
+      });
+      return reply.status(201).send({ fiscalDocument: doc });
+    } catch (err) {
+      return reply.status(400).send({ error: err instanceof Error ? err.message : 'Erro ao simular emissão de documento fiscal' });
+    }
+  });
+
+  app.get('/api/fiscal/documents', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'reports:view');
+    if (!session) return;
+    const q = req.query as { establishmentId?: string; documentType?: string; status?: string };
+    const documents = store.listFiscalDocuments({
+      establishmentId: q.establishmentId,
+      documentType: q.documentType as any,
+      status: q.status as any
+    });
+    return reply.send({ documents });
+  });
+
+  app.get<{ Params: { id: string } }>('/api/fiscal/documents/:id', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'reports:view');
+    if (!session) return;
+    const doc = store.getFiscalDocumentById(req.params.id);
+    if (!doc) return reply.status(404).send({ error: 'Documento fiscal não encontrado' });
+    return reply.send({ fiscalDocument: doc });
+  });
+
+  app.post<{ Params: { id: string } }>('/api/fiscal/documents/:id/cancel', async (req, reply) => {
+    const session = authorizePermission(req, reply, 'tabs:discount_or_void');
+    if (!session) return;
+    const body = (req.body || {}) as { justification?: string; reason?: string };
+    const reason = body.justification || body.reason || 'Cancelamento solicitado pelo operador';
+    try {
+      const doc = store.cancelFiscalDocument(req.params.id, reason, session.userId);
+      return reply.send({ fiscalDocument: doc });
+    } catch (err) {
+      return reply.status(400).send({ error: err instanceof Error ? err.message : 'Erro ao cancelar documento fiscal' });
+    }
   });
 
   return {

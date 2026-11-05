@@ -2,6 +2,37 @@
 
 Todas as mudanças relevantes do projeto **DECK 26** são documentadas neste arquivo.
 
+## [Etapa 7A] - 2026-11-05
+### Adicionado & Aprimorado
+- **Demonstração Online Comercial Mobile-First (`apps/web`)**:
+  - Aplicação web interativa responsiva voltada para apresentação comercial a clientes e investidores pelo celular;
+  - Tarja de destaque visual permanente no topo: `✨ MODO DEMONSTRAÇÃO COMERCIAL — DECK 26 & HOTEL AUTO POSTO MILLA (DADOS SIMULADOS)`;
+  - 7 módulos navegáveis: Visão Geral (KPIs e cards de status), Cardápio Digital (93 itens oficiais com busca em tempo real e filtro por categoria), Mesas & Salão (visão gráfica de salão), Hotel PMS (grid dos 24 apartamentos com status detalhado), Delivery Próprio (gestão de rotas, taxas e despacho de motoboy), DRE & Caixa (demonstrativo gerencial e controle de caixa) e Simulador Fiscal (emissão de NFC-e / NFS-e com chave simulada e aviso legal);
+  - Modo autônomo com zero backend: quando o servidor local ou API de nuvem não estão conectados, a aplicação utiliza dados em memória gerados a partir dos contratos oficiais (`stage7a_catalog.ts`), garantindo demonstração ininterrupta.
+- **Hotel Auto Posto Milla — Expansão para 24 Apartamentos**:
+  - Suporte ao inventário completo de 24 quartos: 12 operacionais ativos (Aptos 101 a 112) e 12 em construção civil (Aptos 201 a 212);
+  - Novo campo `commercial_status` (`OPERACIONAL`, `EM_CONSTRUCAO`, `DESATIVADO`) e colunas `name` e `photos` em `hotel_rooms`;
+  - Trava operacional estrita no backend: quartos com `commercialStatus === 'EM_CONSTRUCAO'` rejeitam reservas, check-ins diretos e lançamento de diárias (retorna `HTTP 400`);
+  - Exclusão matemática estrita de quartos em obras do denominador de cálculo da Taxa de Ocupação % e RevPAR (evitando diluição artificial das métricas reais);
+  - Interface desktop (`apps/desktop`) aprimorada com badges visuais de obras (`🚧 EM OBRAS`), botões de reserva/check-in desabilitados com tooltip explicativo, filtros de visualização (`Todos`, `Operacionais`, `Em Obras`, `Livres`, etc.) e assistente modal para edição rápida de atributos, categoria, diária e transição de status de obras.
+- **Cardápio Oficial DECK 26 — 93 Produtos e 10 Categorias**:
+  - Catalogação completa dos 93 produtos oficiais com SKUs estruturados, estações de preparo (Cozinha Quente, Cozinha Fria, Chapa, Bar/Bebidas), preços por canal comercial e metadados fiscais (NCM, CFOP, CSOSN);
+  - Distribuição exata por categorias: Pratos Executivos (11), Tapiocas (7), Para Qualquer Hora (7), Cuscuz Recheado (7), Pastéis (8), Lanches (9), Petiscos (21), Cafeteria (7), Sucos 300ml (9) e Vitaminas 300ml (7);
+  - Identificação e catalogação formal da pendência de nomenclatura do item `D26-CZ-005` ("Cuscuz de carne de sol sem catupiry", com flag `verificationPending: true`);
+  - Seeding idempotente que convive harmoniosamente com produtos de testes anteriores sem quebrar retrocompatibilidade.
+- **Módulo Fiscal Preparatório & Multi-Estabelecimento**:
+  - Segregação de pessoas jurídicas: Restaurante Deck 26 (CNPJ Matriz `12345678000190`, Inscrição Estadual, regime Simples Nacional, documento NFC-e Mod 65) vs Hotel Auto Posto Milla (CNPJ Filial `12345678000271`, Inscrição Municipal, regime Simples Nacional, documento NFS-e Municipal);
+  - Distinção conceitual e técnica dos documentos: Comanda Operacional, Pré-Conta conferencial (sem valor fiscal), Comprovante de Pagamento (POS/TEF) e Documento Fiscal eletrônico;
+  - Endpoint de emissão conferencial `POST /api/tabs/:id/pre-conta` (gera spooler com cabeçalho CONFERÊNCIA DE MESA - NÃO É DOCUMENTO FISCAL);
+  - Motor de simulação fiscal `POST /api/fiscal/simulate` com geração determinística de chave de acesso de 44 dígitos (ano, mês, CNPJ, mod, série, nNF, cNF, cDV) e tarja "SEM VALIDADE FISCAL - DEMO";
+  - Rejeição e bloqueio de mecanismos arbitrários de sonegação fiscal ("modo sem nota");
+  - Endpoints de listagem, consulta e cancelamento simulado de documentos fiscais;
+  - Documentação em `docs/FISCAL_SPEC.md`, `docs/HOTEL_24_ROOMS.md`, `docs/MENU_93_PRODUCTS.md` e `docs/DEMO_ARCHITECTURE.md`.
+- **Testes & Qualidade**:
+  - 16 novos testes automatizados: 3 testes de invariantes em `packages/contracts/src/contracts.test.ts` e 13 testes de integração em `apps/local-server/src/stage7a.test.ts`;
+  - Total de testes automatizados elevado para **119 testes aprovados (100% de sucesso)**;
+  - Typecheck limpo com 0 erros em todos os 6 pacotes do monorepositório.
+
 ## [Etapa 6.5] - 2026-11-05
 ### Corrigido & Aprimorado
 - **Correção de Flakiness de Datas nos Testes**:

@@ -7,11 +7,11 @@
 **Operação local • Pedidos em tempo real • Controle financeiro • Arquitetura offline-first**
 
 [![CI](https://github.com/Duailibe32/deck26-system/actions/workflows/ci.yml/badge.svg)](https://github.com/Duailibe32/deck26-system/actions/workflows/ci.yml)
-![Status](https://img.shields.io/badge/status-etapa%206.5%20auditada-F72585)
+![Status](https://img.shields.io/badge/status-etapa%207A%20conclu%C3%ADda-F72585)
 ![Acesso](https://img.shields.io/badge/reposit%C3%B3rio-privado-7209B7)
-![Testes](https://img.shields.io/badge/testes-103%20aprovados-success)
+![Testes](https://img.shields.io/badge/testes-119%20aprovados-success)
 ![Node](https://img.shields.io/badge/Node.js-22%2B-339933?logo=nodedotjs&logoColor=white)
-![TypeScript](https://img.shields.io/badge/TypeScript-5.7-3178C6?logo=typescript&logoColor=white)
+![TypeScript](https://img.shields.io/badge/TypeScript-5.8-3178C6?logo=typescript&logoColor=white)
 
 **[Visão geral](#-visão-geral) · [Funcionalidades](#-funcionalidades) · [Arquitetura](#-arquitetura) · [Instalação](#-começando-no-windows) · [Roadmap](#-roadmap)**
 
@@ -26,7 +26,7 @@ O **DECK 26** é uma plataforma de gestão integrada desenvolvida para a operaç
 A arquitetura é **offline-first**: a operação principal utiliza um servidor e um banco de dados locais, permitindo continuar trabalhando com latência zero e sem dependência de internet externa. A sincronização com uma instância remota faz parte da arquitetura; atualmente, a nuvem é **simulada localmente**, sem exigência de contratação prévia de VPS.
 
 > [!IMPORTANT]
-> **Status atual:** Etapas 1 a 6.5 concluídas e auditadas, com **103 testes automatizados aprovados** e pipeline de CI no GitHub Actions. O sistema respeita as regras de negócio reais, sem dados fictícios de demonstração no banco e com persistência independente em disco. Documentação de pré-produção, matriz de homologação e invariantes contábeis disponíveis em `docs/`.
+> **Status atual:** Etapas 1 a 7A concluídas e auditadas, com **119 testes automatizados aprovados** e pipeline de CI no GitHub Actions. Inclui demonstração comercial online mobile-first (7 módulos, dados simulados e fallback sem backend), 24 apartamentos no Hotel Auto Posto Milla (12 operacionais + 12 em construção com trava estrita de venda e cálculo exato de ocupação), cardápio oficial com 93 produtos em 10 categorias e módulo fiscal preparatório multi-estabelecimento (Restaurante CNPJ 12345678000190 NFC-e vs Hotel CNPJ 12345678000271 NFS-e). Documentação técnica em `docs/`.
 
 ### 🎯 Cenário operacional planejado
 
@@ -42,19 +42,19 @@ A arquitetura é **offline-first**: a operação principal utiliza um servidor e
 
 | Área | Recursos desenvolvidos | Estado |
 | --- | --- | --- |
-| **Produtos e cardápio** | Cadastro inteligente, categorias, preços por canal, adicionais e controle de margem bruta | Implementado; testes automatizados |
+| **Cardápio oficial (93 itens)** | 93 produtos catalogados em 10 categorias (Pratos executivos, Tapiocas, Cafeteria, etc.), SKUs únicos, estações de preparo, preços por canal e campos fiscais | Implementado; testes automatizados |
 | **Estoque Kardex** | Razão contábil, entradas de compra, baixas automáticas, fichas técnicas e estornos auditáveis | Implementado; testes automatizados |
 | **Mesas e comandas** | Estado físico vs financeiro, transferência, junção, separação e prevenção de duplicidade | Implementado; testes automatizados |
 | **Garçons** | Terminal mobile, lançamento de pedidos, canal dedicado e notificações instantâneas | Implementado; testes automatizados |
 | **Cozinha / KDS** | Filas por estação, SLA configurável, SSE em tempo real e cancelamento por estágio | Implementado; testes automatizados |
 | **Caixa / PDV** | Pagamentos parciais/mistos, divisão de conta, troco em espécie, sangrias e turno de caixa | Implementado; testes automatizados |
-| **QR Code** | Identificação criptográfica segura por mesa e cálculo estrito no servidor | Implementado; testes automatizados |
-| **Impressão** | Spooler incremental ESC/POS por estação, proteção `UNKNOWN_OUTCOME` e 2ª via | Software implementado; hardware a conectar |
-| **Hotel (PMS Milla)** | Apartamentos (ocupação, limpeza, manutenção), hóspedes LGPD, reservas sem sobreposição [in, out), check-in guiado, extrato de folio, integração `ROOM_CHARGE` com restaurante sem dupla baixa de estoque, frigobar, serviços adicionais, check-out com saldo zero e métricas ADR/RevPAR | Implementado; 36 testes automatizados |
+| **QR Code & Demo Online** | Cardápio digital QR Code e Demonstração Comercial Web Mobile-First (7 módulos com dados simulados e zero backend fallback) | Implementado; testes automatizados |
+| **Impressão** | Spooler incremental ESC/POS por estação, proteção `UNKNOWN_OUTCOME`, 2ª via e Pré-Conta conferencial | Software implementado; hardware a conectar |
+| **Hotel (PMS Milla - 24 Apts)** | 24 apartamentos (12 operacionais + 12 em construção com trava estrita de venda e exclusão do denominador de ocupação), assistente gerencial de edição, reservas sem sobreposição, check-in, folio, `ROOM_CHARGE`, frigobar e métricas ADR/RevPAR | Implementado; 49 testes automatizados |
 | **Delivery Próprio** | Central de pedidos, regiões/bairros com taxas fixas, despacho de motoboys, prestação de contas no caixa com transferência de custódia e ciclo completo de status | Implementado; testes automatizados |
 | **Gestão Financeira & DRE** | Plano de contas gerencial, centros de custo, tesouraria multi-contas, contas a pagar/receber, compras com NF e Kardex, transferências internas, conciliação e DRE por competência | Implementado; testes automatizados |
 | **Relatórios & Exportação CSV** | Demonstrativo contábil, curva ABC, auditoria e exportação CSV blindada contra Formula Injection (`sanitizeCsvCell`) | Implementado; testes automatizados |
-| **Fiscal / pagamentos bancários** | Campos fiscais e arquitetura preparados para integração SEFAZ/TEF | Integrações reais pendentes |
+| **Preparação Fiscal (Multi-CNPJ)** | Segregação estrutural Restaurante (CNPJ Matriz - NFC-e Mod 65) vs Hotel (CNPJ Filial - NFS-e Municipal), distinção pré-conta / comprovante / documento fiscal e simulação de chave de 44 dígitos com tarja SEM VALIDADE FISCAL | Arquitetura e simulação implementadas; homologação SEFAZ/prefeitura futura |
 
 ### 🔄 Como os módulos se conectam
 

@@ -112,4 +112,71 @@ describe('@deck26/contracts — Contratos Compartilhados, Navegação e Cardápi
     expect(totals.remainingCents).toBe(3940);
     expect(formatBrlCents(totals.totalCents)).toBe('R$ 59,40');
   });
+
+  it('valida os contratos da Etapa 7A: Cardápio Oficial com 93 produtos em 10 categorias', async () => {
+    const { DECK26_STAGE7A_CATEGORIES, DECK26_STAGE7A_MENU_93 } = await import('./index.js');
+    expect(DECK26_STAGE7A_CATEGORIES).toHaveLength(10);
+    expect(DECK26_STAGE7A_MENU_93).toHaveLength(93);
+
+    // Contagem por categoria
+    const categoryCounts: Record<string, number> = {};
+    for (const p of DECK26_STAGE7A_MENU_93) {
+      categoryCounts[p.categoryId] = (categoryCounts[p.categoryId] || 0) + 1;
+      expect(p.priceCents).toBeGreaterThan(0);
+      expect(p.ncm).toBeDefined();
+      expect(p.cfop).toBeDefined();
+      expect(p.csosn).toBeDefined();
+    }
+
+    expect(categoryCounts['cat-executivos']).toBe(11); // Pratos Executivos — 11
+    expect(categoryCounts['cat-tapioca']).toBe(7);     // Tapiocas — 7
+    expect(categoryCounts['cat-qualquer-hora']).toBe(7); // Para Qualquer Hora — 7
+    expect(categoryCounts['cat-cuscuz']).toBe(7);      // Cuscuz Recheado — 7
+    expect(categoryCounts['cat-pasteis']).toBe(8);     // Pastéis — 8
+    expect(categoryCounts['cat-lanches']).toBe(9);     // Lanches Variados — 9
+    expect(categoryCounts['cat-petiscos']).toBe(21);   // Petiscos — 21
+    expect(categoryCounts['cat-cafeteria']).toBe(7);   // Cafeteria — 7
+    expect(categoryCounts['cat-sucos']).toBe(9);       // Sucos 300 ml — 9
+    expect(categoryCounts['cat-vitaminas']).toBe(7);   // Vitaminas 300 ml — 7
+
+    // Verifica item com pendência de confirmação de nomenclatura
+    const cuscuzCarneSol = DECK26_STAGE7A_MENU_93.find((p) => p.id === 'prd-cuscuz-carne-sol-sem-catupiry');
+    expect(cuscuzCarneSol).toBeDefined();
+    expect(cuscuzCarneSol?.priceCents).toBe(1200);
+    expect(cuscuzCarneSol?.verificationPending).toContain('CONFIRMAR_NOMENCLATURA');
+  });
+
+  it('valida os contratos da Etapa 7A: Hotel Auto Posto Milla com 24 apartamentos (12 Operacionais + 12 Em Construção)', async () => {
+    const { DECK26_INITIAL_ROOMS_24 } = await import('./index.js');
+    expect(DECK26_INITIAL_ROOMS_24).toHaveLength(24);
+
+    const operationalRooms = DECK26_INITIAL_ROOMS_24.filter((r) => r.commercialStatus === 'OPERACIONAL');
+    const constructionRooms = DECK26_INITIAL_ROOMS_24.filter((r) => r.commercialStatus === 'EM_CONSTRUCAO');
+
+    expect(operationalRooms).toHaveLength(12);
+    expect(constructionRooms).toHaveLength(12);
+
+    for (const r of constructionRooms) {
+      expect(r.occupancyStatus).toBe('BLOQUEADO');
+      expect(r.commercialStatus).toBe('EM_CONSTRUCAO');
+    }
+  });
+
+  it('valida a modelagem fiscal da Etapa 7A: separação de Restaurante e Hotel, e tipos de documentos', async () => {
+    const { DECK26_INITIAL_FISCAL_ESTABLISHMENTS, FiscalDocumentTypeSchema } = await import('./index.js');
+    expect(DECK26_INITIAL_FISCAL_ESTABLISHMENTS).toHaveLength(2);
+
+    const restEst = DECK26_INITIAL_FISCAL_ESTABLISHMENTS.find((e) => e.segment === 'RESTAURANT');
+    const hotelEst = DECK26_INITIAL_FISCAL_ESTABLISHMENTS.find((e) => e.segment === 'HOTEL');
+
+    expect(restEst).toBeDefined();
+    expect(hotelEst).toBeDefined();
+    expect(restEst?.cnpj).not.toBe(hotelEst?.cnpj); // Podem e devem possuir CNPJs distintos
+
+    // Document types válidos
+    expect(FiscalDocumentTypeSchema.parse('NFCE')).toBe('NFCE');
+    expect(FiscalDocumentTypeSchema.parse('NFSE')).toBe('NFSE');
+    expect(FiscalDocumentTypeSchema.parse('PRE_CONTA')).toBe('PRE_CONTA');
+    expect(FiscalDocumentTypeSchema.parse('COMPROVANTE_PAGAMENTO')).toBe('COMPROVANTE_PAGAMENTO');
+  });
 });

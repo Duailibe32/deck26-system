@@ -418,7 +418,7 @@ export type CatalogCategory = z.infer<typeof CatalogCategorySchema>;
 export const OutOfStockPolicySchema = z.enum(['BLOCK_SALE', 'ALLOW_BACKORDER']);
 export type OutOfStockPolicy = z.infer<typeof OutOfStockPolicySchema>;
 
-export const DataSourceTypeSchema = z.enum(['OFFICIAL_MENU', 'TEST_ONLY']);
+export const DataSourceTypeSchema = z.enum(['OFFICIAL_MENU', 'TEST_ONLY', 'STAGE7A_CARDAPIO_DIGITAL']);
 export type DataSourceType = z.infer<typeof DataSourceTypeSchema>;
 
 export const CatalogProductSchema = z.object({
@@ -446,6 +446,12 @@ export const CatalogProductSchema = z.object({
   ncm: z.string().optional(),
   cest: z.string().optional(),
   cfop: z.string().optional(),
+  csosn: z.string().optional(),
+  cstIcms: z.string().optional(),
+  cstPis: z.string().optional(),
+  cstCofins: z.string().optional(),
+  origemMercadoria: z.number().int().optional(),
+  verificationPending: z.array(z.string()).optional(),
   merchandiseOrigin: z.string().optional(),
   taxProfile: z.string().optional(),
   dataSource: DataSourceTypeSchema.optional(),
@@ -940,9 +946,17 @@ export const HotelRoomStatusSchema = z.enum([
 ]);
 export type HotelRoomStatus = z.infer<typeof HotelRoomStatusSchema>;
 
+export const RoomCommercialStatusSchema = z.enum([
+  'OPERACIONAL',
+  'EM_CONSTRUCAO',
+  'DESATIVADO'
+]);
+export type RoomCommercialStatus = z.infer<typeof RoomCommercialStatusSchema>;
+
 export const HotelRoomSchema = z.object({
   id: z.string().min(1),
   number: z.string().min(1), // Ex: "101", "102", "201"
+  name: z.string().default(''),
   floorSector: z.string().default('Térreo'),
   category: HotelRoomCategorySchema.default('STANDARD_DOUBLE'),
   maxGuests: z.number().int().min(1).default(2),
@@ -950,11 +964,13 @@ export const HotelRoomSchema = z.object({
   bedConfiguration: z.string().default('1 Cama Casal'),
   description: z.string().default(''),
   amenities: z.array(z.string()).default([]),
+  photos: z.array(z.string()).default([]),
   dailyRateCents: z.number().int().positive(),
   status: HotelRoomStatusSchema.default('AVAILABLE'), // Compatibilidade
   occupancyStatus: RoomOccupancyStatusSchema.default('LIVRE'),
   housekeepingStatus: RoomHousekeepingStatusSchema.default('LIMPO'),
   maintenanceStatus: RoomMaintenanceStatusSchema.default('DISPONIVEL'),
+  commercialStatus: RoomCommercialStatusSchema.default('OPERACIONAL'),
   active: z.boolean().default(true),
   currentGuestName: z.string().nullable().optional(),
   currentGuestId: z.string().nullable().optional(),
@@ -1246,6 +1262,7 @@ export const HotelDashboardMetricsSchema = z.object({
   dirtyCleaningRooms: z.number().int().nonnegative(),
   maintenanceRooms: z.number().int().nonnegative(),
   blockedRooms: z.number().int().nonnegative(),
+  underConstructionRooms: z.number().int().nonnegative().default(0),
   occupancyRatePercent: z.number().nonnegative(),
   adrCents: z.number().int().nonnegative(),
   revparCents: z.number().int().nonnegative(),
@@ -2747,3 +2764,8 @@ export const DECK26_INITIAL_FINANCIAL_ACCOUNTS: FinancialAccount[] = [
     updatedAt: '2026-11-04T00:00:00.000Z'
   }
 ];
+
+// Re-exporta módulos da Etapa 7A: Estrutura Fiscal e Catálogo Estendido (93 Produtos + 24 Apartamentos)
+export * from './fiscal.js';
+export * from './stage7a_catalog.js';
+

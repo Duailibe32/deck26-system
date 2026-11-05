@@ -31,6 +31,7 @@ import {
   RoomHousekeepingStatus,
   RoomMaintenanceStatus,
   RoomOccupancyStatus,
+  RoomCommercialStatus,
   SYSTEM_MODULES,
   SalesChannel,
   StockMovement,
@@ -310,9 +311,18 @@ export const DesktopApp: React.FC = () => {
   const [cashShiftMovementReason, setCashShiftMovementReason] = useState<string>('Sangria para cofre');
   const [cashShiftCountedReais, setCashShiftCountedReais] = useState<string>('');
 
-  // Estados da Etapa 5: PMS Hotel Auto Posto Milla
+  // Estados da Etapa 5 e 7A: PMS Hotel Auto Posto Milla (24 Apartamentos)
   const [hotelSubTab, setHotelSubTab] = useState<'MAPA' | 'RESERVAS' | 'HOSPEDES' | 'CHECKIN_CHECKOUT' | 'FOLIO' | 'RESTAURANTE' | 'FRIGOBAR_SERVICOS' | 'GOVERNANCA'>('MAPA');
-  const [hotelRoomFilter, setHotelRoomFilter] = useState<'ALL' | 'LIVRE' | 'OCUPADO' | 'RESERVADO' | 'BLOQUEADO' | 'SUJO'>('ALL');
+  const [hotelRoomFilter, setHotelRoomFilter] = useState<'ALL' | 'OPERACIONAL' | 'EM_CONSTRUCAO' | 'LIVRE' | 'OCUPADO' | 'RESERVADO' | 'BLOQUEADO' | 'SUJO'>('ALL');
+  const [editingRoom, setEditingRoom] = useState<HotelRoom | null>(null);
+  const [editRoomName, setEditRoomName] = useState<string>('');
+  const [editRoomDailyRateReais, setEditRoomDailyRateReais] = useState<string>('');
+  const [editRoomCommercialStatus, setEditRoomCommercialStatus] = useState<RoomCommercialStatus>('OPERACIONAL');
+  const [editRoomCategory, setEditRoomCategory] = useState<HotelRoomCategory>('STANDARD_DOUBLE');
+  const [editRoomBedConfig, setEditRoomBedConfig] = useState<string>('');
+  const [editRoomFloorSector, setEditRoomFloorSector] = useState<string>('');
+  const [editRoomNotes, setEditRoomNotes] = useState<string>('');
+  const [showEditRoomModal, setShowEditRoomModal] = useState<boolean>(false);
   const [selectedFolioStayId, setSelectedFolioStayId] = useState<string>('');
   const [folioData, setFolioData] = useState<{
     stay: HotelStay;
@@ -1539,6 +1549,50 @@ export const DesktopApp: React.FC = () => {
       notify(`Apto ${roomNumber} atualizado para governança: ${housekeepingStatus}.`);
     } catch (err) {
       notify(err instanceof Error ? err.message : 'Erro ao atualizar governança');
+    }
+  }
+
+  function openEditRoomModal(room: HotelRoom) {
+    setEditingRoom(room);
+    setEditRoomName(room.name || '');
+    setEditRoomDailyRateReais((room.dailyRateCents / 100).toFixed(2));
+    setEditRoomCommercialStatus(room.commercialStatus || 'OPERACIONAL');
+    setEditRoomCategory(room.category);
+    setEditRoomBedConfig(room.bedConfiguration || '');
+    setEditRoomFloorSector(room.floorSector || '');
+    setEditRoomNotes(room.internalNotes || '');
+    setShowEditRoomModal(true);
+  }
+
+  async function handleSaveRoomEdit() {
+    if (!editingRoom) return;
+    try {
+      const dailyRateCents = Math.round(parseFloat(editRoomDailyRateReais.replace(',', '.')) * 100);
+      if (isNaN(dailyRateCents) || dailyRateCents <= 0) {
+        notify('Informe uma tarifa diária válida em reais.');
+        return;
+      }
+      const res = await fetch(`${localApiBase}/api/hotel/rooms/${editingRoom.id}`, {
+        method: 'PUT',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          name: editRoomName.trim() || undefined,
+          commercialStatus: editRoomCommercialStatus,
+          dailyRateCents,
+          category: editRoomCategory,
+          bedConfiguration: editRoomBedConfig.trim() || undefined,
+          floorSector: editRoomFloorSector.trim() || undefined,
+          internalNotes: editRoomNotes.trim() || undefined
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? 'Erro ao salvar quarto');
+      await refreshState();
+      notify(`Apartamento ${editingRoom.number} atualizado com sucesso!`);
+      setShowEditRoomModal(false);
+      setEditingRoom(null);
+    } catch (err) {
+      notify(err instanceof Error ? err.message : 'Erro ao salvar quarto');
     }
   }
 
@@ -4495,16 +4549,25 @@ export const DesktopApp: React.FC = () => {
             {hotelSubTab === 'MAPA' && (
               <div className="d26-card">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '10px' }}>
-                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                  <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
                     <span style={{ fontSize: '0.8rem', color: 'var(--d26-gray-400)' }}>Filtrar status:</span>
-                    {(['ALL', 'LIVRE', 'OCUPADO', 'RESERVADO', 'BLOQUEADO', 'SUJO'] as const).map((st) => (
+                    {([
+                      { key: 'ALL', label: `Todos (${snapshot.hotelRooms.length})` },
+                      { key: 'OPERACIONAL', label: `Operacionais (${snapshot.hotelRooms.filter(r => r.commercialStatus === 'OPERACIONAL').length})` },
+                      { key: 'EM_CONSTRUCAO', label: `Em Obras (${snapshot.hotelRooms.filter(r => r.commercialStatus === 'EM_CONSTRUCAO').length})` },
+                      { key: 'LIVRE', label: 'Livres' },
+                      { key: 'OCUPADO', label: 'Ocupados' },
+                      { key: 'RESERVADO', label: 'Reservados' },
+                      { key: 'BLOQUEADO', label: 'Bloqueados' },
+                      { key: 'SUJO', label: 'Sujos' }
+                    ] as const).map(({ key, label }) => (
                       <button
-                        key={st}
-                        className={`d26-btn ${hotelRoomFilter === st ? 'd26-btn-primary' : 'd26-btn-secondary'}`}
+                        key={key}
+                        className={`d26-btn ${hotelRoomFilter === key ? 'd26-btn-primary' : 'd26-btn-secondary'}`}
                         style={{ fontSize: '0.76rem', padding: '4px 10px' }}
-                        onClick={() => setHotelRoomFilter(st)}
+                        onClick={() => setHotelRoomFilter(key)}
                       >
-                        {st === 'ALL' ? 'Todos' : st}
+                        {label}
                       </button>
                     ))}
                   </div>
@@ -4514,35 +4577,61 @@ export const DesktopApp: React.FC = () => {
                   {snapshot.hotelRooms
                     .filter((room) => {
                       if (hotelRoomFilter === 'ALL') return true;
+                      if (hotelRoomFilter === 'OPERACIONAL') return room.commercialStatus === 'OPERACIONAL';
+                      if (hotelRoomFilter === 'EM_CONSTRUCAO') return room.commercialStatus === 'EM_CONSTRUCAO';
                       if (hotelRoomFilter === 'SUJO') return room.housekeepingStatus === 'SUJO';
                       return room.occupancyStatus === hotelRoomFilter;
                     })
                     .map((room) => {
+                      const isUnderConstruction = room.commercialStatus === 'EM_CONSTRUCAO';
                       const isOccupied = room.occupancyStatus === 'OCUPADO';
-                      const isFree = room.occupancyStatus === 'LIVRE';
+                      const isFree = room.occupancyStatus === 'LIVRE' && !isUnderConstruction;
+                      const borderLeftColor = isUnderConstruction
+                        ? '#EAB308'
+                        : isOccupied
+                        ? '#F72585'
+                        : isFree
+                        ? '#4ADE80'
+                        : '#7209B7';
                       return (
-                        <div key={room.id} className="d26-product-card" style={{ borderLeft: `4px solid ${isOccupied ? '#F72585' : isFree ? '#4ADE80' : '#7209B7'}` }}>
+                        <div key={room.id} className="d26-product-card" style={{ borderLeft: `4px solid ${borderLeftColor}` }}>
                           <div>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                               <div>
-                                <strong style={{ fontSize: '1.15rem' }}>Apto {room.number}</strong>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                  <strong style={{ fontSize: '1.15rem' }}>Apto {room.number}</strong>
+                                  {room.name && (
+                                    <span style={{ fontSize: '0.78rem', color: isUnderConstruction ? '#FDE047' : '#FFFFFF', fontWeight: 600 }}>
+                                      • {room.name}
+                                    </span>
+                                  )}
+                                </div>
                                 <div style={{ fontSize: '0.74rem', color: 'var(--d26-gray-400)', marginTop: '2px' }}>
                                   {room.floorSector} • {room.category}
                                 </div>
                               </div>
-                              <span
-                                className={`d26-badge ${
-                                  room.occupancyStatus === 'LIVRE'
-                                    ? 'd26-badge-success'
-                                    : room.occupancyStatus === 'OCUPADO'
-                                    ? 'd26-badge-pink'
-                                    : room.occupancyStatus === 'RESERVADO'
-                                    ? 'd26-badge-purple'
-                                    : 'd26-badge-warning'
-                                }`}
-                              >
-                                {room.occupancyStatus}
-                              </span>
+                              {isUnderConstruction ? (
+                                <span
+                                  className="d26-badge d26-badge-warning"
+                                  style={{ background: '#78350F', color: '#FDE047', border: '1px solid #CA8A04', fontSize: '0.72rem', fontWeight: 700 }}
+                                >
+                                  🚧 EM OBRAS
+                                </span>
+                              ) : (
+                                <span
+                                  className={`d26-badge ${
+                                    room.occupancyStatus === 'LIVRE'
+                                      ? 'd26-badge-success'
+                                      : room.occupancyStatus === 'OCUPADO'
+                                      ? 'd26-badge-pink'
+                                      : room.occupancyStatus === 'RESERVADO'
+                                      ? 'd26-badge-purple'
+                                      : 'd26-badge-warning'
+                                  }`}
+                                >
+                                  {room.occupancyStatus}
+                                </span>
+                              )}
                             </div>
 
                             {/* Badges Independentes de Governança e Manutenção */}
@@ -4570,6 +4659,12 @@ export const DesktopApp: React.FC = () => {
                               Diária: <strong>{formatBrlCents(room.dailyRateCents)}</strong>
                             </div>
 
+                            {isUnderConstruction && (
+                              <div style={{ marginTop: '8px', padding: '6px 8px', background: 'rgba(234, 179, 8, 0.12)', border: '1px solid rgba(234, 179, 8, 0.3)', borderRadius: '6px', fontSize: '0.76rem', color: '#FDE047' }}>
+                                ⚠️ <strong>Apartamento em obras.</strong> Check-in e reservas bloqueados até a conclusão da reforma.
+                              </div>
+                            )}
+
                             {room.currentGuestName && (
                               <div style={{ marginTop: '8px', padding: '6px 8px', background: 'rgba(247, 37, 133, 0.12)', borderRadius: '6px', fontSize: '0.82rem' }}>
                                 <div style={{ fontSize: '0.7rem', color: '#FFAFCC', textTransform: 'uppercase' }}>Hóspede Atual</div>
@@ -4579,101 +4674,130 @@ export const DesktopApp: React.FC = () => {
                           </div>
 
                           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '10px' }}>
-                            {isOccupied && (
-                              <>
+                            {isUnderConstruction ? (
+                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+                                <button
+                                  className="d26-btn d26-btn-secondary"
+                                  style={{ fontSize: '0.74rem', padding: '6px', opacity: 0.5, cursor: 'not-allowed' }}
+                                  disabled
+                                  title="Apartamento em obras. Check-in bloqueado."
+                                >
+                                  🚫 Bloqueado
+                                </button>
                                 <button
                                   className="d26-btn d26-btn-primary"
-                                  style={{ fontSize: '0.78rem', padding: '6px' }}
-                                  onClick={() => {
-                                    if (room.activeStayId) {
-                                      setSelectedFolioStayId(room.activeStayId);
-                                      setHotelSubTab('FOLIO');
-                                    }
-                                  }}
+                                  style={{ fontSize: '0.74rem', padding: '6px' }}
+                                  onClick={() => openEditRoomModal(room)}
                                 >
-                                  📑 Ver Extrato (Folio)
+                                  ⚙️ Gerenciar
                                 </button>
-                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+                              </div>
+                            ) : (
+                              <>
+                                {isOccupied && (
+                                  <>
+                                    <button
+                                      className="d26-btn d26-btn-primary"
+                                      style={{ fontSize: '0.78rem', padding: '6px' }}
+                                      onClick={() => {
+                                        if (room.activeStayId) {
+                                          setSelectedFolioStayId(room.activeStayId);
+                                          setHotelSubTab('FOLIO');
+                                        }
+                                      }}
+                                    >
+                                      📑 Ver Extrato (Folio)
+                                    </button>
+                                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+                                      <button
+                                        className="d26-btn d26-btn-secondary"
+                                        style={{ fontSize: '0.74rem', padding: '4px' }}
+                                        onClick={() => {
+                                          setTransferRoomNumber(room.number);
+                                          setHotelSubTab('RESTAURANTE');
+                                        }}
+                                      >
+                                        🍽️ Consumo
+                                      </button>
+                                      <button
+                                        className="d26-btn d26-btn-secondary"
+                                        style={{ fontSize: '0.74rem', padding: '4px' }}
+                                        onClick={() => {
+                                          setMinibarRoomNumber(room.number);
+                                          setServiceRoomNumber(room.number);
+                                          setHotelSubTab('FRIGOBAR_SERVICOS');
+                                        }}
+                                      >
+                                        🧊 Frigobar
+                                      </button>
+                                    </div>
+                                  </>
+                                )}
+
+                                {isFree && (
+                                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
+                                    <button
+                                      className="d26-btn d26-btn-primary"
+                                      style={{ fontSize: '0.76rem', padding: '6px' }}
+                                      onClick={() => {
+                                        setCheckInRoomNumber(room.number);
+                                        setShowCheckInModal(true);
+                                      }}
+                                    >
+                                      🔑 Check-In
+                                    </button>
+                                    <button
+                                      className="d26-btn d26-btn-secondary"
+                                      style={{ fontSize: '0.76rem', padding: '6px' }}
+                                      onClick={() => {
+                                        setResRoomNumber(room.number);
+                                        setShowNewResModal(true);
+                                      }}
+                                    >
+                                      📅 Reservar
+                                    </button>
+                                  </div>
+                                )}
+
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: '4px', marginTop: '4px' }}>
+                                  {room.housekeepingStatus === 'SUJO' && (
+                                    <button
+                                      className="d26-btn d26-btn-secondary"
+                                      style={{ fontSize: '0.7rem', padding: '3px 6px' }}
+                                      onClick={() => handleUpdateHousekeeping(room.number, 'EM_LIMPEZA')}
+                                    >
+                                      Iniciar Limpeza
+                                    </button>
+                                  )}
+                                  {room.housekeepingStatus === 'EM_LIMPEZA' && (
+                                    <button
+                                      className="d26-btn d26-btn-secondary"
+                                      style={{ fontSize: '0.7rem', padding: '3px 6px' }}
+                                      onClick={() => handleUpdateHousekeeping(room.number, 'LIMPO')}
+                                    >
+                                      Marcar Limpo
+                                    </button>
+                                  )}
+                                  {room.housekeepingStatus === 'LIMPO' && !isOccupied && (
+                                    <button
+                                      className="d26-btn d26-btn-secondary"
+                                      style={{ fontSize: '0.7rem', padding: '3px 6px', opacity: 0.7 }}
+                                      onClick={() => handleUpdateHousekeeping(room.number, 'SUJO')}
+                                    >
+                                      Marcar Sujo
+                                    </button>
+                                  )}
                                   <button
                                     className="d26-btn d26-btn-secondary"
-                                    style={{ fontSize: '0.74rem', padding: '4px' }}
-                                    onClick={() => {
-                                      setTransferRoomNumber(room.number);
-                                      setHotelSubTab('RESTAURANTE');
-                                    }}
+                                    style={{ fontSize: '0.7rem', padding: '3px 6px' }}
+                                    onClick={() => openEditRoomModal(room)}
+                                    title="Editar detalhes do apartamento"
                                   >
-                                    🍽️ Consumo
-                                  </button>
-                                  <button
-                                    className="d26-btn d26-btn-secondary"
-                                    style={{ fontSize: '0.74rem', padding: '4px' }}
-                                    onClick={() => {
-                                      setMinibarRoomNumber(room.number);
-                                      setServiceRoomNumber(room.number);
-                                      setHotelSubTab('FRIGOBAR_SERVICOS');
-                                    }}
-                                  >
-                                    🧊 Frigobar
+                                    ⚙️ Editar
                                   </button>
                                 </div>
                               </>
                             )}
-
-                            {isFree && (
-                              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
-                                <button
-                                  className="d26-btn d26-btn-primary"
-                                  style={{ fontSize: '0.76rem', padding: '6px' }}
-                                  onClick={() => {
-                                    setCheckInRoomNumber(room.number);
-                                    setShowCheckInModal(true);
-                                  }}
-                                >
-                                  🔑 Check-In
-                                </button>
-                                <button
-                                  className="d26-btn d26-btn-secondary"
-                                  style={{ fontSize: '0.76rem', padding: '6px' }}
-                                  onClick={() => {
-                                    setResRoomNumber(room.number);
-                                    setShowNewResModal(true);
-                                  }}
-                                >
-                                  📅 Reservar
-                                </button>
-                              </div>
-                            )}
-
-                            {/* Governança Rápida */}
-                            <div style={{ display: 'flex', gap: '4px', marginTop: '4px' }}>
-                              {room.housekeepingStatus === 'SUJO' && (
-                                <button
-                                  className="d26-btn d26-btn-secondary"
-                                  style={{ fontSize: '0.7rem', padding: '3px 6px', flex: 1 }}
-                                  onClick={() => handleUpdateHousekeeping(room.number, 'EM_LIMPEZA')}
-                                >
-                                  Iniciar Limpeza
-                                </button>
-                              )}
-                              {room.housekeepingStatus === 'EM_LIMPEZA' && (
-                                <button
-                                  className="d26-btn d26-btn-secondary"
-                                  style={{ fontSize: '0.7rem', padding: '3px 6px', flex: 1 }}
-                                  onClick={() => handleUpdateHousekeeping(room.number, 'LIMPO')}
-                                >
-                                  Marcar Limpo
-                                </button>
-                              )}
-                              {room.housekeepingStatus === 'LIMPO' && !isOccupied && (
-                                <button
-                                  className="d26-btn d26-btn-secondary"
-                                  style={{ fontSize: '0.7rem', padding: '3px 6px', flex: 1, opacity: 0.7 }}
-                                  onClick={() => handleUpdateHousekeeping(room.number, 'SUJO')}
-                                >
-                                  Marcar Sujo
-                                </button>
-                              )}
-                            </div>
                           </div>
                         </div>
                       );
@@ -5787,6 +5911,134 @@ export const DesktopApp: React.FC = () => {
                       </button>
                       <button className="d26-btn d26-btn-primary" onClick={handleCheckInStay}>
                         Concluir Check-In & Abrir Folio
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ================= MODAL: EDITAR / CUSTOMIZAR APARTAMENTO ================= */}
+            {showEditRoomModal && editingRoom && (
+              <div
+                style={{
+                  position: 'fixed',
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  background: 'rgba(0,0,0,0.75)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  zIndex: 9999
+                }}
+              >
+                <div className="d26-card" style={{ width: '520px', maxWidth: '95vw', maxHeight: '90vh', overflowY: 'auto' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+                    <h3 style={{ fontSize: '1.1rem', margin: 0 }}>⚙️ Gerenciar Apartamento {editingRoom.number}</h3>
+                    <span
+                      className={`d26-badge ${
+                        editRoomCommercialStatus === 'OPERACIONAL'
+                          ? 'd26-badge-success'
+                          : editRoomCommercialStatus === 'EM_CONSTRUCAO'
+                          ? 'd26-badge-warning'
+                          : 'd26-badge-pink'
+                      }`}
+                    >
+                      {editRoomCommercialStatus === 'OPERACIONAL' ? 'Operacional' : editRoomCommercialStatus === 'EM_CONSTRUCAO' ? 'Em Obras' : 'Desativado'}
+                    </span>
+                  </div>
+
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    <div>
+                      <label style={{ fontSize: '0.76rem', color: 'var(--d26-gray-400)' }}>Nome Fantasia / Exibição</label>
+                      <input
+                        className="d26-input"
+                        placeholder="Ex: Suíte Presidencial Vista Jardim"
+                        value={editRoomName}
+                        onChange={(e) => setEditRoomName(e.target.value)}
+                      />
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                      <div>
+                        <label style={{ fontSize: '0.76rem', color: 'var(--d26-gray-400)' }}>Status Comercial *</label>
+                        <select
+                          className="d26-select"
+                          value={editRoomCommercialStatus}
+                          onChange={(e) => setEditRoomCommercialStatus(e.target.value as RoomCommercialStatus)}
+                        >
+                          <option value="OPERACIONAL">OPERACIONAL (Disponível para reservas e check-in)</option>
+                          <option value="EM_CONSTRUCAO">EM_CONSTRUÇÃO (Bloqueado p/ obras / fora da taxa)</option>
+                          <option value="DESATIVADO">DESATIVADO (Inativo)</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label style={{ fontSize: '0.76rem', color: 'var(--d26-gray-400)' }}>Diária Padrão (R$) *</label>
+                        <input
+                          className="d26-input"
+                          placeholder="Ex: 180,00"
+                          value={editRoomDailyRateReais}
+                          onChange={(e) => setEditRoomDailyRateReais(e.target.value)}
+                        />
+                      </div>
+                    </div>
+
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                      <div>
+                        <label style={{ fontSize: '0.76rem', color: 'var(--d26-gray-400)' }}>Categoria</label>
+                        <select
+                          className="d26-select"
+                          value={editRoomCategory}
+                          onChange={(e) => setEditRoomCategory(e.target.value as HotelRoomCategory)}
+                        >
+                          <option value="STANDARD_SINGLE">Standard Single</option>
+                          <option value="STANDARD_DOUBLE">Standard Casal / Duplo</option>
+                          <option value="LUXO_CASAL">Luxo Casal</option>
+                          <option value="TRIPLO">Triplo</option>
+                          <option value="SUITE_MASTER">Suíte Master</option>
+                          <option value="FAMILIAR">Familiar</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label style={{ fontSize: '0.76rem', color: 'var(--d26-gray-400)' }}>Andar / Setor</label>
+                        <input
+                          className="d26-input"
+                          placeholder="Ex: Térreo, 1º Andar"
+                          value={editRoomFloorSector}
+                          onChange={(e) => setEditRoomFloorSector(e.target.value)}
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label style={{ fontSize: '0.76rem', color: 'var(--d26-gray-400)' }}>Configuração de Camas</label>
+                      <input
+                        className="d26-input"
+                        placeholder="Ex: 1 Cama King Size + 1 Cama Solteiro"
+                        value={editRoomBedConfig}
+                        onChange={(e) => setEditRoomBedConfig(e.target.value)}
+                      />
+                    </div>
+
+                    <div>
+                      <label style={{ fontSize: '0.76rem', color: 'var(--d26-gray-400)' }}>Notas Internas da Recepção</label>
+                      <textarea
+                        className="d26-input"
+                        rows={2}
+                        placeholder="Ex: Quarto silencioso, pintura recente em 2026"
+                        value={editRoomNotes}
+                        onChange={(e) => setEditRoomNotes(e.target.value)}
+                      />
+                    </div>
+
+                    <div style={{ display: 'flex', gap: '8px', marginTop: '14px', justifyContent: 'flex-end' }}>
+                      <button className="d26-btn d26-btn-secondary" onClick={() => setShowEditRoomModal(false)}>
+                        Cancelar
+                      </button>
+                      <button className="d26-btn d26-btn-primary" onClick={handleSaveRoomEdit}>
+                        Salvar Alterações
                       </button>
                     </div>
                   </div>
