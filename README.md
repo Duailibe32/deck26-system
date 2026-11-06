@@ -1,137 +1,358 @@
+<div align="center">
+
+<img src="docs/images/deck26-cover.svg" alt="DECK 26 — Gestão e Hospitalidade · Hotel Auto Posto Milla" width="100%">
+
 # DECK 26 · Gestão & Hospitalidade
 
-Restaurante, bar, delivery e Hotel Auto Posto Milla em uma operação local integrada.
+**Restaurante, bar, delivery e hotel conectados à mesma operação local.**
 
-[![Validação](https://github.com/Duailibe32/deck26-system/actions/workflows/ci.yml/badge.svg)](https://github.com/Duailibe32/deck26-system/actions/workflows/ci.yml)
+Um caixa mais prático. Uma recepção mais organizada. Pedidos chegando pelo celular.<br>
+Dados persistentes no computador do estabelecimento, com acesso pela rede Wi-Fi.
 
-![Prévia do painel](docs/images/windows-dashboard.png)
+[![Validação](https://img.shields.io/badge/Valida%C3%A7%C3%A3o-GitHub_Actions-24292F?style=flat-square&logo=githubactions&logoColor=white)](https://github.com/Duailibe32/deck26-system/actions/workflows/ci.yml)
+[![Windows nativo](https://img.shields.io/badge/Windows-Nativo-7209B7?style=flat-square)](https://github.com/Duailibe32/deck26-system/actions/workflows/windows-test.yml)
+![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=flat-square&logo=typescript&logoColor=white)
+![React](https://img.shields.io/badge/React-111111?style=flat-square&logo=react&logoColor=61DAFB)
+![Tauri](https://img.shields.io/badge/Tauri_2-111111?style=flat-square&logo=tauri&logoColor=FFC131)
+![SQLite WAL](https://img.shields.io/badge/SQLite_WAL-111111?style=flat-square&logo=sqlite&logoColor=68C6F0)
 
-## Instalação operacional local
+[Conhecer o sistema](#experiencia) · [Começar no Windows](#windows) · [Acessar pelo celular](#celular) · [Checklist](#checklist) · [Documentação](#documentacao)
 
-A versão Windows possui instalação própria, login pessoal e dados persistentes separados da demonstração. O primeiro acesso permite aproveitar os 93 produtos e 24 apartamentos, sem vendas, hóspedes, estoque ou saldos fictícios. O terminal do garçom e o cardápio de pedidos do cliente funcionam pelo navegador na mesma rede, conectados à API do PC na porta 4800.
+</div>
 
-- [Guia de instalação, uso, celular e backups](docs/OPERACAO_LOCAL.md)
-- [Checklist interativo de 66 verificações](docs/CHECKLIST_OPERACIONAL.html)
-- [Checklist em texto](docs/CHECKLIST_OPERACIONAL.md)
+---
 
-Impressoras virtuais de caixa e cozinha geram vias de 58/80 mm. Impressão física e emissão fiscal ainda precisam de integração/homologação; a simulação fiscal está bloqueada nesta instalação. Nuvem não configurada. Os registros de PIX/cartão não efetuam cobranças bancárias.
+> **Estado da entrega · Etapa 7A revisada, antes da 7B**<br>
+> Aplicativo Windows compilado, API local e banco persistente; **212 testes automatizados aprovados** na entrega funcional de 06/11/2026. Emissão fiscal real, impressão física e publicação na internet têm pendências próprias, detalhadas [abaixo](#limites). O sistema não efetua cobranças bancárias automaticamente.
 
-Validação desta entrega: 212 testes automatizados, verificação de tipos e compilação nativa Windows. A conferência usa bancos isolados; a abertura no celular físico depende da rede do estabelecimento.
+<a id="experiencia"></a>
 
-## PDV touch e atendimento por função
+## ✨ Uma operação, várias formas de atender
 
-O PDV reúne atendimento, mesas, contas, turno, organização e logs em subabas. Cada cargo inicia na sua visão de trabalho; proprietário/gerente podem alternar para o modo completo, respeitando as permissões. O catálogo possui selos de categoria e estação, busca e favoritos calculados pelo histórico aceito.
+O DECK 26 reúne o atendimento do **Restaurante e Bar Deck 26** e a recepção do **Hotel Auto Posto Milla**. As telas se organizam por função: o garçom atende mesas, o caixa recebe, a recepção cuida das hospedagens e a gerência acompanha os resultados.
 
-O carrinho lateral usa cupom amarelo com quantidades, valores e controles +/−. No pagamento, o teclado grande distingue valor a receber de dinheiro entregue; as cédulas ilustradas somam o dinheiro e exibem o troco. Abrir mesa também permite informar pessoas pelo teclado. No celular estreito, o cupom está na aba Pedido; no tablet largo, fica ao lado dos produtos.
+<table>
+<tr><td width="50%" valign="top">
 
-Chamados pelo QR sinalizam a mesa e exigem atendimento da equipe. Transferir consumo ao quarto exige confirmação recente por PIN autorizado, mantém uma identificação para reenvio seguro e envia a mesa à limpeza. O componente de auditoria apresenta ações recentes com operador e horário, disponível à gerência.
+### 🍽️ Restaurante & bar
 
-Veja o [checklist e roteiro de vídeo do PDV touch](docs/CHECKLIST_PDV_TOUCH.md), incluindo evidências do PDV. A aparência de recibo não habilita emissão fiscal nem impressão física.
+Mesas por situação, favoritos, observações rápidas, carrinho em formato de cupom, divisão da conta, troco touch e transferência de consumo para o quarto.
 
-## Operação integrada: restaurante, hotel e delivery
+</td><td width="50%" valign="top">
 
-As funcionalidades adicionais estão disponíveis em subabas, mantendo a visão de cada cargo:
+### 🛎️ Hotel & recepção
 
-| Restaurante e caixa | Hotel | Estoque e gestão |
+Reservas em calendário, check-in, extrato do quarto, check-out, pernoite, day use, café incluso, estacionamento e manutenção programada.
+
+</td></tr>
+<tr><td width="50%" valign="top">
+
+### 🛵 Delivery & autoatendimento
+
+Cardápio responsivo, personalização, entrega ou retirada, taxas por região e pedidos sujeitos à conferência da equipe. QR da mesa para pedir e chamar atendimento.
+
+</td><td width="50%" valign="top">
+
+### 📊 Estoque & gestão
+
+Fichas técnicas, combos, produção interna, compras por fornecedor, alertas de margem, convênios, contas a receber, dashboard e trilha de auditoria.
+
+</td></tr>
+</table>
+
+### A interface na prática
+
+<p align="center">
+  <img src="docs/images/windows-dashboard.png" alt="Painel Windows com indicadores da operação" width="100%"><br>
+  <sub>Painel gerencial · visualização de vendas e ocupação.</sub>
+</p>
+
+<table>
+<tr>
+<td width="34%" align="center" valign="top">
+  <img src="docs/images/delivery-cliente.png" alt="Cardápio em largura de celular, com busca, categorias e carrinho" width="260"><br>
+  <strong>O cliente faz o pedido</strong><br><sub>Cardápio com a identidade Deck 26.</sub>
+</td>
+<td width="66%" align="center" valign="top">
+  <img src="docs/images/calendario-hotel.png" alt="Calendário de apartamentos com barras de hospedagens e reservas" width="100%"><br>
+  <strong>A recepção acompanha as hospedagens</strong><br><sub>Apartamentos, datas, reservas e alertas no mesmo espaço.</sub>
+</td>
+</tr>
+</table>
+
+<sub>Capturas de ambientes de demonstração. Nomes, saldos e hospedagens exibidos não representam a operação real. Confira também o [mapa de mesas](docs/images/windows-mesas.png).</sub>
+
+<a id="funcionalidades"></a>
+
+## 🧩 Funcionalidades por área
+
+| Área | O que está disponível |
+| --- | --- |
+| **PDV & mesas** | Visão por função; modos simplificado/completo para gerência; subabas; mesas com cores, tempo e alerta sem pedido; gaveta de ações; busca e favoritos; teclado touch; cupom lateral; recebimentos parciais e divisão por pessoa. |
+| **Garçom & QR** | Terminal Wi-Fi com PIN; abertura de mesa; observações prontas e texto livre; acompanhamentos; aprovação de pedidos QR; chamar garçom e pedir conta; transferência ao quarto com confirmação por PIN autorizado. |
+| **Restaurante** | Promoções por dia e horário; executivos com escolhas obrigatórias configuráveis; baldes com baixa das unidades individuais; couvert separado; consumo interno da equipe com baixa de estoque. |
+| **Cozinha & comprovantes** | Fluxo em papel sem necessidade de TV; fila por estação; entrega confirmada pela equipe; modelos de cozinha, pré-conta, pagamento e fechamento em 58/80 mm; simulação HTML e impressão/PDF pelo navegador. |
+| **Delivery** | Pedidos pelo cliente, entrega/retirada, personalização, taxa e mínimo por área; aceite antes da produção; status operacionais; previsão considerando região e fila; repetição do último pedido por telefone na estação autorizada; entregadores e acerto de custódia. |
+| **Hotel / PMS** | Reservas em linha do tempo; quartos disponíveis/ocupados; check-in, folio e check-out; diária, pernoite com valor informado e day use de 4/6 horas; alerta de vencimento; café e vouchers; veículos; manutenção recorrente e bloqueios programados. |
+| **Estoque & compras** | Inventário; receitas; baixa de insumos; produção/porcionamento com balanço de massa; fornecedores; lista de reposição para copiar ou imprimir; alertas de margem e preço sugerido aplicado mediante confirmação. |
+| **Financeiro & empresas** | Caixa e turno; contas a pagar/receber; conciliação gerencial; DRE; convênios com limite; faturas quinzenais/mensais sem entrada fictícia de dinheiro; resumo para copiar no WhatsApp. |
+| **Gestão & acesso** | Dashboard responsivo com Recharts; vendas e ocupação; cargos e permissões; logs com operador e horário; backups; autenticação por PIN e sessão. |
+
+**As cores ajudam; os textos confirmam.** 🟢 Livre · 🟡 Ocupada · 🔴 Aguardando pagamento/chamado · 🔵 Limpeza · ⚪ Indisponível. A identidade combina rosa `#F72585`, preto `#111111`, roxo `#7209B7` e tons neutros, com áreas de toque amplas.
+
+O cadastro inicial inclui **93 produtos e 24 apartamentos, dos quais 12 estão ativos para operação**. A atualização preserva a numeração real e as unidades em construção. Preços, tarifas, saldos e permissões precisam ser revisados pelo responsável.
+
+<a id="windows"></a>
+
+## 🖥️ Começar no Windows
+
+### Para quem já tem o aplicativo instalado
+
+1. Abra o atalho **DECK 26 - Operacao Local** na área de trabalho.
+2. Entre com seu **PIN pessoal existente**.
+3. Confira caixa, estoque, tarifas e funcionários antes do atendimento.
+4. Em **Administração → Acesso e continuidade**, consulte os links atuais dos celulares e as opções de backup.
+
+**Não existe PIN operacional padrão.** Em uma instalação nova, o primeiro acesso no PC permite criar o proprietário com PIN de 6 a 12 dígitos e importar o catálogo inicial. Vendas, hóspedes e saldos começam vazios; estoque inicial zerado exige inventário.
+
+### Instalar a partir do código
+
+| Requisito | Uso |
+| --- | --- |
+| Windows + WebView2 | Executar a janela nativa. |
+| Node.js **22.13+** e npm | API local, SQLite nativo e ferramentas do projeto. |
+| Rust estável + MSVC Build Tools com C++ | Compilar o executável Tauri. |
+| Dependências pelo lockfile | Reproduzir o ambiente com `npm ci`. |
+
+Na raiz do repositório:
+
+```powershell
+npm ci
+npm run typecheck
+npm test
+npm run build:windows:local
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-local-operation.ps1
+```
+
+O instalador cria o atalho e copia executável, interface e checklists. **Mantenha o repositório no mesmo local:** o servidor usa seu código e suas dependências. Esta entrega ainda não é um instalador autossuficiente para outros computadores.
+
+| Local no Windows | Conteúdo |
+| --- | --- |
+| `%USERPROFILE%\Deck26\Aplicativo` | Executável, interface e checklists. |
+| `%USERPROFILE%\Deck26\DadosOperacionais` | Banco persistente, segredos locais, backups e vias simuladas. |
+| `%LOCALAPPDATA%\Deck26\build-target\release` | Saída da compilação Windows. |
+
+Atualizar o aplicativo não importa demonstrações para o banco operacional. Antes de migrar uma base existente, faça backup consistente e ensaie a atualização em uma cópia. Consulte o [guia de operação local](docs/OPERACAO_LOCAL.md) para instalação, encerramento e recuperação.
+
+<a id="celular"></a>
+
+## 📱 Acessar pelo celular
+
+PC e celulares precisam estar na **mesma rede**, com o servidor ligado. Use o endereço atual exibido em Administração; o IP pode mudar ao trocar de Wi-Fi.
+
+| Quem vai acessar | Endereço na rede local | Acesso |
 | --- | --- | --- |
-| Promoções por dia/horário; escolhas obrigatórias de executivos; baldes com baixa de unidades; couvert separado; refeições da equipe | Calendário com barras; pernoite e day use 4/6 h; café incluso e vouchers; veículos; manutenção com bloqueios | Reposição por fornecedor; margem e sugestão de preço com confirmação; produção/porcionamento; convênios e faturas no Contas a Receber |
+| **Garçom** | `http://IP-DO-PC:4800/?terminal=garcom` | PIN individual e permissões do cargo. |
+| **Cliente delivery** | `http://IP-DO-PC:4800/?delivery=1` | Cardápio público e envio para aprovação. |
+| **Cliente na mesa** | QR gerado para a mesa | Cardápio, pedido e chamada de atendimento. |
+| **Computador principal** | `http://127.0.0.1:4800` | Interface local; também disponível na janela Windows. |
 
-O cardápio do cliente abre em **/?delivery=1**, com busca, destaques por horário, personalização, taxa por região e acompanhamento da confirmação. A equipe aceita o pedido antes da baixa de estoque e da produção. O terminal do garçom continua em **/?terminal=garcom**. Os links atuais estão em Administração. O resumo do Turno e a cotação de compras ficam prontos para copiar no WhatsApp; não há envio automático.
+`IP-DO-PC` é um marcador: substitua pelo IPv4 mostrado no sistema. No celular, `localhost` aponta para o próprio aparelho.
 
-- [Checklist completo interativo, com marcações e exportação](docs/CHECKLIST_COMPLETO.html)
-- [Roteiro completo de testes e vídeo, com caminhos e pré-requisitos](docs/CHECKLIST_COMPLETO.md)
+```mermaid
+flowchart LR
+    A["Cliente escolhe e personaliza"] --> B["Pedido aguarda conferência"]
+    B --> C["Equipe confere e aceita"]
+    C --> D["Estoque, produção e registros"]
+    D --> E["Preparo, entrega e recebimento"]
+```
 
-A previsão de entrega aumenta com a fila e considera a região. Créditos de café, refeições internas e faturamento corporativo mantêm a distinção entre consumo, receita e dinheiro recebido. A migração e o reenvio de operações têm testes de preservação de saldos e de idempotência.
+O pedido público não baixa estoque nem inicia produção antes do aceite. Preços, escolhas, disponibilidade e taxas são conferidos no servidor. Fechar o aplicativo pelo atalho encerra o servidor que ele iniciou; o acesso dos celulares depende desse servidor.
 
-## Preparação fiscal sem certificado A1
+O acesso atual usa **HTTP local**, sem criptografia de transporte. Utilize Wi-Fi confiável de operação, separado dos visitantes, e firewall restrito à rede necessária. Não encaminhe a porta no roteador. Publicação na internet exige implantação com HTTPS; não basta compartilhar o IP local.
 
-O módulo Fiscal agora permite preparar emitentes separados, encaminhar códigos de produtos para revisão e demonstrar aprovação, rejeição, timeout com consulta e offline em um simulador local. No caixa, a conferência integral não recebe pagamentos nem encerra a comanda. Os ensaios ficam em tabela própria, não consomem numeração e não geram chave, protocolo ou QR fiscal.
+<a id="checklist"></a>
 
-**Motor de emissão real ainda não implementado:** A1/cofre criptográfico, XMLDSig, XML/XSD, SOAP/mTLS, QR fiscal, DANFE oficial, eventos e contingência oficial permanecem pendentes. Escolher Produção futura não habilita transmissão.
+## ✅ Conferir o sistema e preparar o vídeo
 
-Use o [checklist e roteiro de vídeo](docs/CHECKLIST_VIDEO_FISCAL.md) ou a [versão interativa](docs/CHECKLIST_VIDEO_FISCAL.html). A apresentação usa banco separado, somente no PC, porta 4802. Inicie com npm run start:fiscal:presentation; PIN de exemplo 536821, exclusivo desta instalação. A preparação não cria uma regra de dispensa de emissão por tipo de alimento, CPF ou forma de pagamento.
+Comece pelo **[checklist completo em texto](docs/CHECKLIST_COMPLETO.md): 70 verificações**, com caminhos das telas e pré-requisitos. A versão HTML permite marcar itens, anotar resultados, exportar JSON e imprimir/salvar em PDF. As marcações não alteram os dados do sistema.
 
-## Estado do projeto
+| Material | Quando usar |
+| --- | --- |
+| [Checklist completo — texto](docs/CHECKLIST_COMPLETO.md) | Ler no GitHub e conferir todos os módulos. |
+| [Checklist completo — interativo](docs/CHECKLIST_COMPLETO.html) | Baixar e abrir no navegador; instalado como **CHECKLIST COMPLETO.html**. |
+| [PDV touch e roteiro de vídeo](docs/CHECKLIST_PDV_TOUCH.md) | Mesas, observações, pagamento, transferência e auditoria. |
+| [Instalação e continuidade — 66 itens](docs/CHECKLIST_OPERACIONAL.md) | Preparação, acesso, backups e conferência da instalação. |
+| [Preparação fiscal — roteiro separado](docs/CHECKLIST_VIDEO_FISCAL.md) | Apresentação isolada, sem documento fiscal real. |
 
-Etapa 7A revisada antes da 7B. A interface Windows usa a API operacional local. A prévia web é uma demonstração separada, com dados fictícios guardados somente no navegador. Nenhum serviço foi publicado online por esta revisão.
+**Sugestão para a gravação:** login e visão por função → mesa e pedido personalizado → via da cozinha → divisão e troco → pedido do cliente no celular e aceite → calendário, café e extrato do quarto → estoque/convênio → dashboard e auditoria.
 
-A revisão corrige falhas de inicialização, autenticação, autorização, pagamentos, custódia de entregadores e atomicidade do PMS. Os testes automatizados não substituem a conferência do histórico financeiro, a homologação fiscal e a validação de impressoras e do instalador Windows.
+Use uma instalação separada com dados fictícios para gravar. Confirmar vendas, estoque, pagamentos ou hospedagens na instalação operacional altera os saldos reais. Arquivos HTML no GitHub aparecem como código; baixe-os ou abra a cópia local no navegador.
 
-## Experiência de uso
+<a id="arquitetura"></a>
 
-- Paleta: rosa #F72585, preto #111111, roxo #7209B7 e cinza #1A1A1A; fonte Plus Jakarta Sans e marca fornecida pelo proprietário.
-- Botões com hierarquia visual, foco de teclado, estados de interação e áreas de toque maiores.
-- Windows Desktop: mesas verdes livres, amarelas ocupadas e vermelhas aguardando pagamento; limpeza azul e indisponibilidade cinza. Textos e símbolos acompanham as cores.
-- Dashboard Recharts responsivo: vendas dos últimos sete dias e distribuição atual dos apartamentos. No Windows, vendas são receita bruta reconhecida na DRE, não saldo bancário; os dias seguem UTC. A prévia web identifica seus recebimentos como fictícios.
-- Prévia interativa: catálogo com busca, comandas por mesa, pagamento parcial, transferência ao quarto, hospedagem, delivery, financeiro e documentos de exemplo sem validade fiscal.
+## 🏗️ Como o sistema se organiza
 
-## Estrutura
+```mermaid
+flowchart TB
+    subgraph LAN["Operação local · computador e Wi-Fi do estabelecimento"]
+        Desktop["Windows · Tauri 2 + React"]
+        Waiter["Terminal do garçom"]
+        Customer["Cardápio do cliente · delivery e QR"]
+        API["API Fastify · porta 4800"]
+        DB[("SQLite WAL · dados operacionais")]
+        Print["Fila e modelos térmicos · simulação"]
+        Desktop --> API
+        Waiter --> API
+        Customer --> API
+        API --> DB
+        API --> Print
+    end
+    Cloud["Simulador cloud · ambiente separado"]
+    Demo["Prévia comercial web · dados fictícios no navegador"]
+```
 
-| Pasta | Responsabilidade |
-|---|---|
-| apps/desktop | Interface operacional React/Vite, preparada para Tauri 2 |
-| apps/local-server | API Fastify e SQLite da operação |
-| apps/cloud-api | Simulador de nuvem SQLite com sincronização autenticada |
-| apps/web | Demonstração comercial independente |
-| packages/contracts | Contratos Zod e regras compartilhadas |
-| packages/ui | Identidade visual, botões e gráficos compartilhados |
+O atendimento local não depende da internet externa para gravar no PC. Energia, computador ligado e rede interna continuam necessários para os celulares. Cloud e prévia comercial são ambientes separados; o diagrama não representa um serviço já publicado online.
 
-PostgreSQL, emissão SEFAZ/prefeitura e sincronização completa entre todos os módulos ainda não estão implementados. Configurar DATABASE_URL não ativa PostgreSQL.
+| Diretório | Responsabilidade |
+| --- | --- |
+| `apps/desktop` | Interface React/Vite, terminais e aplicativo Windows Tauri 2. |
+| `apps/local-server` | API Fastify, autenticação, regras operacionais, SQLite e impressão simulada. |
+| `apps/cloud-api` | Simulador de nuvem SQLite e sincronização autenticada. |
+| `apps/web` | Demonstração comercial independente, com estado fictício no navegador. |
+| `packages/contracts` | Contratos Zod, tipos e migrações. |
+| `packages/ui` | Identidade visual, componentes e gráficos compartilhados. |
+| `scripts` | Inicialização, compilação, instalação e verificações de execução. |
+| `docs` | Guias, decisões, evidências e checklists. |
 
-## Começar no Windows
+<a id="desenvolvimento"></a>
 
-Requer Node.js 22.13 ou superior e npm. Na raiz do repositório:
+## 🛠️ Desenvolvimento e validação
+
+<details>
+<summary><strong>Preparar o ambiente de desenvolvimento</strong></summary>
+
+Este caminho usa portas e bancos diferentes da instalação operacional. Não aponte a demonstração para dados reais.
 
 ```powershell
 npm ci
 Copy-Item .env.example .env
 ```
 
-Preencha .env antes de iniciar os servidores:
+Preencha o `.env` antes de iniciar:
 
-- DECK26_AUTH_SECRET e DECK26_QR_SEED_SECRET: valores aleatórios fortes e distintos.
-- DECK26_SYNC_SECRET: segredo compartilhado pelos dois servidores.
-- DECK26_BOOTSTRAP_PIN: PIN próprio de 6 a 12 dígitos para criar o proprietário; remova a variável após o primeiro uso.
-- DECK26_DEMO_MODE=false: bancos novos começam sem hóspedes, estoque, receitas, saldos fictícios ou usuários de exemplo. Cadastre e confira os dados reais antes da operação.
+| Variável | Orientação |
+| --- | --- |
+| `DECK26_AUTH_SECRET` | Segredo forte para autenticação. |
+| `DECK26_QR_SEED_SECRET` | Outro segredo forte, distinto do anterior. |
+| `DECK26_SYNC_SECRET` | Segredo compartilhado entre APIs quando usar o simulador cloud. |
+| `DECK26_BOOTSTRAP_PIN` | PIN próprio de 6 a 12 dígitos para o primeiro proprietário; remova após o uso. |
+| `DECK26_DEMO_MODE` | `false` para começar sem dados fictícios; `true` somente em banco descartável. |
+| `DECK26_LOCAL_DB_PATH` / `DECK26_CLOUD_DB_PATH` | Caminhos dos bancos; prefira absolutos para distinguir os ambientes. |
+| `DECK26_ALLOWED_ORIGINS` | Origens exatas autorizadas, sem liberação indiscriminada. |
 
-Uma forma de gerar cada segredo é executar localmente: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))". Não compartilhe os valores nem versione .env.
+Gere cada segredo separadamente no próprio computador:
 
 ```powershell
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
 npm run dev:all
 ```
 
-| Acesso local | Endereço |
-|---|---|
-| Windows Desktop no navegador | http://localhost:5173 |
-| Prévia comercial fictícia | http://localhost:5174 |
-| Saúde da API local | http://127.0.0.1:4000/api/health |
-| Saúde do simulador cloud | http://127.0.0.1:4100/api/health |
+Não versione `.env`, segredos, bancos ou certificados. A instalação operacional pelo atalho gera seus próprios segredos e não depende desse `.env` de desenvolvimento.
 
-Para conhecer somente o visual: npm run dev:web. Para testar a operação com exemplos, use DECK26_DEMO_MODE=true e **um caminho de banco descartável**, nunca o banco operacional. Os PINs de exemplo são recusados em produção. As APIs carregam o .env da raiz automaticamente pelos scripts npm. Os bancos relativos são resolvidos a partir do diretório de cada aplicativo; prefira caminhos absolutos ao configurar um ambiente real.
+| Serviço de desenvolvimento | Endereço padrão |
+| --- | --- |
+| Interface Desktop | `http://localhost:5173` |
+| Prévia comercial fictícia | `http://localhost:5174` |
+| API local / saúde | `http://127.0.0.1:4000/api/health` |
+| Simulador cloud / saúde | `http://127.0.0.1:4100/api/health` |
 
-## Verificar
+Para conhecer somente a prévia visual, use `npm run dev:web`. Os scripts carregam o `.env` da raiz. PINs demonstrativos são recusados em produção.
 
-```powershell
-npm run typecheck
-npm test
-npm run build
-npm audit --audit-level=moderate
-```
+</details>
 
-A validação local de 05/11/2026 executou 140 testes, inicialização real das duas APIs pelo Node, verificação de tipos e compilação das interfaces. A instalação revisada reportou zero vulnerabilidades conhecidas. O selo do GitHub mostra o resultado da validação remota do commit publicado.
+<details>
+<summary><strong>Comandos e evidências de validação</strong></summary>
 
-O build não gera um instalador Tauri. O empacotamento Windows exige Rust, WebView2 e ferramentas C++; hardware e emissão fiscal precisam de validação própria.
+| Comando | O que verifica |
+| --- | --- |
+| `npm run typecheck` | Tipos TypeScript nos workspaces. |
+| `npm test` | Suíte Vitest e smoke de inicialização real das APIs. |
+| `npm run test:runtime` | Inicialização pelo Node e integridade referencial. |
+| `npm run build` | Pacotes e interfaces; não gera o executável Windows. |
+| `npm audit --audit-level=moderate` | Dependências npm; não cobre todo o ecossistema Rust. |
+| `npm run build:windows:local` | Compila a versão nativa operacional no Windows. |
+| `npm run build:windows:test` | Compila o ambiente nativo de testes, separado da operação. |
 
-## Aplicativo Windows nativo para teste
+Na entrega funcional de **06/11/2026**, os **212 testes** passaram, incluindo os **182 anteriores**, com verificação de tipos, smoke das APIs e compilação Windows. A CI principal também aprovou tipos, testes, auditoria npm e build do [commit funcional 714db78](https://github.com/Duailibe32/deck26-system/commit/714db78d09e8cd5e442877b6b9801d3fc0faec16). Os selos no topo levam aos workflows; consulte as execuções para ver o resultado de cada commit. Eles não representam uma certificação do produto.
 
-A tela de login bloqueia os módulos até autenticação por PIN. O ambiente nativo de teste usa API local e SQLite persistente separado, sem cobranças ou documentos fiscais reais. Consulte [como gerar, abrir e testar](docs/WINDOWS_TEST.md).
+As verificações cobrem autenticação, permissões, reenvio sem duplicação, rollback financeiro, PMS, estoque, promoções, escolhas obrigatórias, combos, produção, café, convênios e migração persistente. Bancos de teste são isolados. A interface foi conferida no navegador em tamanhos desktop e celular; isso não substitui teste no aparelho físico.
 
-Execute npm run build:windows:test no Windows com Rust/MSVC instalados; o script scripts/install-windows-test-shortcut.ps1 cria o atalho que inicia API e janela nativa juntos. O executável não incorpora a API nem substitui a homologação operacional.
+</details>
 
-## Segurança, financeiro e preparação da 7B
+<a id="seguranca"></a>
 
-Leia [revisão e evidências](docs/REVISAO_PRE_7B.md), [segurança](docs/SECURITY.md), [invariantes financeiras](docs/FINANCIAL_INVARIANTS.md), [testes](docs/TESTING.md) e [checklist de produção](docs/PREPRODUCTION_CHECKLIST.md).
+## 🔐 Acesso, financeiro e continuidade
 
-Antes de aplicar a nova versão a um banco existente, faça backup consistente e ensaie a migração em uma cópia. A revisão não reconstrói movimentos históricos ausentes: concilie saldos de caixa, banco, cartões e carteira de entregadores com extratos e registros reais. Consulte [backup e recuperação](docs/BACKUP_AND_RECOVERY.md).
+- **Acesso por função:** PIN com scrypt e salt, sessão com expiração, usuário ativo e permissões verificados no servidor; limites de tentativas no login.
+- **Conferência no servidor:** cliente público não determina o preço; operações críticas usam validação, transações e identificação de reenvio para evitar duplicações.
+- **Rastreabilidade:** ações registram operador e horário. A aplicação protege a trilha contra edição; acesso administrativo ao arquivo SQLite exige proteção do computador.
+- **Separação financeira:** consumo, receita, crédito corporativo e dinheiro recebido são eventos distintos. Faturas de convênios não representam entrada de caixa nem uma segunda venda.
+- **Continuidade:** backup consistente pela Administração, rotina automática local e procedimento de restauração. Guarde cópias protegidas fora do notebook.
+- **Dados pessoais:** histórico por telefone fica restrito à equipe autorizada; não há histórico público liberado apenas por digitar um número.
 
-Não publique a API operacional nem o servidor de desenvolvimento Vite na internet. A 7B deve configurar HTTPS, origem autorizada, cópias de segurança e monitoramento, além de validar o ambiente de hospedagem. O simulador cloud não equivale a uma implantação homologada.
+A revisão não recompõe lançamentos históricos ausentes: concilie caixa, bancos, cartões e custódia com registros reais. Existe um alerta moderado documentado na cadeia GTK/glib para Linux/BSD; não há dependência glib no alvo Windows analisado. Leia as [evidências e limites](docs/VALIDACAO_PREPARACAO_FISCAL.md).
+
+<a id="limites"></a>
+
+## 🚧 O que ainda depende de integração ou homologação
+
+| Tema | Situação atual | Próximo requisito |
+| --- | --- | --- |
+| **NFC-e / NFS-e** | Preparação cadastral e simulador isolado; emissão real não implementada. | Dados fiscais, A1, XML/assinatura, comunicação SEFAZ/prefeitura e homologação. |
+| **Impressoras térmicas** | Fila e modelos 58/80 mm em simulação HTML/PDF. | Equipamentos, integração USB/rede e conferência física. |
+| **PIX e cartão** | Registro e controle interno dos recebimentos. | Integração financeira para cobrança/retorno automático. |
+| **WhatsApp** | Resumos e listas prontos para copiar. | Envio automático não implementado. |
+| **Acesso pela internet** | Disponível na rede local. | Implantação com HTTPS, origens autorizadas, firewall, backups e monitoramento. |
+| **Cloud / PostgreSQL** | Simulador SQLite e sincronização parcial. | Backend e sincronização integral; `DATABASE_URL` não habilita PostgreSQL. |
+| **Distribuição Windows** | Executável com servidor dependente do repositório. | Instalador autossuficiente, atualização e homologação em outros PCs. |
+
+### Preparação fiscal sem A1
+
+Restaurante e hotel mantêm emitentes separados. A apresentação demonstra aprovação, rejeição, consulta após timeout e offline sem consumir numeração nem produzir chave, protocolo ou QR fiscal. A simulação fiscal está **bloqueada na instalação operacional**.
+
+Para a apresentação isolada no PC, consulte o [roteiro fiscal](docs/CHECKLIST_VIDEO_FISCAL.md) e execute `npm run start:fiscal:presentation`. Esse ambiente usa porta **4802** e dados separados. Motor A1, XMLDSig, SOAP/mTLS, DANFE/QR oficial, eventos e contingência fiscal oficial continuam pendentes.
+
+Comprovantes internos não substituem documentos fiscais exigíveis. A classificação de produto, o CPF ou o meio de pagamento não são, por si só, uma regra de dispensa de emissão.
+
+<a id="documentacao"></a>
+
+## 📚 Central de documentação
+
+| Quero… | Documento |
+| --- | --- |
+| Instalar, entrar, usar o celular e encerrar | [Operação local](docs/OPERACAO_LOCAL.md) |
+| Conferir funcionalidades e gravar o vídeo | [Checklist completo](docs/CHECKLIST_COMPLETO.md) |
+| Entender o PDV touch e seus atalhos | [PDV e roteiro de vídeo](docs/CHECKLIST_PDV_TOUCH.md) |
+| Preparar dados e continuidade da instalação | [Checklist operacional](docs/CHECKLIST_OPERACIONAL.md) |
+| Consultar decisões e evidências da revisão | [Revisão antes da 7B](docs/REVISAO_PRE_7B.md) |
+| Entender as regras do dinheiro | [Invariantes financeiras](docs/FINANCIAL_INVARIANTS.md) |
+| Rever acesso e proteção de dados | [Segurança](docs/SECURITY.md) |
+| Fazer backup e recuperação | [Backup e restauração](docs/BACKUP_AND_RECOVERY.md) |
+| Conhecer os ambientes de testes | [Testes](docs/TESTING.md) · [Windows de teste](docs/WINDOWS_TEST.md) |
+| Preparar publicação futura | [Checklist de pré-produção](docs/PREPRODUCTION_CHECKLIST.md) |
+| Entender a estrutura e a evolução | [Arquitetura](docs/ARCHITECTURE.md) · [Roadmap](docs/ROADMAP.md) |
+| Avaliar ideias do delivery-free | [Análise da referência](docs/REFERENCIA_DELIVERY_FREE.md) |
+
+Guias de arquitetura, roadmap e revisões anteriores também contêm decisões históricas e propostas futuras. Para o estado atual da instalação, priorize este README, o guia de operação local e o checklist completo.
+
+---
+
+<div align="center">
+
+**DECK 26 · Hotel Auto Posto Milla**<br>
+Atendimento com agilidade. Hospedagem com cuidado. Gestão com clareza.
+
+<sub>Projeto privado em evolução · operação local · documentação revisada em 06/11/2026.</sub>
+
+</div>

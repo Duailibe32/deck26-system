@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="400" viewBox="0 0 1280 400" role="img" aria-labelledby="title desc">
+<title id="title">DECK 26 · Gestão e Hospitalidade</title><desc id="desc">Restaurante, bar, delivery e Hotel Auto Posto Milla. Identidade em preto, rosa e roxo.</desc>
+<defs><linearGradient id="bg" x2="1" y2="1"><stop stop-color="#111111"/><stop offset="1" stop-color="#221326"/></linearGradient><linearGradient id="line"><stop stop-color="#F72585"/><stop offset="1" stop-color="#7209B7"/></linearGradient></defs>
+<rect width="1280" height="400" rx="24" fill="url(#bg)"/>
+<path d="M0 396H1280" stroke="url(#line)" stroke-width="8"/>
+<circle cx="1230" cy="-70" r="265" fill="none" stroke="#F72585" stroke-opacity=".14" stroke-width="70"/>
+<circle cx="1230" cy="-70" r="350" fill="none" stroke="#F72585" stroke-opacity=".08"/>
+<g font-family="Segoe UI,Arial,sans-serif">
+<rect x="58" y="49" width="269" height="30" rx="15" fill="#F72585" fill-opacity=".13" stroke="#F72585" stroke-opacity=".4"/>
+<circle cx="76" cy="64" r="4" fill="#FFB3CB"/><text x="90" y="69" fill="#FFB3CB" font-size="12" font-weight="600" letter-spacing="1.6">HOTEL AUTO POSTO MILLA</text>
+<text x="54" y="190" fill="#FFF6EF" font-size="100" font-weight="800" letter-spacing="-5">DECK <tspan fill="#F72585">26</tspan></text>
+<text x="60" y="239" fill="#F5E7EB" font-size="27" font-weight="500">Gestão &amp; Hospitalidade</text>
+<text x="60" y="278" fill="#BFAEBB" font-size="17">Da primeira mesa ao último check-out.</text>
+<text x="60" y="344" fill="#D7C5D2" font-size="12" letter-spacing="2">RESTAURANTE  /  BAR  /  DELIVERY  /  HOTEL</text>
+<g transform="translate(827 78)">
+<rect width="389" height="70" rx="14" fill="#FFFFFF" fill-opacity=".035" stroke="#FFFFFF" stroke-opacity=".1"/>
+<text x="22" y="43" fill="#F72585" font-size="22" font-weight="700">01</text><text x="76" y="31" fill="#FFF6EF" font-size="17" font-weight="600">Atender com agilidade</text><text x="76" y="52" fill="#BFAEBB" font-size="12">PDV touch · mesas · pedidos pelo celular</text>
+<g transform="translate(0 84)"><rect width="389" height="70" rx="14" fill="#FFFFFF" fill-opacity=".035" stroke="#FFFFFF" stroke-opacity=".1"/><text x="22" y="43" fill="#FFB3CB" font-size="22" font-weight="700">02</text><text x="76" y="31" fill="#FFF6EF" font-size="17" font-weight="600">Receber com cuidado</text><text x="76" y="52" fill="#BFAEBB" font-size="12">Reservas · hospedagens · café da manhã</text></g>
+<g transform="translate(0 168)"><rect width="389" height="70" rx="14" fill="#FFFFFF" fill-opacity=".035" stroke="#FFFFFF" stroke-opacity=".1"/><text x="22" y="43" fill="#C699EF" font-size="22" font-weight="700">03</text><text x="76" y="31" fill="#FFF6EF" font-size="17" font-weight="600">Gerenciar com clareza</text><text x="76" y="52" fill="#BFAEBB" font-size="12">Caixa · estoque · financeiro · auditoria</text></g></g></g></svg>
