@@ -329,6 +329,7 @@ describe('DECK 26 — Etapa 7A: Bateria de Testes Automatizados (Hotel 24 Qts, C
     const { stay } = store.checkInHotelStay({
       guestId: guest.id,
       roomNumber: opRoom.number,
+      checkInAt: '2026-11-05T12:00:00.000Z',
       checkOutScheduledAt: '2026-11-10T12:00:00.000Z',
       dailyRateCents: 22000,
       operatorUserId: 'usr-manager-01',

@@ -11,10 +11,11 @@ import {
 } from './index.js';
 
 describe('@deck26/contracts — Contratos Compartilhados, Navegação e Cardápio Oficial (Etapa 3)', () => {
-  it('contém exatamente os 16 módulos arquiteturais exigidos', () => {
-    expect(SYSTEM_MODULES).toHaveLength(16);
+  it('preserva os 16 módulos originais e inclui a auditoria gerencial', () => {
+    expect(SYSTEM_MODULES).toHaveLength(17);
     const ids = SYSTEM_MODULES.map((m) => m.id);
     expect(ids).toEqual([
+      'auditoria',
       'dashboard',
       'caixa-pdv',
       'mesas-comandas',

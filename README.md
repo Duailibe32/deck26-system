@@ -16,7 +16,17 @@ A versão Windows possui instalação própria, login pessoal e dados persistent
 
 Impressoras virtuais de caixa e cozinha geram vias de 58/80 mm. Impressão física e emissão fiscal ainda precisam de integração/homologação; a simulação fiscal está bloqueada nesta instalação. Nuvem não configurada. Os registros de PIX/cartão não efetuam cobranças bancárias.
 
-Validação desta entrega: 169 testes automatizados, verificação de tipos e compilação nativa Windows. O fluxo de abrir mesa, enviar pedido e solicitar conta foi conferido pelo navegador com banco isolado. A abertura no celular físico depende da conferência na rede do estabelecimento.
+Validação desta entrega: 182 testes automatizados, verificação de tipos e compilação nativa Windows. A conferência usa bancos isolados; a abertura no celular físico depende da rede do estabelecimento.
+
+## PDV touch e atendimento por função
+
+O PDV reúne atendimento, mesas, contas, turno, organização e logs em subabas. Cada cargo inicia na sua visão de trabalho; proprietário/gerente podem alternar para o modo completo, respeitando as permissões. O catálogo possui selos de categoria e estação, busca e favoritos calculados pelo histórico aceito.
+
+O carrinho lateral usa cupom amarelo com quantidades, valores e controles +/−. No pagamento, o teclado grande distingue valor a receber de dinheiro entregue; as cédulas ilustradas somam o dinheiro e exibem o troco. Abrir mesa também permite informar pessoas pelo teclado. No celular estreito, o cupom está na aba Pedido; no tablet largo, fica ao lado dos produtos.
+
+Chamados pelo QR sinalizam a mesa e exigem atendimento da equipe. Transferir consumo ao quarto exige confirmação recente por PIN autorizado, mantém uma identificação para reenvio seguro e envia a mesa à limpeza. O componente de auditoria apresenta ações recentes com operador e horário, disponível à gerência.
+
+Veja o [checklist e roteiro de vídeo do PDV touch](docs/CHECKLIST_PDV_TOUCH.md), incluindo evidências e os recursos adicionais que ainda estão pendentes. A aparência de recibo não habilita emissão fiscal nem impressão física.
 
 ## Preparação fiscal sem certificado A1
 

@@ -1,3 +1,4 @@
+import {registerDesktopRoutes} from './desktop-routes.js';
 import {registerFiscalPreparationRoutes} from './fiscal-preparation-routes.js';
 import {registerOperationRoutes} from './operation-routes.js';
 /**
@@ -357,6 +358,7 @@ export async function buildLocalServer(options?: {
       catalog: can('catalog:manage') ? catalog : {...catalog,products:catalog.products.filter(p=>p.active).map(p=>({...p,costPriceCents:undefined,internalNotes:''}))},
       recipes: can('stock:adjust') ? recipes : [],
       qrTables: can('tabs:manage') ? qrTables : [],
+      serviceCalls: can('tabs:manage') ? store.listTableServiceCalls() : [],
       tabs: can('tabs:manage') ? tabs.filter(tab => tab.type !== 'HOTEL_FOLIO' || can('hotel:view_pii')) : [],
       orders: orders.filter(order => order.channel !== 'HOTEL_ROOM' || can('hotel:view_pii')).map(order => can('tabs:manage') ? order : {...order, customerNotes: undefined}),
       payments: can('pos:operate') ? payments : [],
@@ -1095,6 +1097,7 @@ export async function buildLocalServer(options?: {
     try {
       const result = store.createOrder({
         ...parsed.data,
+        actorUserId: session.userId,
         waiterUserId: parsed.data.waiterUserId ?? session.userId,
         waiterName: parsed.data.waiterName ?? session.name
       });
@@ -1285,7 +1288,7 @@ export async function buildLocalServer(options?: {
     try {
       const result = store.recordPayment({
         ...parsed.data,
-        operatorUserId: parsed.data.operatorUserId ?? session.userId
+        operatorUserId: session.userId
       });
       return reply.status(result.idempotentReplay ? 200 : 201).send(result);
     } catch (err) {
@@ -2939,6 +2942,7 @@ export async function buildLocalServer(options?: {
     }
   });
 
+  registerDesktopRoutes(app,store,authorizePermission,resolveSession);
   registerOperationRoutes(app,store,authorizePermission);
   registerFiscalPreparationRoutes(app,store,authorizePermission);
   return {

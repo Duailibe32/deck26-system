@@ -1,3 +1,7 @@
+import {PosWorkspace} from './PosWorkspace.js';
+import {AuditLogs} from './AuditLogs.js';
+import {visibleModules,roleHome,canChooseView,type InterfaceMode} from './desktopModels.js';
+import {useOperationalEvents} from './useOperationalEvents.js';
 import {fetchHotelFolio,sendHotelFolioPayment,HotelFolioRequestError} from './hotelFolio.js';
 import {FiscalPreparationModule,FiscalCheckoutPreview} from './FiscalPreparationModule.js';
 import {FirstRunGate} from './FirstRunGate.js';
@@ -112,6 +116,7 @@ interface ServerStateSnapshot {
   catalog: { categories: CatalogCategory[]; products: CatalogProduct[] };
   recipes?: ProductRecipe[];
   qrTables?: DiningTableQr[];
+  serviceCalls?: import('@deck26/contracts').TableServiceCall[];
   tabs: Tab[];
   orders: Order[];
   payments: Payment[];
@@ -203,6 +208,7 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
   });
 
   // Autenticação Real por PIN no Backend
+  const [interfaceMode,setInterfaceMode]=useState<InterfaceMode>('SIMPLIFIED');
   const [authSession, setAuthSession] = useState<AuthSessionInfo | null>(null);
   const [pinInput, setPinInput] = useState<string>('');
   const [loginBusy,setLoginBusy]=useState(false);
@@ -438,11 +444,7 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
         name: data.user.name,
         role: data.user.role
       });
-      setActiveModule(current=>{
-        const module=SYSTEM_MODULES.find(item=>item.id===current);
-        if(module&&hasPermission(data.user.role,module.requiredPermission))return current;
-        return SYSTEM_MODULES.find(item=>hasPermission(data.user.role,item.requiredPermission))?.id??'garcons';
-      });
+      setInterfaceMode('SIMPLIFIED');setActiveModule(roleHome(data.user.role));
       setShowPinModal(false);setPinInput('');
       notify(`Operador autenticado: ${data.user.name} (${data.user.role})`);
     } catch {
@@ -484,7 +486,7 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      const matched = SYSTEM_MODULES.find((m) => m.shortcut === e.key);
+      const matched = visibleModules(activeRole,interfaceMode).find((m) => m.shortcut === e.key);
       if (matched && hasPermission(activeRole, matched.requiredPermission)) {
         e.preventDefault();
         setActiveModule(matched.id);
@@ -492,7 +494,9 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [activeRole]);
+  }, [activeRole,interfaceMode]);
+
+  useOperationalEvents(localApiBase,authSession?.token,!!authSession&&hasPermission(authSession.role,'tabs:manage'),()=>{void refreshState();});
 
   function notify(msg: string) {
     setFeedbackBanner(msg);
@@ -1722,7 +1726,7 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
   if(!authSession)return <LoginScreen pin={pinInput} onChange={value=>{setPinInput(value);setLoginError('');}} onSubmit={()=>void authenticateWithPin(pinInput)} busy={loginBusy} error={loginError} testMode={import.meta.env.VITE_DECK26_TEST_MODE==='true'}/>;
 
   return (
-    <div className="d26-shell">
+    <div className={'d26-shell '+(interfaceMode==='SIMPLIFIED'?'d26-simple-view':'')}>
       {fiscalPreviewTab&&<FiscalCheckoutPreview api={localApiBase} headers={getAuthHeaders} tabId={fiscalPreviewTab} onClose={()=>setFiscalPreviewTab(null)}/>}
       {window.location.port==='4802'&&<div className="d26-presentation-banner">ENSAIO PARA APRESENTAÇÃO · DADOS SEPARADOS · SEM VALIDADE FISCAL</div>}
       {/* BARRA SUPERIOR DO APLICATIVO WINDOWS TAURI 2 */}
@@ -1763,13 +1767,15 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
         </div>
       </header>
 
+      {canChooseView(activeRole)&&<button className="d26-view-toggle" onClick={()=>{const next=interfaceMode==='SIMPLIFIED'?'COMPLETE':'SIMPLIFIED';setInterfaceMode(next);if(!visibleModules(activeRole,next).some(module=>module.id===activeModule))setActiveModule(roleHome(activeRole));}}>{interfaceMode==='SIMPLIFIED'?'Abrir modo completo':'Voltar ao modo simplificado'}</button>}
       <button className="d26-session-exit" onClick={onSignOut}>Sair / trocar operador</button>
       {/* NAVEGAÇÃO LATERAL COM OS 16 MÓDULOS OFICIAIS E CONTROLE RBAC */}
       <aside className="d26-sidebar">
         {(
           ['OPERACIONAL', 'CATALOGO_ESTOQUE', 'HOTELARIA', 'GESTAO_RETAGUARDA', 'INFRA_FISCAL'] as const
         ).map((groupKey) => {
-          const groupModules = SYSTEM_MODULES.filter((m) => m.group === groupKey);
+          const groupModules = visibleModules(activeRole,interfaceMode).filter((m) => m.group === groupKey);
+          if(!groupModules.length)return null;
           return (
             <div key={groupKey}>
               <div className="d26-nav-group-title">{GROUP_LABELS[groupKey]}</div>
@@ -1798,7 +1804,8 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
 
       {/* ÁREA DE TRABALHO PRINCIPAL */}
       <main className="d26-workspace">
-        <label className="d26-compact-navigation">Módulo<select className="d26-input" value={activeModule} onChange={e=>setActiveModule(e.target.value as SystemModuleId)}>{SYSTEM_MODULES.filter(module=>hasPermission(authSession.role,module.requiredPermission)).map(module=><option key={module.id} value={module.id}>{module.shortTitle}</option>)}</select></label>
+        {activeModule==='auditoria'&&<AuditLogs api={localApiBase} headers={getAuthHeaders}/>}
+        <label className="d26-compact-navigation">Módulo<select className="d26-input" value={activeModule} onChange={e=>setActiveModule(e.target.value as SystemModuleId)}>{visibleModules(authSession.role,interfaceMode).map(module=><option key={module.id} value={module.id}>{module.shortTitle}</option>)}</select></label>
         {/* MODAL DE AUTENTICAÇÃO REAL POR PIN NO BACKEND */}
         {showPinModal && (
           <div
@@ -2849,71 +2856,7 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
         {/* =====================================================================
             MÓDULOS DE LANÇAMENTO DE PEDIDOS E CAIXA (PDV E GARÇONS)
            ===================================================================== */}
-        {(activeModule === 'caixa-pdv' || activeModule === 'garcons') && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-            {/* BANNER DE NOTIFICAÇÕES EM TEMPO REAL PARA O GARÇOM (ETAPA 4 — SEÇÃO 16) */}
-            {activeModule === 'garcons' &&
-              (snapshot.notifications ?? []).filter(
-                (n) => !n.acknowledgedAt && n.eventType === 'ORDER_READY'
-              ).length > 0 && (
-                <div
-                  className="d26-card"
-                  style={{
-                    borderLeft: '4px solid #34D399',
-                    background: 'rgba(16, 185, 129, 0.12)',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '8px'
-                  }}
-                >
-                  <strong style={{ color: '#34D399', fontSize: '0.92rem' }}>
-                    🔔 Avisos da Cozinha — Pedidos Prontos para Retirada
-                  </strong>
-                  {(snapshot.notifications ?? [])
-                    .filter((n) => !n.acknowledgedAt && n.eventType === 'ORDER_READY')
-                    .map((n) => (
-                      <div
-                        key={n.id}
-                        style={{
-                          display: 'flex',
-                          justifyContent: 'space-between',
-                          alignItems: 'center',
-                          background: 'var(--d26-black-900)',
-                          padding: '8px 12px',
-                          borderRadius: '8px'
-                        }}
-                      >
-                        <div>
-                          <strong>{n.title}</strong> — {n.message}
-                        </div>
-                        <div style={{ display: 'flex', gap: '6px' }}>
-                          {n.orderId && (
-                            <button
-                              className="d26-btn d26-btn-primary"
-                              style={{ padding: '4px 10px', fontSize: '0.75rem' }}
-                              onClick={async () => {
-                                await handleAdvanceOrder(n.orderId!, 'DELIVERED');
-                                await handleAcknowledgeNotification(n.id);
-                              }}
-                            >
-                              ✓ Confirmar Entrega na Mesa
-                            </button>
-                          )}
-                          <button
-                            className="d26-btn d26-btn-secondary"
-                            style={{ padding: '4px 10px', fontSize: '0.75rem' }}
-                            onClick={() => handleAcknowledgeNotification(n.id)}
-                          >
-                            Ciente
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                </div>
-              )}
-
-            {/* RESUMO OPERACIONAL E TURNO DE CAIXA (ETAPA 4 — SEÇÕES 19 E 20) */}
-            {activeModule === 'caixa-pdv' && snapshot.cashierSummary && (
+        {(['caixa-pdv','garcons','mesas-comandas'] as SystemModuleId[]).includes(activeModule)&&<PosWorkspace api={localApiBase} session={authSession} snapshot={snapshot} onRefresh={refreshState} onNotice={notify} onFiscalPreview={setFiscalPreviewTab} onNavigate={setActiveModule} entry={activeModule} shiftPanel={<>{snapshot.cashierSummary && (
               <div className="d26-card" style={{ borderLeft: '4px solid #F72585' }}>
                 <div
                   style={{
@@ -3066,630 +3009,7 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
                   </div>
                 )}
               </div>
-            )}
-
-            <div className="d26-split-2">
-              <div className="d26-card">
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
-                  <h2 style={{ fontSize: '1.05rem' }}>Catálogo Compartilhado — Lançamento Rápido</h2>
-                  <input
-                    type="text"
-                    className="d26-input"
-                    style={{ width: '240px' }}
-                    placeholder="🔍 Buscar item ou SKU..."
-                    value={posSearchQuery}
-                    onChange={(e) => setPosSearchQuery(e.target.value)}
-                  />
-                </div>
-
-                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '12px' }}>
-                  <button
-                    className={`d26-btn ${selectedCategoryId === 'ALL' ? 'd26-btn-primary' : 'd26-btn-secondary'}`}
-                    style={{ padding: '5px 10px', fontSize: '0.76rem' }}
-                    onClick={() => setSelectedCategoryId('ALL')}
-                  >
-                    Todos ({posActiveProducts.length})
-                  </button>
-                  {snapshot.catalog.categories
-                    .filter((c) => c.active)
-                    .map((cat) => (
-                      <button
-                        key={cat.id}
-                        className={`d26-btn ${selectedCategoryId === cat.id ? 'd26-btn-tertiary' : 'd26-btn-secondary'}`}
-                        style={{ padding: '5px 10px', fontSize: '0.76rem' }}
-                        onClick={() => setSelectedCategoryId(cat.id)}
-                      >
-                        {cat.name}
-                      </button>
-                    ))}
-                </div>
-
-                <div className="d26-product-grid">
-                  {posActiveProducts.map((product) => {
-                    const effectiveCh: SalesChannel =
-                      activeModule === 'garcons' ? 'DINE_IN' : selectedChannel;
-                    const channelPrice = resolveChannelPriceCents(product, effectiveCh);
-                    const stockQty = stockBalanceByProductId.get(product.id) ?? 0;
-                    const outOfStockBlocked =
-                      product.trackStock &&
-                      product.outOfStockPolicy === 'BLOCK_SALE' &&
-                      stockQty <= 0;
-
-                    return (
-                      <div key={product.id} className="d26-product-card">
-                        <div>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '8px' }}>
-                            <strong style={{ fontSize: '0.92rem' }}>{product.name}</strong>
-                            <MenuPriceBadge cents={channelPrice} />
-                          </div>
-                          <p style={{ fontSize: '0.75rem', color: 'var(--d26-gray-400)', marginTop: '4px' }}>
-                            {product.description}
-                          </p>
-                        </div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px' }}>
-                          <span className="d26-badge d26-badge-outline-purple" style={{ fontSize: '0.65rem' }}>
-                            {product.prepStation} • Est: {stockQty}
-                          </span>
-                          <button
-                            className="d26-btn d26-btn-primary"
-                            style={{ padding: '5px 12px', fontSize: '0.78rem' }}
-                            disabled={outOfStockBlocked}
-                            onClick={() => handleProductClickForPos(product)}
-                          >
-                            {outOfStockBlocked
-                              ? 'Esgotado'
-                              : product.modifierGroups.length > 0
-                                ? '+ Opções'
-                                : '+ Adicionar'}
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {/* COLUNA DIREITA: DISPARO DE PEDIDO INCREMENTAL E PAGAMENTO PARCIAL */}
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-                <div className="d26-card">
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap', gap: '8px' }}>
-                    <h2 style={{ fontSize: '1.05rem' }}>
-                      Novo Pedido Incremental ({activeModule === 'garcons' ? 'Terminal Garçom' : 'Caixa / PDV Windows'})
-                    </h2>
-                    <div style={{ display: 'flex', gap: '6px' }}>
-                      <button
-                        className="d26-btn d26-btn-secondary"
-                        style={{ padding: '4px 10px', fontSize: '0.74rem' }}
-                        onClick={() => handleOpenTable(selectedTableNumber)}
-                      >
-                        + Abrir Mesa {String(selectedTableNumber).padStart(2, '0')}
-                      </button>
-                    </div>
-                  </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px', marginBottom: '12px' }}>
-                    <div>
-                      <label style={{ fontSize: '0.75rem', color: 'var(--d26-gray-300)' }}>Canal de Venda</label>
-                      <select
-                        className="d26-select"
-                        value={activeModule === 'garcons' ? 'DINE_IN' : selectedChannel}
-                        disabled={activeModule === 'garcons'}
-                        onChange={(e) => setSelectedChannel(e.target.value as SalesChannel)}
-                      >
-                        <option value="DINE_IN">Mesa / Salão</option>
-                        <option value="COUNTER_PDV">Balcão PDV</option>
-                        <option value="DELIVERY">Delivery</option>
-                        <option value="PICKUP">Retirada</option>
-                        <option value="HOTEL_ROOM">Consumo Hotel</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label style={{ fontSize: '0.75rem', color: 'var(--d26-gray-300)' }}>Mesa Destino</label>
-                      <input
-                        type="number"
-                        min={1}
-                        max={60}
-                        className="d26-input"
-                        value={selectedTableNumber}
-                        onChange={(e) => setSelectedTableNumber(Number(e.target.value) || 1)}
-                      />
-                    </div>
-                    <div>
-                      <label style={{ fontSize: '0.75rem', color: 'var(--d26-gray-300)' }}>Garçom / Operador</label>
-                      <select
-                        className="d26-select"
-                        value={waiterName}
-                        onChange={(e) => setWaiterName(e.target.value)}
-                      >
-                        <option value="Garçom 01 (Wi-Fi)">Garçom 01 (Wi-Fi)</option>
-                        <option value="Garçom 02 (Wi-Fi)">Garçom 02 (Wi-Fi)</option>
-                        <option value="Garçom 03 (Wi-Fi)">Garçom 03 (Wi-Fi)</option>
-                        <option value="Garçom 04 (Wi-Fi)">Garçom 04 (Wi-Fi)</option>
-                        <option value="Garçom 05 (Wi-Fi)">Garçom 05 (Wi-Fi)</option>
-                        <option value="Operador Caixa Windows">Operador Caixa Windows</option>
-                      </select>
-                    </div>
-                  </div>
-
-                  {cart.length === 0 ? (
-                    <p style={{ color: 'var(--d26-gray-400)', fontSize: '0.84rem', padding: '12px 0' }}>
-                      Selecione itens do cardápio ao lado para compor o pedido da Mesa {selectedTableNumber}.
-                    </p>
-                  ) : (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginBottom: '14px' }}>
-                      {cart.map((item) => {
-                        const effectiveCh: SalesChannel =
-                          activeModule === 'garcons' ? 'DINE_IN' : selectedChannel;
-                        const unitCents = resolveChannelPriceCents(item.product, effectiveCh);
-                        const modCents = item.modifiers.reduce((a, m) => a + m.priceDeltaCents, 0);
-                        const lineTotal = (unitCents + modCents) * item.quantity;
-                        return (
-                          <div
-                            key={item.cartItemId}
-                            style={{
-                              display: 'flex',
-                              justifyContent: 'space-between',
-                              alignItems: 'center',
-                              background: 'var(--d26-black-900)',
-                              padding: '8px 12px',
-                              borderRadius: '8px'
-                            }}
-                          >
-                            <div>
-                              <strong>
-                                {item.quantity}x {item.product.name}
-                              </strong>
-                              {item.modifiers.length > 0 && (
-                                <div style={{ fontSize: '0.73rem', color: '#FFAFCC' }}>
-                                  + {item.modifiers.map((m) => m.optionName).join(', ')}
-                                </div>
-                              )}
-                              {item.notes && (
-                                <div style={{ fontSize: '0.72rem', color: '#D8B4FE' }}>
-                                  Obs: {item.notes}
-                                </div>
-                              )}
-                              <div style={{ fontSize: '0.75rem', color: 'var(--d26-gray-400)' }}>
-                                {formatBrlCents(lineTotal)}
-                              </div>
-                            </div>
-                            <button
-                              className="d26-btn d26-btn-secondary"
-                              style={{ padding: '4px 8px', fontSize: '0.75rem' }}
-                              onClick={() =>
-                                setCart((prev) => prev.filter((p) => p.cartItemId !== item.cartItemId))
-                              }
-                            >
-                              Remover
-                            </button>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-
-                  <div
-                    style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                      borderTop: 'var(--d26-border-subtle)',
-                      paddingTop: '12px'
-                    }}
-                  >
-                    <div>
-                      <span style={{ fontSize: '0.75rem', color: 'var(--d26-gray-400)' }}>
-                        Total deste Pedido:
-                      </span>
-                      <div style={{ fontSize: '1.25rem', fontWeight: 800, color: '#F72585' }}>
-                        {formatBrlCents(
-                          cart.reduce((acc, c) => {
-                            const effectiveCh: SalesChannel =
-                              activeModule === 'garcons' ? 'DINE_IN' : selectedChannel;
-                            const u = resolveChannelPriceCents(c.product, effectiveCh);
-                            const m = c.modifiers.reduce((s, mod) => s + mod.priceDeltaCents, 0);
-                            return acc + (u + m) * c.quantity;
-                          }, 0)
-                        )}
-                      </div>
-                    </div>
-                    <button
-                      className="d26-btn d26-btn-primary"
-                      disabled={cart.length === 0}
-                      onClick={() =>
-                        submitOrder(activeModule === 'garcons' ? 'WAITER_MOBILE' : 'WINDOWS_PDV')
-                      }
-                    >
-                      Disparar Pedido Incremental
-                    </button>
-                  </div>
-                </div>
-
-                {/* CONSULTA DE PEDIDOS ANTERIORES DA MESA SELECIONADA (SEÇÃO 13) */}
-                <div className="d26-card">
-                  <h3 style={{ fontSize: '0.94rem', marginBottom: '8px' }}>
-                    Histórico da Mesa {selectedTableNumber} neste Turno
-                  </h3>
-                  {snapshot.orders.filter((o) => o.tableNumber === selectedTableNumber).length === 0 ? (
-                    <p style={{ fontSize: '0.78rem', color: 'var(--d26-gray-400)' }}>
-                      Nenhum pedido lançado para a Mesa {selectedTableNumber} ainda.
-                    </p>
-                  ) : (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                      {snapshot.orders
-                        .filter((o) => o.tableNumber === selectedTableNumber)
-                        .map((ord) => (
-                          <div
-                            key={ord.id}
-                            style={{
-                              fontSize: '0.78rem',
-                              padding: '6px 10px',
-                              background: 'var(--d26-black-900)',
-                              borderRadius: '6px',
-                              display: 'flex',
-                              justifyContent: 'space-between'
-                            }}
-                          >
-                            <span>
-                              <strong>#{ord.id.slice(0, 6)}</strong>:{' '}
-                              {ord.items.map((i) => `${i.quantity}x ${i.productName}`).join(', ')}
-                            </span>
-                            <span className="d26-badge d26-badge-outline-purple">{ord.status}</span>
-                          </div>
-                        ))}
-                    </div>
-                  )}
-                </div>
-
-                {/* LIQUIDAÇÃO PARCIAL OU TOTAL, DIVISÃO, DESCONTO E LIBERAÇÃO DE COMANDAS */}
-                <div className="d26-card">
-                  <h3 style={{ fontSize: '0.96rem', marginBottom: '6px' }}>
-                    Comandas Abertas — Divisão, Desconto, Pagamento Parcial/Misto e Liberação
-                  </h3>
-                  <div style={{ display: 'flex', gap: '8px', marginBottom: '12px' }}>
-                    <select
-                      className="d26-select"
-                      value={paymentMethod}
-                      onChange={(e) => setPaymentMethod(e.target.value as PaymentMethod)}
-                    >
-                      <option value="PIX">Método: PIX</option>
-                      <option value="CASH">Método: Dinheiro em Espécie (Calcula Troco)</option>
-                      <option value="DEBIT_CARD">Método: Cartão de Débito</option>
-                      <option value="CREDIT_CARD">Método: Cartão de Crédito</option>
-                      <option value="ROOM_CHARGE">Método: Transferir p/ Quarto Hotel Milla</option>
-                    </select>
-                  </div>
-
-                  {openTabs.length === 0 ? (
-                    <p style={{ fontSize: '0.82rem', color: 'var(--d26-gray-400)' }}>
-                      Nenhuma comanda aberta no momento.
-                    </p>
-                  ) : (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                      {openTabs.map((t) => {
-                        const remaining = Math.max(0, t.totalCents - t.paidCents);
-                        const tabPayments = snapshot.payments.filter(
-                          (p) => p.tabId === t.id && p.status === 'CONFIRMED'
-                        );
-                        return (
-                          <div
-                            key={t.id}
-                            style={{
-                              display: 'flex',
-                              flexDirection: 'column',
-                              gap: '8px',
-                              padding: '12px',
-                              background: 'var(--d26-black-900)',
-                              borderRadius: '10px',
-                              border: '1px solid rgba(114, 9, 183, 0.45)'
-                            }}
-                          >
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '6px' }}>
-                              <div>
-                                <strong>{t.code}</strong>{' '}
-                                <span className="d26-badge d26-badge-outline-purple">{t.status}</span>
-                                {t.joinedTables && t.joinedTables.length > 1 && (
-                                  <span className="d26-badge d26-badge-pink" style={{ marginLeft: '6px' }}>
-                                    Mesas Unidas: {t.joinedTables.join(', ')}
-                                  </span>
-                                )}
-                              </div>
-                              <span style={{ fontSize: '0.8rem', color: '#34D399' }}>
-                                Já Pago: {formatBrlCents(t.paidCents)}
-                              </span>
-                            </div>
-
-                            <div style={{ fontSize: '0.78rem', color: 'var(--d26-gray-300)' }}>
-                              Subtotal: {formatBrlCents(t.subtotalCents)} | Desconto:{' '}
-                              {formatBrlCents(t.discountCents ?? 0)} | Taxa 10%:{' '}
-                              {formatBrlCents(t.serviceFeeCents)} | Total:{' '}
-                              <strong>{formatBrlCents(t.totalCents)}</strong> |{' '}
-                              <strong style={{ color: '#F72585' }}>
-                                Falta Pagar: {formatBrlCents(remaining)}
-                              </strong>
-                            </div>
-
-                            <button className="d26-btn d26-btn-secondary" onClick={()=>setFiscalPreviewTab(t.id)}>Conferência fiscal · todos os itens</button>
-                            {/* AÇÕES OPERACIONAIS DA COMANDA (DIVISÃO, CONTA, TAXA 10%, DESCONTO) */}
-                            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                              <button
-                                className="d26-btn d26-btn-secondary"
-                                style={{ padding: '3px 8px', fontSize: '0.72rem' }}
-                                onClick={() => handleRequestBill(t.id)}
-                              >
-                                Pedir Conta
-                              </button>
-                              <button
-                                className="d26-btn d26-btn-secondary"
-                                style={{ padding: '3px 8px', fontSize: '0.72rem' }}
-                                onClick={() => handleSplitTab(t, 'EQUAL_SHARES', Math.max(2, t.guestsCount || 2))}
-                              >
-                                Dividir Igual ({Math.max(2, t.guestsCount || 2)} pessoas)
-                              </button>
-                              <button
-                                className="d26-btn d26-btn-secondary"
-                                style={{ padding: '3px 8px', fontSize: '0.72rem' }}
-                                onClick={() => handleToggleServiceFee(t)}
-                              >
-                                {(t.serviceFeeEnabled ?? true) ? 'Isentar Taxa 10%' : 'Ativar Taxa 10%'}
-                              </button>
-                              <button
-                                className="d26-btn d26-btn-secondary"
-                                style={{ padding: '3px 8px', fontSize: '0.72rem' }}
-                                onClick={() => handleApplyDiscount(t.id, 'PERCENTAGE', 1000)}
-                              >
-                                Desconto 10%
-                              </button>
-                            </div>
-
-                            {remaining > 0 ? (
-                              <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-                                <input
-                                  type="text"
-                                  className="d26-input"
-                                  style={{ flex: 1, minWidth: '140px' }}
-                                  placeholder={`Valor em R$ (ex: ${(remaining / 100).toFixed(2).replace('.', ',')})`}
-                                  value={partialAmountsInput[t.id] ?? ''}
-                                  onChange={(e) =>
-                                    setPartialAmountsInput((prev) => ({
-                                      ...prev,
-                                      [t.id]: e.target.value
-                                    }))
-                                  }
-                                />
-                                {paymentMethod === 'CASH' && (
-                                  <input
-                                    type="text"
-                                    className="d26-input"
-                                    style={{ width: '145px' }}
-                                    placeholder="Recebido R$ (Troco)"
-                                    value={receivedCashInput[t.id] ?? ''}
-                                    onChange={(e) =>
-                                      setReceivedCashInput((prev) => ({
-                                        ...prev,
-                                        [t.id]: e.target.value
-                                      }))
-                                    }
-                                  />
-                                )}
-                                <button
-                                  className="d26-btn d26-btn-primary"
-                                  style={{ whiteSpace: 'nowrap' }}
-                                  onClick={() => handleSettleTab(t)}
-                                >
-                                  Confirmar Recebimento
-                                </button>
-                              </div>
-                            ) : (
-                              <div style={{ display: 'flex', gap: '8px' }}>
-                                <button
-                                  className="d26-btn d26-btn-primary"
-                                  style={{ flex: 1 }}
-                                  onClick={() => handleCloseTabAndReleaseTable(t.id, false)}
-                                >
-                                  ✓ Encerrar Comanda e Liberar Mesa (LIVRE)
-                                </button>
-                                <button
-                                  className="d26-btn d26-btn-secondary"
-                                  onClick={() => handleCloseTabAndReleaseTable(t.id, true)}
-                                >
-                                  Enviar p/ Limpeza
-                                </button>
-                              </div>
-                            )}
-
-                            {tabPayments.length > 0 && (
-                              <div style={{ fontSize: '0.73rem', color: 'var(--d26-gray-400)', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                                {tabPayments.map((pay) => (
-                                  <div key={pay.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                    <span>
-                                      • {pay.method}: {formatBrlCents(pay.amountCents)}
-                                      {pay.changeCents ? ` (Troco: ${formatBrlCents(pay.changeCents)})` : ''}
-                                    </span>
-                                    <button
-                                      className="d26-btn d26-btn-secondary"
-                                      style={{ padding: '2px 6px', fontSize: '0.68rem' }}
-                                      onClick={() => handleRefundPayment(pay.id)}
-                                    >
-                                      Estornar
-                                    </button>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* =====================================================================
-            MÓDULO: COZINHA E BAR (KDS PROFISSIONAL COM SLA E ESTAÇÃO — SEÇÕES 14, 15, 17)
-           ===================================================================== */}
-        {activeModule === 'cozinha' && (
-          <div className="d26-card">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '10px' }}>
-              <div>
-                <h2 style={{ fontSize: '1.05rem' }}>
-                  Fila de Produção KDS (Cozinha Quente, Cozinha Fria, Chapa de Tapiocas/Cuscuz e Bar)
-                </h2>
-                <p style={{ fontSize: '0.76rem', color: 'var(--d26-gray-400)' }}>
-                  SLA Configurado: Normal até {snapshot.kdsSlaConfig?.warningThresholdMinutes ?? 10} min • Atenção até {snapshot.kdsSlaConfig?.delayedThresholdMinutes ?? 20} min • Acima disso Atrasado
-                </p>
-              </div>
-              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                {(
-                  [
-                    ['ALL', 'Todas as Estações'],
-                    ['KITCHEN_HOT', '🔥 Cozinha Quente'],
-                    ['GRIDDLE_TAPIOCA', '🥞 Chapa (Tapioca/Cuscuz)'],
-                    ['KITCHEN_COLD', '🥗 Cozinha Fria'],
-                    ['BAR_DRINKS', '🍹 Bar & Drinks']
-                  ] as const
-                ).map(([st, label]) => (
-                  <button
-                    key={st}
-                    className={`d26-btn ${kdsStationFilter === st ? 'd26-btn-primary' : 'd26-btn-secondary'}`}
-                    style={{ padding: '5px 10px', fontSize: '0.75rem' }}
-                    onClick={() => setKdsStationFilter(st)}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {snapshot.orders.filter((ord) =>
-              kdsStationFilter === 'ALL'
-                ? true
-                : ord.items.some((it) => it.prepStation === kdsStationFilter)
-            ).length === 0 ? (
-              <p style={{ color: 'var(--d26-gray-400)' }}>
-                Nenhum pedido na fila para a estação selecionada no momento.
-              </p>
-            ) : (
-              <div className="d26-product-grid">
-                {snapshot.orders
-                  .filter((ord) =>
-                    kdsStationFilter === 'ALL'
-                      ? true
-                      : ord.items.some((it) => it.prepStation === kdsStationFilter)
-                  )
-                  .map((ord) => {
-                    const sla = evaluateKdsOrderSla(
-                      ord.createdAt,
-                      Date.now(),
-                      snapshot.kdsSlaConfig ?? {
-                        warningThresholdMinutes: 10,
-                        delayedThresholdMinutes: 20,
-                        updatedAt: new Date().toISOString()
-                      }
-                    );
-                    const slaBadgeClass =
-                      sla.slaStatus === 'DELAYED'
-                        ? 'd26-badge-warning'
-                        : sla.slaStatus === 'WARNING'
-                          ? 'd26-badge-outline-pink'
-                          : 'd26-badge-success';
-
-                    return (
-                      <div key={ord.id} className="d26-product-card">
-                        <div>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', flexWrap: 'wrap', gap: '4px' }}>
-                            <span className="d26-badge d26-badge-pink">
-                              {ord.tableNumber ? `MESA ${ord.tableNumber}` : ord.channel}
-                            </span>
-                            <div style={{ display: 'flex', gap: '4px' }}>
-                              {ord.status !== 'DELIVERED' && ord.status !== 'CANCELLED' && (
-                                <span className={`d26-badge ${slaBadgeClass}`} style={{ fontSize: '0.68rem' }}>
-                                  ⏱ {sla.elapsedMinutes} min ({sla.slaStatus})
-                                </span>
-                              )}
-                              <span className="d26-badge d26-badge-purple">{ord.status}</span>
-                            </div>
-                          </div>
-                          <div style={{ fontSize: '0.75rem', color: 'var(--d26-gray-400)', marginBottom: '8px' }}>
-                            Pedido #{ord.id.slice(0, 8)} • Origem: {ord.originNode}
-                            {ord.waiterName ? ` • ${ord.waiterName}` : ''}
-                          </div>
-                          <ul style={{ paddingLeft: '16px', fontSize: '0.86rem', marginBottom: '10px' }}>
-                            {ord.items.map((it) => (
-                              <li key={it.id}>
-                                <strong>
-                                  {it.quantity}x {it.productName}
-                                </strong>{' '}
-                                <span style={{ color: 'var(--d26-gray-400)', fontSize: '0.73rem' }}>
-                                  [{it.prepStation}]
-                                </span>
-                                {it.modifiers && it.modifiers.length > 0 && (
-                                  <div style={{ fontSize: '0.74rem', color: '#FFAFCC' }}>
-                                    + {it.modifiers.map((m) => m.optionName).join(', ')}
-                                  </div>
-                                )}
-                                {it.notes && (
-                                  <div style={{ fontSize: '0.74rem', color: '#D8B4FE' }}>
-                                    Obs: {it.notes}
-                                  </div>
-                                )}
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
-                        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                          {ord.status === 'PENDING_APPROVAL' && (
-                            <button
-                              className="d26-btn d26-btn-primary"
-                              style={{ flex: 1 }}
-                              onClick={() => handleAdvanceOrder(ord.id, 'RECEIVED')}
-                            >
-                              Aprovar Pedido QR
-                            </button>
-                          )}
-                          {ord.status === 'RECEIVED' && (
-                            <button
-                              className="d26-btn d26-btn-primary"
-                              style={{ flex: 1 }}
-                              onClick={() => handleAdvanceOrder(ord.id, 'IN_PREPARATION')}
-                            >
-                              Iniciar Preparo
-                            </button>
-                          )}
-                          {ord.status === 'IN_PREPARATION' && (
-                            <button
-                              className="d26-btn d26-btn-tertiary"
-                              style={{ flex: 1 }}
-                              onClick={() => handleAdvanceOrder(ord.id, 'READY')}
-                            >
-                              Marcar Pronto (Notificar Garçom)
-                            </button>
-                          )}
-                          {ord.status === 'READY' && (
-                            <button
-                              className="d26-btn d26-btn-secondary"
-                              style={{ flex: 1 }}
-                              onClick={() => handleAdvanceOrder(ord.id, 'DELIVERED')}
-                            >
-                              Entregue na Mesa
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    );
-                  })}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* =====================================================================
-            MÓDULO: GESTÃO VISUAL DE MESAS, COMANDAS, PEDIDOS E QR CODES (ETAPA 4 — SEÇÕES 3 A 10)
-           ===================================================================== */}
-        {activeModule === 'mesas-comandas' && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            )}</>} toolsPanel={<div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             {/* PAINEL OPERACIONAL DE MESAS DO SALÃO (SEÇÕES 3, 4, 8, 9, 21) */}
             <div className="d26-card">
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px', flexWrap: 'wrap', gap: '10px' }}>
@@ -4151,8 +3471,170 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
                 </tbody>
               </table>
             </div>
+          </div>} auditPanel={hasPermission(authSession.role,'staff:manage')?<AuditLogs api={localApiBase} headers={getAuthHeaders}/>:undefined}/>}
+
+        {/* =====================================================================
+            MÓDULO: COZINHA E BAR (KDS PROFISSIONAL COM SLA E ESTAÇÃO — SEÇÕES 14, 15, 17)
+           ===================================================================== */}
+        {activeModule === 'cozinha' && (
+          <div className="d26-card">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '10px' }}>
+              <div>
+                <h2 style={{ fontSize: '1.05rem' }}>
+                  Fila de Produção KDS (Cozinha Quente, Cozinha Fria, Chapa de Tapiocas/Cuscuz e Bar)
+                </h2>
+                <p style={{ fontSize: '0.76rem', color: 'var(--d26-gray-400)' }}>
+                  SLA Configurado: Normal até {snapshot.kdsSlaConfig?.warningThresholdMinutes ?? 10} min • Atenção até {snapshot.kdsSlaConfig?.delayedThresholdMinutes ?? 20} min • Acima disso Atrasado
+                </p>
+              </div>
+              <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                {(
+                  [
+                    ['ALL', 'Todas as Estações'],
+                    ['KITCHEN_HOT', '🔥 Cozinha Quente'],
+                    ['GRIDDLE_TAPIOCA', '🥞 Chapa (Tapioca/Cuscuz)'],
+                    ['KITCHEN_COLD', '🥗 Cozinha Fria'],
+                    ['BAR_DRINKS', '🍹 Bar & Drinks']
+                  ] as const
+                ).map(([st, label]) => (
+                  <button
+                    key={st}
+                    className={`d26-btn ${kdsStationFilter === st ? 'd26-btn-primary' : 'd26-btn-secondary'}`}
+                    style={{ padding: '5px 10px', fontSize: '0.75rem' }}
+                    onClick={() => setKdsStationFilter(st)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {snapshot.orders.filter((ord) =>
+              kdsStationFilter === 'ALL'
+                ? true
+                : ord.items.some((it) => it.prepStation === kdsStationFilter)
+            ).length === 0 ? (
+              <p style={{ color: 'var(--d26-gray-400)' }}>
+                Nenhum pedido na fila para a estação selecionada no momento.
+              </p>
+            ) : (
+              <div className="d26-product-grid">
+                {snapshot.orders
+                  .filter((ord) =>
+                    kdsStationFilter === 'ALL'
+                      ? true
+                      : ord.items.some((it) => it.prepStation === kdsStationFilter)
+                  )
+                  .map((ord) => {
+                    const sla = evaluateKdsOrderSla(
+                      ord.createdAt,
+                      Date.now(),
+                      snapshot.kdsSlaConfig ?? {
+                        warningThresholdMinutes: 10,
+                        delayedThresholdMinutes: 20,
+                        updatedAt: new Date().toISOString()
+                      }
+                    );
+                    const slaBadgeClass =
+                      sla.slaStatus === 'DELAYED'
+                        ? 'd26-badge-warning'
+                        : sla.slaStatus === 'WARNING'
+                          ? 'd26-badge-outline-pink'
+                          : 'd26-badge-success';
+
+                    return (
+                      <div key={ord.id} className="d26-product-card">
+                        <div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', flexWrap: 'wrap', gap: '4px' }}>
+                            <span className="d26-badge d26-badge-pink">
+                              {ord.tableNumber ? `MESA ${ord.tableNumber}` : ord.channel}
+                            </span>
+                            <div style={{ display: 'flex', gap: '4px' }}>
+                              {ord.status !== 'DELIVERED' && ord.status !== 'CANCELLED' && (
+                                <span className={`d26-badge ${slaBadgeClass}`} style={{ fontSize: '0.68rem' }}>
+                                  ⏱ {sla.elapsedMinutes} min ({sla.slaStatus})
+                                </span>
+                              )}
+                              <span className="d26-badge d26-badge-purple">{ord.status}</span>
+                            </div>
+                          </div>
+                          <div style={{ fontSize: '0.75rem', color: 'var(--d26-gray-400)', marginBottom: '8px' }}>
+                            Pedido #{ord.id.slice(0, 8)} • Origem: {ord.originNode}
+                            {ord.waiterName ? ` • ${ord.waiterName}` : ''}
+                          </div>
+                          <ul style={{ paddingLeft: '16px', fontSize: '0.86rem', marginBottom: '10px' }}>
+                            {ord.items.map((it) => (
+                              <li key={it.id}>
+                                <strong>
+                                  {it.quantity}x {it.productName}
+                                </strong>{' '}
+                                <span style={{ color: 'var(--d26-gray-400)', fontSize: '0.73rem' }}>
+                                  [{it.prepStation}]
+                                </span>
+                                {it.modifiers && it.modifiers.length > 0 && (
+                                  <div style={{ fontSize: '0.74rem', color: '#FFAFCC' }}>
+                                    + {it.modifiers.map((m) => m.optionName).join(', ')}
+                                  </div>
+                                )}
+                                {it.notes && (
+                                  <div style={{ fontSize: '0.74rem', color: '#D8B4FE' }}>
+                                    Obs: {it.notes}
+                                  </div>
+                                )}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+                          {ord.status === 'PENDING_APPROVAL' && (
+                            <button
+                              className="d26-btn d26-btn-primary"
+                              style={{ flex: 1 }}
+                              onClick={() => handleAdvanceOrder(ord.id, 'RECEIVED')}
+                            >
+                              Aprovar Pedido QR
+                            </button>
+                          )}
+                          {ord.status === 'RECEIVED' && (
+                            <button
+                              className="d26-btn d26-btn-primary"
+                              style={{ flex: 1 }}
+                              onClick={() => handleAdvanceOrder(ord.id, 'IN_PREPARATION')}
+                            >
+                              Iniciar Preparo
+                            </button>
+                          )}
+                          {ord.status === 'IN_PREPARATION' && (
+                            <button
+                              className="d26-btn d26-btn-tertiary"
+                              style={{ flex: 1 }}
+                              onClick={() => handleAdvanceOrder(ord.id, 'READY')}
+                            >
+                              Marcar Pronto (Notificar Garçom)
+                            </button>
+                          )}
+                          {ord.status === 'READY' && (
+                            <button
+                              className="d26-btn d26-btn-secondary"
+                              style={{ flex: 1 }}
+                              onClick={() => handleAdvanceOrder(ord.id, 'DELIVERED')}
+                            >
+                              Entregue na Mesa
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+              </div>
+            )}
           </div>
         )}
+
+        {/* =====================================================================
+            MÓDULO: GESTÃO VISUAL DE MESAS, COMANDAS, PEDIDOS E QR CODES (ETAPA 4 — SEÇÕES 3 A 10)
+           ===================================================================== */}
+
 
         {/* =====================================================================
             MÓDULO: CENTRAL DE PEDIDOS & DELIVERY PRÓPRIO (ETAPA 6)

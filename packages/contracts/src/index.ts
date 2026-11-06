@@ -185,7 +185,8 @@ export const SystemModuleIdSchema = z.enum([
   'administracao',
   'impressoras',
   'configuracoes-fiscais',
-  'sincronizacao'
+  'sincronizacao',
+  'auditoria'
 ]);
 export type SystemModuleId = z.infer<typeof SystemModuleIdSchema>;
 
@@ -201,6 +202,7 @@ export interface SystemModuleDefinition {
 }
 
 export const SYSTEM_MODULES: SystemModuleDefinition[] = [
+  {id:'auditoria',title:'Logs de Auditoria',shortTitle:'Auditoria',group:'GESTAO_RETAGUARDA',description:'Histórico cronológico de pedidos, cancelamentos, recebimentos e ações operacionais.',requiredPermission:'staff:manage',offlineCapable:true},
   {
     id: 'dashboard',
     title: 'Dashboard Operacional',
@@ -843,7 +845,8 @@ export const OperationalNotificationSchema = z.object({
     'PAYMENT_REFUNDED',
     'TAB_CLOSED',
     'PRINT_FAILED',
-    'CASH_MOVEMENT'
+    'CASH_MOVEMENT',
+    'TABLE_SERVICE_CALL'
   ]),
   targetRole: RoleSchema.nullable().optional(),
   targetUserId: z.string().nullable().optional(),
@@ -2781,3 +2784,6 @@ export const DECK26_INITIAL_FINANCIAL_ACCOUNTS: FinancialAccount[] = [
 export * from './fiscal.js';
 export * from './stage7a_catalog.js';
 
+
+export const TableServiceCallSchema=z.object({id:z.string(),tableNumber:z.number().int().positive(),tabId:z.string(),kind:z.enum(['WAITER','BILL']),paymentPreference:z.enum(['PIX','CARD']).nullable(),requestedAt:IsoDateTimeSchema});
+export type TableServiceCall=z.infer<typeof TableServiceCallSchema>;

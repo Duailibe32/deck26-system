@@ -178,6 +178,7 @@ export class LocalOperationalStore {
       this.runMigrations();
       this.db.exec(fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../../../packages/contracts/migrations/local/0008_local_operation.sql'),'utf8'));
       this.db.exec(fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../../../packages/contracts/migrations/local/0009_fiscal_preparation.sql'),'utf8'));
+      this.db.exec(fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../../../packages/contracts/migrations/local/0010_pos_workspace.sql'),'utf8'));
       this.seedBaseCatalogAndInfrastructure();
     } catch (err) {
       try {
@@ -805,7 +806,7 @@ export class LocalOperationalStore {
   public listAuditLogs(entityId?: string, limit: number = 100): AuditLogEntry[] {
     const rows = entityId
       ? (this.db
-          .prepare('SELECT * FROM audit_logs WHERE entity_id = ? ORDER BY created_at DESC LIMIT ?')
+          .prepare('SELECT * FROM audit_logs WHERE entity_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?')
           .all(entityId, limit) as Array<Record<string, unknown>>)
       : (this.db
           .prepare('SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT ?')
@@ -2473,6 +2474,7 @@ export class LocalOperationalStore {
    *   * Se algum adicional selecionado possuir `stockProductId`, também realiza a baixa proporcional do insumo.
    */
   public createOrder(input: {
+    actorUserId?: string;
     idempotencyKey: string;
     tabId?: string | null;
     tableNumber?: number | null;
@@ -2735,6 +2737,7 @@ export class LocalOperationalStore {
         payload: order
       });
 
+      this.recordAuditLog({actorUserId:input.actorUserId??input.waiterUserId??'PUBLIC_QR',action:'ORDER_CREATED',entityType:'ORDER',entityId:order.id,metadata:{tableNumber:order.tableNumber,tabId:order.tabId,amountCents:order.totalOrderCents,channel:order.channel}});
       this.commitTransaction();
 
       this.createNotification({
@@ -4013,6 +4016,7 @@ export class LocalOperationalStore {
         payload: payment
       });
 
+      this.recordAuditLog({actorUserId:payment.operatorUserId,action:'PAYMENT_CONFIRMED',entityType:'PAYMENT',entityId:payment.id,metadata:{tabId:tab.id,tableNumber:tab.tableNumber,amountCents:payment.amountCents,method:payment.method,changeCents:payment.changeCents}});
       this.commitTransaction();
 
       this.createNotification({
@@ -6431,6 +6435,7 @@ export class LocalOperationalStore {
     });
 
     if (input.entryType === 'PAYMENT') {
+      this.recordAuditLog({actorUserId:input.operatorUserId,action:'HOTEL_PAYMENT_CONFIRMED',entityType:'HOTEL_FOLIO_ENTRY',entityId:id,metadata:{roomNumber:stay.roomNumber,amountCents:-input.amountCents,method:input.paymentMethod??'CASH'}});
       const method = input.paymentMethod ?? 'CASH';
       if (method === 'ROOM_CHARGE') throw new Error('Transferência para quarto não é recebimento do folio.');
       this.recordLedgerMovement({accountId:this.paymentAccount(method),amountCents:-input.amountCents,type:'INCOME',method,referenceType:'MANUAL',referenceId:id,center:'HOTEL',actor:input.operatorUserId,description:input.description,category:'cat-rec-hotel-diarias'});
@@ -6441,8 +6446,51 @@ export class LocalOperationalStore {
   }
 
   // Seção 10: Integração Restaurante -> Folio do Quarto
+  public listTableServiceCalls(){
+    return this.db.prepare('SELECT c.id,c.table_number AS tableNumber,c.tab_id AS tabId,c.kind,c.payment_preference AS paymentPreference,c.requested_at AS requestedAt FROM table_service_calls c JOIN dining_tables_qr t ON t.table_number=c.table_number AND t.active_tab_id=c.tab_id WHERE c.resolved_at IS NULL ORDER BY c.requested_at ASC,c.rowid ASC').all();
+  }
+  public requestTableService(input:{qrToken:string;kind:'WAITER'|'BILL';paymentPreference?:'PIX'|'CARD'}){
+    return this.atomic(()=>{
+      const table=this.getDiningTableByQrToken(input.qrToken);
+      if(!table||!table.activeTabId)throw Error('A mesa precisa estar aberta. Solicite ajuda à equipe.');
+      const tab=this.getTabById(table.activeTabId);
+      if(!tab||['CLOSED','CANCELLED'].includes(tab.status))throw Error('Esta comanda já foi encerrada.');
+      const prior=this.db.prepare('SELECT id FROM table_service_calls WHERE table_number=? AND tab_id=? AND kind=? AND resolved_at IS NULL').get(table.tableNumber,tab.id,input.kind) as {id:string}|undefined;
+      if(prior)return {id:prior.id,alreadyPending:true};
+      const recent=this.db.prepare('SELECT requested_at FROM table_service_calls WHERE table_number=? ORDER BY requested_at DESC LIMIT 1').get(table.tableNumber) as {requested_at:string}|undefined;
+      if(recent&&Date.now()-Date.parse(recent.requested_at)<5000)throw Error('Aguarde alguns segundos antes de uma nova solicitação.');
+      const id=crypto.randomUUID();
+      if(input.kind==='BILL')this.requestTabBill({tabId:tab.id,actorUserId:'PUBLIC_QR'});
+      this.db.prepare('INSERT INTO table_service_calls(id,table_number,tab_id,kind,payment_preference,requested_at) VALUES(?,?,?,?,?,?)').run(id,table.tableNumber,tab.id,input.kind,input.kind==='BILL'?input.paymentPreference??'CARD':null,new Date().toISOString());
+      this.recordAuditLog({actorUserId:'PUBLIC_QR',action:input.kind==='BILL'?'QR_BILL_REQUESTED':'QR_WAITER_CALLED',entityType:'TABLE',entityId:String(table.tableNumber),metadata:{tableNumber:table.tableNumber,kind:input.kind,paymentPreference:input.paymentPreference}});
+      this.createNotification({eventType:'TABLE_SERVICE_CALL',tableNumber:table.tableNumber,tabId:tab.id,title:input.kind==='BILL'?'Cliente pediu a conta':'Cliente chamou o garçom',message:'Mesa '+table.tableNumber,payload:{kind:input.kind}});
+      return {id,alreadyPending:false};
+    });
+  }
+  public resolveTableServiceCall(id:string,actorId:string){
+    return this.atomic(()=>{const row=this.db.prepare('SELECT * FROM table_service_calls WHERE id=?').get(id) as {table_number:number;resolved_at:string|null}|undefined;if(!row)throw Error('Solicitação não encontrada.');if(row.resolved_at)return {resolved:true};this.db.prepare('UPDATE table_service_calls SET resolved_at=?,resolved_by=? WHERE id=?').run(new Date().toISOString(),actorId,id);this.recordAuditLog({actorUserId:actorId,action:'TABLE_SERVICE_ACKNOWLEDGED',entityType:'TABLE',entityId:String(row.table_number),metadata:{tableNumber:row.table_number}});this.createNotification({eventType:'TABLE_SERVICE_CALL',tableNumber:row.table_number,title:'Solicitação assumida',message:'Mesa '+row.table_number});return {resolved:true};});
+  }
+
+  public transferRestaurantTabConfirmed(input:{tabId:string;roomNumber:string;expectedRemainingCents:number;idempotencyKey:string;initiatorId:string;authorizedById:string;authorizedByName:string}){
+    return this.atomic(()=>{
+      const hash=crypto.createHash('sha256').update(JSON.stringify({tabId:input.tabId,roomNumber:input.roomNumber,expectedRemainingCents:input.expectedRemainingCents,initiatorId:input.initiatorId})).digest('hex');
+      const prior=this.db.prepare('SELECT request_hash,result_json FROM pos_command_receipts WHERE idempotency_key=?').get(input.idempotencyKey) as {request_hash:string;result_json:string}|undefined;
+      if(prior){if(prior.request_hash!==hash)throw Error('Identificação reutilizada com uma conta diferente.');return {...JSON.parse(prior.result_json),idempotentReplay:true};}
+      const tab=this.getTabById(input.tabId);
+      if(!tab||tab.type!=='TABLE')throw Error('Selecione uma comanda de mesa válida.');
+      const remaining=Math.max(0,tab.totalCents-tab.paidCents);
+      if(remaining!==input.expectedRemainingCents)throw Error('A conta foi alterada. Atualize e confira o saldo antes de transferir.');
+      const result=this.transferRestaurantTabToFolio({restaurantTabId:tab.id,roomNumber:input.roomNumber,operatorUserId:input.authorizedById,operatorName:input.authorizedByName,releaseStatus:'LIMPEZA'});
+      const receipt={tabId:tab.id,roomNumber:input.roomNumber,amountCents:remaining,transferId:result.folioEntry.id,paymentId:result.payment.id,releaseStatus:'LIMPEZA'};
+      this.db.prepare('INSERT INTO pos_command_receipts VALUES(?,?,?,?,?,?)').run(input.idempotencyKey,hash,input.initiatorId,input.authorizedById,JSON.stringify(receipt),new Date().toISOString());
+      this.recordAuditLog({actorUserId:input.initiatorId,action:'TABLE_TRANSFER_CONFIRMED',entityType:'TAB',entityId:tab.id,metadata:{roomNumber:input.roomNumber,amountCents:remaining,authorizedBy:input.authorizedById}});
+      return {...receipt,idempotentReplay:false};
+    });
+  }
+
   public transferRestaurantTabToFolio(input: {
     restaurantTabId: string;
+    releaseStatus?: 'LIVRE' | 'LIMPEZA';
     roomNumber: string;
     operatorUserId: string;
     operatorName: string;
@@ -6498,14 +6546,10 @@ export class LocalOperationalStore {
       WHERE id = ?
     `).run(now, input.operatorUserId, now, tab.id);
 
-    // 3. Libera mesa física caso estivesse vinculada
-    if (tab.tableNumber) {
-      this.db.prepare(`
-        UPDATE dining_tables_qr
-        SET physical_status = 'LIVRE', active_tab_id = NULL, guests_count = 0, opened_at = NULL, updated_at = ?
-        WHERE table_number = ? AND active_tab_id = ?
-      `).run(now, tab.tableNumber, tab.id);
-    }
+    // Release every physical table of the same bill; preserve the ledger history.
+    const linkedTables=this.db.prepare('SELECT table_number FROM dining_tables_qr WHERE active_tab_id=?').all(tab.id) as {table_number:number}[];
+    const numbers=[...new Set([...linkedTables.map(row=>row.table_number),...(tab.joinedTables??[]),...(tab.tableNumber?[tab.tableNumber]:[])])];
+    for(const number of numbers)this.db.prepare('UPDATE dining_tables_qr SET physical_status=?,active_tab_id=NULL,primary_table_number=NULL,joined_group_id=NULL,assigned_waiter_user_id=NULL,assigned_waiter_name=NULL,guests_count=0,opened_at=NULL,notes=NULL,updated_at=? WHERE table_number=?').run(input.releaseStatus??'LIVRE',now,number);
 
     // 4. Lança o débito correspondente no folio da hospedagem
     const folioEntry = this.addFolioEntry({
