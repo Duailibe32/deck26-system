@@ -1,3 +1,4 @@
+import {parseMoney} from './desktopModels.js';
 import React, { useState } from 'react';
 import {
   DeliveryCourier,
@@ -65,7 +66,7 @@ export const DeliveryModule: React.FC<DeliveryModuleProps> = ({
   const [newZoneName, setNewZoneName] = useState<string>('');
   const [newZoneFeeReais, setNewZoneFeeReais] = useState<string>('7,00');
   const [newZoneMinTime, setNewZoneMinTime] = useState<number>(30);
-  const [newZoneMaxTime, setNewZoneMaxTime] = useState<number>(45);
+  const [newZoneMinimumReais, setNewZoneMinimumReais] = useState<string>('0,00');
 
   const filteredOrders = deliveryOrders.filter((ord) => {
     if (statusFilter !== 'ALL' && ord.status !== statusFilter) return false;
@@ -203,15 +204,16 @@ export const DeliveryModule: React.FC<DeliveryModuleProps> = ({
       notify('Informe o nome do bairro / região.');
       return;
     }
-    const feeCents = Math.round(parseFloat(newZoneFeeReais.replace(',', '.')) * 100);
+    const feeCents=parseMoney(newZoneFeeReais),minimumOrderCents=parseMoney(newZoneMinimumReais);if(feeCents===null||minimumOrderCents===null||newZoneMinTime<1){notify('Confira taxa, pedido mínimo e prazo da região.');return;}
     try {
       const res = await fetch(`${localApiBase}/api/delivery/zones`, {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({
           name: newZoneName.trim(),
-          feeCents: feeCents >= 0 ? feeCents : 500,
+          feeCents,
           estimatedMinutes: newZoneMinTime || 40,
+          minimumOrderCents,
           active: true
         })
       });
@@ -817,7 +819,7 @@ export const DeliveryModule: React.FC<DeliveryModuleProps> = ({
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
                 <div>
-                  <label style={{ fontSize: '0.76rem', color: 'var(--d26-gray-400)' }}>Tempo Mín (min)</label>
+                  <label style={{ fontSize: '0.76rem', color: 'var(--d26-gray-400)' }}>Tempo base da região (min)</label>
                   <input
                     type="number"
                     className="d26-input"
@@ -826,12 +828,12 @@ export const DeliveryModule: React.FC<DeliveryModuleProps> = ({
                   />
                 </div>
                 <div>
-                  <label style={{ fontSize: '0.76rem', color: 'var(--d26-gray-400)' }}>Tempo Máx (min)</label>
+                  <label style={{ fontSize: '0.76rem', color: 'var(--d26-gray-400)' }}>Pedido mínimo (R$)</label>
                   <input
-                    type="number"
+                    type="text"
                     className="d26-input"
-                    value={newZoneMaxTime}
-                    onChange={(e) => setNewZoneMaxTime(Number(e.target.value))}
+                    value={newZoneMinimumReais}
+                    onChange={(e) => setNewZoneMinimumReais(e.target.value)}
                   />
                 </div>
               </div>

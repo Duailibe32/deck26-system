@@ -35,7 +35,7 @@ Para restaurar, encerre o servidor e confirme que a porta 4800 está desligada, 
 
 ## Escopo e limites
 
-Pedidos, comandas, caixa, estoque, PMS, delivery e financeiro fazem lançamentos locais persistentes. Registros de PIX/cartão e conciliação são controles internos: não cobram automaticamente no banco ou na adquirente. Delivery é operação interna, sem integração automática com plataformas externas.
+Pedidos, comandas, caixa, estoque, PMS, delivery e financeiro fazem lançamentos locais persistentes. Registros de PIX/cartão e conciliação são controles internos: não cobram automaticamente no banco ou na adquirente. O cliente faz pedidos pelo link local /?delivery=1. A equipe confere e aceita antes da produção. Não há integração automática com plataformas externas.
 
 **Emissão fiscal SEFAZ/prefeitura não está habilitada**, e a simulação fiscal está bloqueada na instalação operacional. Comprovantes internos não substituem documentos fiscais exigíveis. Nuvem e sincronização completa não estão configuradas. Não há certificação de uso operacional ou homologação fiscal/hardware implícita nos testes automatizados.
 
@@ -56,3 +56,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-local-operat
 ```
 
 O instalador copia o executável e a interface para `%USERPROFILE%\Deck26\Aplicativo`, cria o atalho e copia o checklist. O servidor utiliza o código e as dependências do repositório; mantenha a pasta no mesmo local. Ainda não é um instalador autossuficiente para outros computadores. Nenhum dado operacional é sobrescrito na atualização do aplicativo.
+
+## Rotinas integradas e checklist completo
+
+Consulte [CHECKLIST_COMPLETO.md](CHECKLIST_COMPLETO.md) e [CHECKLIST_COMPLETO.html](CHECKLIST_COMPLETO.html) para as novas subabas de recepção, restaurante, estoque e delivery, os cadastros necessários e o roteiro de vídeo. No celular, use o link atual do cliente em Administração; o servidor precisa permanecer ligado.

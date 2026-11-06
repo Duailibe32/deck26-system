@@ -48,4 +48,5 @@ const stop=async()=>{await app.close();process.exit(0);};process.on('SIGINT',()=
 await app.listen({port:4800,host:'0.0.0.0'});
 console.log('DECK 26 · OPERAÇÃO LOCAL · http://127.0.0.1:4800');
 for(const item of networks)console.log('Garçom: http://'+item.address+':4800/?terminal=garcom');
+for(const item of networks)console.log('Delivery cliente: http://'+item.address+':4800/?delivery=1');
 console.log('Dados operacionais: '+directory);

@@ -1,3 +1,6 @@
+import {OperationsHub} from './OperationsHub.js';
+import {StayOptionsFields,defaultStayOptions,RoomExtras} from './HotelExtras.js';
+import {CustomerMenu} from './CustomerMenu.js';
 import {PosWorkspace} from './PosWorkspace.js';
 import {AuditLogs} from './AuditLogs.js';
 import {visibleModules,roleHome,canChooseView,type InterfaceMode} from './desktopModels.js';
@@ -188,7 +191,8 @@ const GROUP_LABELS: Record<string, string> = {
 export const DesktopApp: React.FC = () => {
   const [sessionKey,setSessionKey]=useState(0);
   const params=new URLSearchParams(window.location.search);
-  if(params.get('terminal')==='garcom'||params.has('qr'))return <MobileWaiter qrToken={params.get('qr')??undefined}/>;
+  if(params.has('delivery')||params.has('qr'))return <CustomerMenu qrToken={params.get('qr')??undefined}/>;
+  if(params.get('terminal')==='garcom')return <MobileWaiter/>;
   const api=import.meta.env.VITE_LOCAL_API_URL||(import.meta.env.VITE_DECK26_OPERATIONAL==='true'?(window.location.hostname==='tauri.localhost'?'http://127.0.0.1:4800':window.location.origin):'http://'+(window.location.hostname||'127.0.0.1')+':4000');
   return <FirstRunGate api={api}><DesktopSession key={sessionKey} onSignOut={()=>setSessionKey(value=>value+1)}/></FirstRunGate>;
 };
@@ -340,7 +344,7 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
   const [cashShiftCountedReais, setCashShiftCountedReais] = useState<string>('');
 
   // Estados da Etapa 5 e 7A: PMS Hotel Auto Posto Milla (24 Apartamentos)
-  const [hotelSubTab, setHotelSubTab] = useState<'MAPA' | 'RESERVAS' | 'HOSPEDES' | 'CHECKIN_CHECKOUT' | 'FOLIO' | 'RESTAURANTE' | 'FRIGOBAR_SERVICOS' | 'GOVERNANCA'>('MAPA');
+  const [hotelSubTab, setHotelSubTab] = useState<'MAPA' | 'RESERVAS' | 'HOSPEDES' | 'CHECKIN_CHECKOUT' | 'FOLIO' | 'RESTAURANTE' | 'FRIGOBAR_SERVICOS' | 'GOVERNANCA' | 'CALENDARIO' | 'CAFE_PATIO' | 'MANUTENCAO' | 'CONVENIOS'>('MAPA');
   const [hotelRoomFilter, setHotelRoomFilter] = useState<'ALL' | 'OPERACIONAL' | 'EM_CONSTRUCAO' | 'LIVRE' | 'OCUPADO' | 'RESERVADO' | 'BLOQUEADO' | 'SUJO'>('ALL');
   const [editingRoom, setEditingRoom] = useState<HotelRoom | null>(null);
   const [editRoomName, setEditRoomName] = useState<string>('');
@@ -395,6 +399,7 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
   const [checkInScheduledOut, setCheckInScheduledOut] = useState<string>(() => new Date(Date.now() + 86400000).toISOString().slice(0, 16));
   const [checkInEarlyReais, setCheckInEarlyReais] = useState<string>('0,00');
   const [checkInNotes, setCheckInNotes] = useState<string>('');
+  const [stayOptions,setStayOptions]=useState(defaultStayOptions),[stayRate,setStayRate]=useState('');
 
   // Transferência Restaurante -> Folio
   const [transferTabId, setTransferTabId] = useState<string>('');
@@ -1417,6 +1422,10 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
     }
   }
 
+  useEffect(()=>{const select=(event:Event)=>{if(!authSession||!hasPermission(authSession.role,'hotel:manage_reservations'))return;const detail=(event as CustomEvent).detail;setResRoomNumber(detail.roomNumber);const room=snapshot.hotelRooms.find(r=>r.number===detail.roomNumber);if(room)setResDailyReais((room.dailyRateCents/100).toFixed(2).replace('.',','));setResCheckInDate(detail.day);setResCheckOutDate(new Date(Date.parse(detail.day+'T12:00:00Z')+86400000).toISOString().slice(0,10));setShowNewResModal(true);};window.addEventListener('deck26:reserve-slot',select);return()=>window.removeEventListener('deck26:reserve-slot',select);},[authSession?.userId,snapshot.hotelRooms]);
+
+  useEffect(()=>{if(!showCheckInModal)return;const eligible=snapshot.hotelRooms.filter(r=>r.active&&r.commercialStatus==='OPERACIONAL'&&r.occupancyStatus!=='OCUPADO'&&r.maintenanceStatus!=='INTERDITADO'&&r.housekeepingStatus==='LIMPO');if(!eligible.some(r=>r.number===checkInRoomNumber))setCheckInRoomNumber(eligible[0]?.number??'');},[showCheckInModal,snapshot.hotelRooms]);
+
   async function handleCheckInStay() {
     if (!checkInGuestId) {
       notify('Selecione o hóspede para realizar o check-in.');
@@ -1428,6 +1437,8 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({
+          options:stayOptions,
+          dailyRateCents:stayRate?parseReaisToCents(stayRate,0):undefined,
           roomNumber: checkInRoomNumber,
           guestId: checkInGuestId,
           checkOutScheduledAt: checkInScheduledOut ? new Date(checkInScheduledOut).toISOString() : new Date(Date.now() + 86400000).toISOString(),
@@ -1438,7 +1449,7 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? 'Erro ao realizar check-in');
       setShowCheckInModal(false);
-      setCheckInNotes('');
+      setCheckInNotes('');setStayOptions(defaultStayOptions);setStayRate('');
       await refreshState();
       notify(`Check-in realizado com sucesso no Apto ${checkInRoomNumber}. Folio aberto.`);
     } catch (err) {
@@ -3639,6 +3650,7 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
         {/* =====================================================================
             MÓDULO: CENTRAL DE PEDIDOS & DELIVERY PRÓPRIO (ETAPA 6)
            ===================================================================== */}
+        {activeModule==='pedidos'&&hasPermission(authSession.role,'delivery:manage_orders')&&<details className="d26-ops-module-details"><summary>Rotinas de delivery pelo cliente</summary><OperationsHub api={localApiBase} headers={getAuthHeaders} role={authSession.role} userId={authSession.userId} products={snapshot.catalog.products} scope="delivery" onRefresh={refreshState}/></details>}
         {activeModule === 'pedidos' && (
           <DeliveryModule
             localApiBase={localApiBase}
@@ -3655,6 +3667,7 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
         {/* =====================================================================
             MÓDULO: ESTOQUE COMPLETO, ALERTAS E KARDEX AUDITÁVEL (SEÇÕES 8 E 9)
            ===================================================================== */}
+        {activeModule==='estoque'&&hasPermission(authSession.role,'stock:adjust')&&<details className="d26-ops-module-details"><summary>Rotinas de compras, margens e produção</summary><OperationsHub api={localApiBase} headers={getAuthHeaders} role={authSession.role} userId={authSession.userId} products={snapshot.catalog.products} scope="stock" onRefresh={refreshState}/></details>}
         {activeModule === 'estoque' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             {/* FORMULÁRIO DE ENTRADA DE COMPRA, PERDA, DEVOLUÇÃO OU AJUSTE */}
@@ -3966,9 +3979,13 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
                 >
                   🧹 Governança & Manutenção
                 </button>
+                {([['CALENDARIO','Calendário'],['CAFE_PATIO','Café & pátio'],['MANUTENCAO','Manutenção programada'],['CONVENIOS','Convênios']] as const).map(([id,label])=><button key={id} className={'d26-btn '+(hotelSubTab===id?'d26-btn-primary':'d26-btn-secondary')} onClick={()=>setHotelSubTab(id)}>{label}</button>)}
+
               </div>
             </div>
 
+            <RoomExtras api={localApiBase} headers={getAuthHeaders}/>
+            {['CALENDARIO','CAFE_PATIO','MANUTENCAO','CONVENIOS'].includes(hotelSubTab)&&<OperationsHub api={localApiBase} headers={getAuthHeaders} role={authSession.role} userId={authSession.userId} products={snapshot.catalog.products} scope="hotel" mode={({CALENDARIO:'calendar',CAFE_PATIO:'breakfast',MANUTENCAO:'maintenance',CONVENIOS:'corporate'} as Record<string,string>)[hotelSubTab]} onRefresh={refreshState}/>}
             {/* ================= SUBTAB 1: MAPA DE QUARTOS ================= */}
             {hotelSubTab === 'MAPA' && (
               <div className="d26-card">
@@ -4089,6 +4106,7 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
                               </div>
                             )}
 
+                            <RoomExtras api={localApiBase} headers={getAuthHeaders} roomNumber={room.number}/>
                             {room.currentGuestName && (
                               <div style={{ marginTop: '8px', padding: '6px 8px', background: 'rgba(247, 37, 133, 0.12)', borderRadius: '6px', fontSize: '0.82rem' }}>
                                 <div style={{ fontSize: '0.7rem', color: '#FFAFCC', textTransform: 'uppercase' }}>Hóspede Atual</div>
@@ -5178,9 +5196,9 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
                       <select
                         className="d26-select"
                         value={resRoomNumber}
-                        onChange={(e) => setResRoomNumber(e.target.value)}
+                        onChange={(e) => {setResRoomNumber(e.target.value);const room=snapshot.hotelRooms.find(r=>r.number===e.target.value);if(room)setResDailyReais((room.dailyRateCents/100).toFixed(2).replace('.',','));}}
                       >
-                        {snapshot.hotelRooms.map((r) => (
+                        {snapshot.hotelRooms.filter(r=>r.active&&r.commercialStatus==='OPERACIONAL').map((r) => (
                           <option key={r.id} value={r.number}>
                             Apto {r.number} ({r.category} • {formatBrlCents(r.dailyRateCents)})
                           </option>
@@ -5283,7 +5301,7 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
                         value={checkInRoomNumber}
                         onChange={(e) => setCheckInRoomNumber(e.target.value)}
                       >
-                        {snapshot.hotelRooms.map((r) => (
+                        {snapshot.hotelRooms.filter(r=>r.active&&r.commercialStatus==='OPERACIONAL'&&r.occupancyStatus!=='OCUPADO'&&r.maintenanceStatus!=='INTERDITADO'&&r.housekeepingStatus==='LIMPO').map((r) => (
                           <option key={r.id} value={r.number}>
                             Apto {r.number} ({r.category} • {r.occupancyStatus})
                           </option>
@@ -5333,10 +5351,12 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
                       />
                     </div>
 
+                    <StayOptionsFields value={stayOptions} onChange={setStayOptions} rate={stayRate} onRate={setStayRate}/>
                     <div style={{ display: 'flex', gap: '8px', marginTop: '12px', justifyContent: 'flex-end' }}>
                       <button className="d26-btn d26-btn-secondary" onClick={() => setShowCheckInModal(false)}>
                         Cancelar
                       </button>
+
                       <button className="d26-btn d26-btn-primary" onClick={handleCheckInStay}>
                         Concluir Check-In & Abrir Folio
                       </button>
@@ -5651,6 +5671,7 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
         {/* =====================================================================
             MÓDULO: GESTÃO FINANCEIRA INTEGRADA & TESOURARIA (ETAPA 6)
            ===================================================================== */}
+        {activeModule==='financeiro'&&hasPermission(authSession.role,'finance:manage_receivables')&&<details className="d26-ops-module-details"><summary>Rotinas de convênios e faturamento</summary><OperationsHub api={localApiBase} headers={getAuthHeaders} role={authSession.role} userId={authSession.userId} products={snapshot.catalog.products} scope="finance" onRefresh={refreshState}/></details>}
         {activeModule === 'financeiro' && (
           <FinanceModule
             localApiBase={localApiBase}

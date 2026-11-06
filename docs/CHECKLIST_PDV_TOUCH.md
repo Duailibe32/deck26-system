@@ -38,6 +38,8 @@ Abra o atalho **DECK 26 - Operacao Local** e entre com seu PIN pessoal. No celul
 - Terminal móvel conferido em largura de 390 px: selo de categoria, observação livre e cupom com controles de quantidade.
 - Testes de API: chamado QR repetido sem duplicação/pagamento; auditoria protegida; transferência repetida produz um único lançamento, sem entrada de dinheiro fictícia.
 
-## Limites desta entrega
+## Funcionalidades adicionais
 
-Esta entrega conclui o PDV touch, as visões por função, o componente de auditoria, os chamados QR e a transferência visual confirmada. Não representa a conclusão dos pedidos adicionais de calendário de reservas, vouchers de café, convênios, promoções, produção interna, manutenção e delivery público pelo cliente. Esses recursos ainda precisam de implementação e validação próprias. A impressão física e o motor fiscal direto SEFAZ também permanecem pendentes.
+As rotinas de calendário, pacotes de hospedagem, café/vouchers, estacionamento, convênios, promoções, couvert, refeições da equipe, manutenção, compras, margem, produção e delivery pelo cliente estão descritas no [checklist completo](CHECKLIST_COMPLETO.md). Use a [versão interativa](CHECKLIST_COMPLETO.html) para registrar a conferência e preparar o vídeo.
+
+Impressão física e emissão fiscal direta continuam dependentes do equipamento, dos dados e da etapa fiscal adiada. A validação do PDV acima corresponde à entrega inicial de 182 testes; a entrega integrada possui 212 testes.

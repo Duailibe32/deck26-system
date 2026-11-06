@@ -1,0 +1,21 @@
+ALTER TABLE tabs ADD COLUMN cover_charge_cents INTEGER NOT NULL DEFAULT 0;
+CREATE TABLE IF NOT EXISTS extension_settings(id INTEGER PRIMARY KEY CHECK(id=1),json TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS hotel_stay_options(stay_id TEXT PRIMARY KEY REFERENCES hotel_stays(id),json TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS breakfast_vouchers(id TEXT PRIMARY KEY,stay_id TEXT NOT NULL REFERENCES hotel_stays(id),service_date TEXT NOT NULL,guest_index INTEGER NOT NULL,allowance_cents INTEGER NOT NULL,redeemed_at TEXT,redemption_id TEXT,UNIQUE(stay_id,service_date,guest_index));
+CREATE TABLE IF NOT EXISTS breakfast_redemptions(id TEXT PRIMARY KEY,idempotency_key TEXT NOT NULL UNIQUE,request_hash TEXT NOT NULL,stay_id TEXT NOT NULL,voucher_id TEXT NOT NULL UNIQUE,credited_cents INTEGER NOT NULL,excess_cents INTEGER NOT NULL,ingredient_cost_cents INTEGER NOT NULL,order_id TEXT NOT NULL,actor_id TEXT NOT NULL,created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS morning_prints(service_date TEXT PRIMARY KEY,job_id TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS company_accounts(id TEXT PRIMARY KEY,json TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS company_charges(id TEXT PRIMARY KEY,company_id TEXT NOT NULL REFERENCES company_accounts(id),stay_id TEXT NOT NULL UNIQUE REFERENCES hotel_stays(id),amount_cents INTEGER NOT NULL,signed_by TEXT NOT NULL,invoice_id TEXT,created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS company_invoices(id TEXT PRIMARY KEY,company_id TEXT NOT NULL REFERENCES company_accounts(id),period_start TEXT NOT NULL,period_end TEXT NOT NULL,receivable_id TEXT NOT NULL UNIQUE REFERENCES accounts_receivable(id),created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS product_suppliers(product_id TEXT PRIMARY KEY REFERENCES catalog_products(id),supplier_id TEXT NOT NULL REFERENCES suppliers(id));
+CREATE TABLE IF NOT EXISTS margin_watch(product_id TEXT PRIMARY KEY REFERENCES catalog_products(id),target_bps INTEGER NOT NULL,baseline_cost_cents INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS production_batches(id TEXT PRIMARY KEY,idempotency_key TEXT NOT NULL UNIQUE,request_hash TEXT NOT NULL,inputs_json TEXT NOT NULL,outputs_json TEXT NOT NULL,waste_grams REAL NOT NULL,actor_id TEXT NOT NULL,created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS internal_meals(id TEXT PRIMARY KEY,idempotency_key TEXT NOT NULL UNIQUE,request_hash TEXT NOT NULL,staff_name TEXT NOT NULL,center TEXT NOT NULL,items_json TEXT NOT NULL,cost_cents INTEGER NOT NULL,actor_id TEXT NOT NULL,created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS maintenance_plans(id TEXT PRIMARY KEY,room_number TEXT NOT NULL,json TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS promotion_rules(id TEXT PRIMARY KEY,json TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS cover_charges(tab_id TEXT PRIMARY KEY REFERENCES tabs(id),settlement_tab_id TEXT NOT NULL REFERENCES tabs(id),table_number INTEGER NOT NULL REFERENCES dining_tables_qr(table_number),guests INTEGER NOT NULL,unit_cents INTEGER NOT NULL,total_cents INTEGER NOT NULL,created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS public_delivery_requests(id TEXT PRIMARY KEY,idempotency_key TEXT NOT NULL UNIQUE,request_hash TEXT NOT NULL,payload_json TEXT NOT NULL,quoted_total_cents INTEGER NOT NULL,status TEXT NOT NULL DEFAULT 'PENDING',delivery_order_id TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
+INSERT OR IGNORE INTO cost_centers(id,code,name,description,active) VALUES('MUSIC','MUSIC','Couvert artístico','Receita de couvert separada das vendas de alimentos',1);
+INSERT OR IGNORE INTO schema_migrations(version,applied_at) VALUES('0011_operation_extensions',strftime('%Y-%m-%dT%H:%M:%fZ','now'));
+
+CREATE INDEX IF NOT EXISTS cover_settlement_idx ON cover_charges(settlement_tab_id,table_number);

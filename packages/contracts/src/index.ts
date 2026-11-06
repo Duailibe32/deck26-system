@@ -425,6 +425,7 @@ export const DataSourceTypeSchema = z.enum(['OFFICIAL_MENU', 'TEST_ONLY', 'STAGE
 export type DataSourceType = z.infer<typeof DataSourceTypeSchema>;
 
 export const CatalogProductSchema = z.object({
+  availableForSale:z.boolean().optional(),
   id: z.string().min(1),
   sku: z.string().min(1),
   barcode: z.string().nullable().optional(),
@@ -577,6 +578,7 @@ export const BillSplitPlanSchema = z.object({
 export type BillSplitPlan = z.infer<typeof BillSplitPlanSchema>;
 
 export const TabSchema = z.object({
+  coverChargeCents:z.number().int().nonnegative().optional(),
   id: UuidSchema,
   code: z.string().min(1), // Ex: "MESA-04", "CMD-102", "APTO-201"
   type: TabTypeSchema,
@@ -846,7 +848,7 @@ export const OperationalNotificationSchema = z.object({
     'TAB_CLOSED',
     'PRINT_FAILED',
     'CASH_MOVEMENT',
-    'TABLE_SERVICE_CALL'
+    'TABLE_SERVICE_CALL', 'PUBLIC_DELIVERY_REQUEST'
   ]),
   targetRole: RoleSchema.nullable().optional(),
   targetUserId: z.string().nullable().optional(),
@@ -2097,6 +2099,7 @@ export function evaluateKdsOrderSla(
 }
 
 export function calculateTabTotals(params: {
+  coverChargeCents?:number;
   orders: Order[];
   serviceFeeEnabled: boolean;
   serviceFeeBasisPoints?: number;
@@ -2116,7 +2119,7 @@ export function calculateTabTotals(params: {
     ? Math.round((subtotalCents * bps) / 10000)
     : 0;
   const discountCents = Math.min(params.discountCents ?? 0, subtotalCents + serviceFeeCents);
-  const totalCents = Math.max(0, subtotalCents + serviceFeeCents - discountCents);
+  const totalCents = Math.max(0, subtotalCents + serviceFeeCents - discountCents)+(params.coverChargeCents??0);
   const remainingCents = Math.max(0, totalCents - (params.paidCents ?? 0));
 
   return {

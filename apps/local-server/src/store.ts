@@ -1,3 +1,4 @@
+import {localDate,promotionalPrice,activeCover,saveStayOptions,stayOptionsSchema,plannedCheckout,type StayOptions} from './extension-models.js';
 /**
  * DECK 26 — Repositório Transacional SQLite (node:sqlite nativo — Etapa 3 Completa)
  *
@@ -179,6 +180,7 @@ export class LocalOperationalStore {
       this.db.exec(fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../../../packages/contracts/migrations/local/0008_local_operation.sql'),'utf8'));
       this.db.exec(fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../../../packages/contracts/migrations/local/0009_fiscal_preparation.sql'),'utf8'));
       this.db.exec(fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../../../packages/contracts/migrations/local/0010_pos_workspace.sql'),'utf8'));
+      if(!this.db.prepare("SELECT version FROM schema_migrations WHERE version='0011_operation_extensions'").get())this.atomic(()=>this.db.exec(fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../../../packages/contracts/migrations/local/0011_operation_extensions.sql'),'utf8')));
       this.seedBaseCatalogAndInfrastructure();
     } catch (err) {
       try {
@@ -205,6 +207,8 @@ export class LocalOperationalStore {
     else this.db.exec(`ROLLBACK TO SAVEPOINT deck26_${this.transactionDepth - 1}; RELEASE SAVEPOINT deck26_${this.transactionDepth - 1}`);
     this.transactionDepth--;
   }
+  public runOperationalTransaction<T>(operation:()=>T):T{return this.atomic(operation);}
+
   private atomic<T>(operation: () => T): T {
     this.beginTransaction();
     try { const result = operation(); this.commitTransaction(); return result; }
@@ -217,7 +221,7 @@ export class LocalOperationalStore {
     if (!account || !account.active) throw new Error('Conta financeira inválida ou inativa.');
     const now = new Date().toISOString();
     this.db.prepare(`INSERT INTO financial_transactions (id, financial_account_id, type, category_id, cost_center_id, amount_cents, payment_method, reference_type, reference_id, description, accrual_date, settlement_date, registered_by_staff_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(crypto.randomUUID(), input.accountId, input.type, input.category ?? 'cat-rec-rest', input.center, input.amountCents, input.method, input.referenceType, input.referenceId, input.description, now.slice(0,10), now.slice(0,10), input.actor, now);
+      .run(crypto.randomUUID(), input.accountId, input.type, input.category ?? 'cat-rec-rest', input.center, input.amountCents, input.method, input.referenceType, input.referenceId, input.description, localDate(), localDate(), input.actor, now);
     const sign = input.type === 'INCOME' || input.type === 'INTERNAL_TRANSFER_IN' ? 1 : -1;
     this.db.prepare('UPDATE financial_accounts SET current_balance_cents = current_balance_cents + ?, updated_at = ? WHERE id = ?').run(sign * input.amountCents, now, input.accountId);
   }
@@ -1449,6 +1453,7 @@ export class LocalOperationalStore {
       products = products.filter((p) => p.availableChannels.includes(ch));
     }
 
+    products=products.map(product=>{const recipe=this.getActiveRecipeForProduct(product.id);const availableForSale=recipe?recipe.items.every(item=>{const ingredient=this.getProductById(item.ingredientProductId);return ingredient?.outOfStockPolicy==='ALLOW_BACKORDER'||this.getProductStockQuantity(item.ingredientProductId)+1e-8>=item.quantityUsed/recipe.yieldQuantity;}):!product.trackStock||product.outOfStockPolicy==='ALLOW_BACKORDER'||this.getProductStockQuantity(product.id)>=1;return {...product,availableForSale,channelPricesCents:Object.fromEntries(product.availableChannels.map(channel=>[channel,promotionalPrice(this.db,product,channel).priceCents]))};});
     return { categories, products };
   }
 
@@ -1719,6 +1724,8 @@ export class LocalOperationalStore {
           input.tableNumber
         );
 
+      const cover=activeCover(this.db,guestsCount);
+      if(cover){this.db.prepare('UPDATE tabs SET cover_charge_cents=?,total_cents=? WHERE id=?').run(cover.totalCents,cover.totalCents,tabId);this.db.prepare('INSERT INTO cover_charges VALUES(?,?,?,?,?,?,?)').run(tabId,tabId,input.tableNumber,guestsCount,cover.unitCents,cover.totalCents,now);}
       const tab = this.getTabById(tabId)!;
       const table = this.getDiningTableByNumber(input.tableNumber)!;
 
@@ -1899,6 +1906,7 @@ export class LocalOperationalStore {
       this.db
         .prepare('UPDATE orders SET table_number = ? WHERE tab_id = ? AND table_number = ?')
         .run(input.toTableNumber, tab.id, input.fromTableNumber);
+      this.db.prepare('UPDATE cover_charges SET table_number=? WHERE settlement_tab_id=? AND table_number=?').run(input.toTableNumber,tab.id,input.fromTableNumber);
 
       this.db
         .prepare(`
@@ -2023,6 +2031,7 @@ export class LocalOperationalStore {
         ? this.getTabById(primaryTable.activeTabId)
         : null;
 
+      if (!primaryTab && activeCover(this.db,1))throw Error('Abra a mesa principal com a quantidade real de pessoas antes de unir no horário do couvert.');
       if (!primaryTab) {
         const existingTabRow = this.db
           .prepare(
@@ -2059,6 +2068,7 @@ export class LocalOperationalStore {
           throw new Error(`Mesa secundária ${secNum} não encontrada.`);
         }
 
+        if(secTable.activeTabId===primaryTab.id)continue;
         // Verifica se a mesa secundária possuía comanda própria para consolidar pedidos/pagamentos sem duplicar
         const secTabRow = secTable.activeTabId
           ? (this.db.prepare('SELECT * FROM tabs WHERE id = ?').get(secTable.activeTabId) as
@@ -2072,6 +2082,9 @@ export class LocalOperationalStore {
 
         if (secTabRow && String(secTabRow.id) !== primaryTab.id) {
           const secTabId = String(secTabRow.id);
+          if((JSON.parse(String(secTabRow.joined_tables_json??'[]')) as number[]).length>1)throw Error('Separe as mesas do grupo de origem antes de consolidar outro grupo.');
+          this.db.prepare('UPDATE cover_charges SET settlement_tab_id=? WHERE settlement_tab_id=?').run(primaryTab.id,secTabId);
+          this.db.prepare('UPDATE tabs SET cover_charge_cents=0 WHERE id=?').run(secTabId);
           extraGuests += Number(secTabRow.guests_count ?? 0);
 
           // Move os pedidos mantendo `table_number = secNum` para rastreabilidade de origem
@@ -2101,6 +2114,7 @@ export class LocalOperationalStore {
               secTabId
             );
         } else {
+          if(activeCover(this.db,1))throw Error('Abra a mesa secundária com a quantidade real de pessoas antes de unir no horário do couvert.');
           extraGuests += Math.max(1, secTable.guestsCount || 2);
         }
 
@@ -2148,6 +2162,7 @@ export class LocalOperationalStore {
         `)
         .run(JSON.stringify(allJoinedNumbers), extraGuests, primaryTab.id);
 
+      this.db.prepare('UPDATE tabs SET cover_charge_cents=(SELECT COALESCE(SUM(total_cents),0) FROM cover_charges WHERE settlement_tab_id=?) WHERE id=?').run(primaryTab.id,primaryTab.id);
       const recalculatedTab = this.recalculateTabInTx(primaryTab.id, input.originNode ?? 'WINDOWS_PDV');
 
       this.recordAuditLog({
@@ -2224,9 +2239,11 @@ export class LocalOperationalStore {
         (o) => o.tableNumber === input.tableNumberToSeparate && o.status !== 'CANCELLED'
       );
 
+      const separatedCoverCents=Number((this.db.prepare('SELECT COALESCE(SUM(total_cents),0) AS amount FROM cover_charges WHERE settlement_tab_id=? AND table_number=?').get(primaryTab.id,input.tableNumberToSeparate) as {amount:number}).amount);
+      if(separatedCoverCents>0&&primaryTab.paidCents>0)throw Error('A conta com couvert já recebeu pagamento. Confira a divisão da conta antes de separar as mesas.');
       let separatedTab: Tab | null = null;
 
-      if (tableOrders.length > 0 && primaryTab.paidCents === 0) {
+      if ((tableOrders.length > 0 || separatedCoverCents>0) && primaryTab.paidCents === 0) {
         // Abre uma nova comanda dedicada para a mesa separada e move os pedidos originados nela
         const now = new Date().toISOString();
         const newTabId = crypto.randomUUID();
@@ -2268,6 +2285,8 @@ export class LocalOperationalStore {
           `)
           .run(newTabId, input.tableNumberToSeparate);
 
+        this.db.prepare('UPDATE cover_charges SET settlement_tab_id=? WHERE settlement_tab_id=? AND table_number=?').run(newTabId,primaryTab.id,input.tableNumberToSeparate);
+        this.db.prepare('UPDATE tabs SET cover_charge_cents=? WHERE id=?').run(separatedCoverCents,newTabId);
         separatedTab = this.recalculateTabInTx(newTabId, input.originNode ?? 'WINDOWS_PDV');
       } else {
         // Libera a mesa secundária de volta para LIVRE
@@ -2288,6 +2307,7 @@ export class LocalOperationalStore {
           .run(input.tableNumberToSeparate);
       }
 
+      this.db.prepare('UPDATE tabs SET cover_charge_cents=(SELECT COALESCE(SUM(total_cents),0) FROM cover_charges WHERE settlement_tab_id=?) WHERE id=?').run(primaryTab.id,primaryTab.id);
       const updatedPrimaryTab = this.recalculateTabInTx(primaryTab.id, input.originNode ?? 'WINDOWS_PDV');
 
       this.recordAuditLog({
@@ -2475,6 +2495,7 @@ export class LocalOperationalStore {
    */
   public createOrder(input: {
     actorUserId?: string;
+    skipCounterTab?:boolean;
     idempotencyKey: string;
     tabId?: string | null;
     tableNumber?: number | null;
@@ -2561,7 +2582,7 @@ export class LocalOperationalStore {
       }
 
       // Congela o preço do canal no momento exato da venda (ignora qualquer preço manipulado pelo cliente)
-      const unitPriceCents = resolveChannelPriceCents(product, input.channel);
+      const unitPriceCents = promotionalPrice(this.db,product,input.channel).priceCents;
 
       // Valida adicionais contra o cadastro oficial do produto quando os grupos existem no produto
       const modifiers = (rawItem.modifiers ?? []).map((m) => {
@@ -2613,7 +2634,7 @@ export class LocalOperationalStore {
         openedByUserId: input.waiterUserId ?? 'usr-waiter',
         originNode: input.originNode
       });
-    } else if (input.channel === 'COUNTER_PDV' || input.channel === 'PICKUP') {
+    } else if (!input.skipCounterTab && (input.channel === 'COUNTER_PDV' || input.channel === 'PICKUP')) {
       resolvedTab = this.openOrGetTab({
         code: `BALCAO-${orderId.slice(0, 6).toUpperCase()}`,
         type: 'COUNTER',
@@ -3642,7 +3663,8 @@ export class LocalOperationalStore {
         serviceFeeEnabled: input.serviceFeeEnabled,
         serviceFeeBasisPoints: nextBps,
         discountCents: tab.discountCents,
-        paidCents: tab.paidCents
+        paidCents: tab.paidCents,
+        coverChargeCents:tab.coverChargeCents
       });
 
       if (tab.paidCents > 0 && previewTotals.totalCents < tab.paidCents) {
@@ -4304,6 +4326,7 @@ export class LocalOperationalStore {
       orders: tabOrders,
       serviceFeeEnabled: currentTab.serviceFeeEnabled,
       serviceFeeBasisPoints: currentTab.serviceFeeBasisPoints,
+      coverChargeCents:currentTab.coverChargeCents,
       discountCents: effectiveDiscountCents,
       paidCents
     });
@@ -5689,6 +5712,9 @@ export class LocalOperationalStore {
     checkOutDate: string,
     excludeReservationId?: string
   ): { available: boolean; conflictReason?: string } {
+    if(checkOutDate===checkInDate)checkOutDate=new Date(Date.parse(checkOutDate+'T12:00:00Z')+86400000).toISOString().slice(0,10);
+    const blocked=this.db.prepare('SELECT json FROM maintenance_plans WHERE room_number=?').all(roomNumber) as {json:string}[];
+    if(blocked.some(row=>{const plan=JSON.parse(row.json);return plan.active&&plan.blockStart&&plan.blockEnd&&checkInDate<plan.blockEnd&&checkOutDate>plan.blockStart;}))return {available:false,conflictReason:'Apartamento bloqueado para manutenção programada.'};
     const room = this.getHotelRoomByNumber(roomNumber);
     if (!room) {
       return { available: false, conflictReason: `Apartamento ${roomNumber} não cadastrado.` };
@@ -6016,6 +6042,7 @@ export class LocalOperationalStore {
   }
 
   public checkInHotelStay(input: {
+    options?: StayOptions;
     reservationId?: string;
     roomNumber: string;
     guestId: string;
@@ -6029,6 +6056,10 @@ export class LocalOperationalStore {
     operatorName: string;
   }): { stay: HotelStay; room: HotelRoom; folioTab: Tab; firstFolioEntry: HotelFolioEntry } {
     return this.atomic(() => {
+    const options=stayOptionsSchema.parse(input.options??{});
+    input={...input,checkOutScheduledAt:plannedCheckout(input)};
+    if(!Number.isFinite(Date.parse(input.checkOutScheduledAt))||Date.parse(input.checkOutScheduledAt)<=Date.parse(input.checkInAt??new Date().toISOString()))throw Error('Saída deve ser posterior à entrada.');
+    if(options.plan!=='DAILY'&&(!input.dailyRateCents||input.dailyRateCents<=0))throw Error('Informe o valor do pacote de hospedagem.');
     const room = this.getHotelRoomByNumber(input.roomNumber);
     if (!room) {
       throw new Error(`Apartamento ${input.roomNumber} não cadastrado.`);
@@ -6046,6 +6077,7 @@ export class LocalOperationalStore {
       throw new Error(`Apartamento ${input.roomNumber} está interditado para manutenção.`);
     }
 
+    if(options.breakfastIncluded&&options.breakfastGuests>room.maxGuests)throw Error('Quantidade de cafés supera a capacidade do apartamento.');
     const guest = this.getHotelGuestById(input.guestId);
     if (!guest) {
       throw new Error(`Hóspede '${input.guestId}' não encontrado.`);
@@ -6056,7 +6088,7 @@ export class LocalOperationalStore {
     if (!availability.available) throw new Error(availability.conflictReason);
     const now = new Date().toISOString();
     const checkInTime = input.checkInAt || now;
-    const nights = calculateNightsCount(checkInTime, input.checkOutScheduledAt);
+    const nights = options.plan==='DAILY'?calculateNightsCount(checkInTime,input.checkOutScheduledAt):1;
     const rate = input.dailyRateCents ?? room.dailyRateCents;
 
     const stayId = crypto.randomUUID();
@@ -6145,6 +6177,7 @@ export class LocalOperationalStore {
 
     const updatedRoom = this.getHotelRoomById(room.id)!;
     const stay = this.getHotelStayById(stayId)!;
+    saveStayOptions(this.db,stay,options);
 
     this.appendOutboxEvent({
       idempotencyKey: `hotel-stay-checkin-${stay.id}`,
@@ -7453,6 +7486,7 @@ export class LocalOperationalStore {
       joinedTables,
       serviceFeeEnabled: Boolean(r.service_fee_enabled),
       serviceFeeBasisPoints: Number(r.service_fee_bps),
+      coverChargeCents:Number(r.cover_charge_cents??0),
       subtotalCents: Number(r.subtotal_cents),
       serviceFeeCents: Number(r.service_fee_cents),
       discountType: (r.discount_type as DiscountType) ?? 'NONE',
@@ -7989,6 +8023,8 @@ export class LocalOperationalStore {
 
     const { order: baseOrder } = this.createOrder({
       idempotencyKey,
+      skipCounterTab:true,
+      actorUserId:input.waiterId,
       channel: salesChannel,
       originNode: 'WINDOWS_PDV',
       items: input.items,
@@ -9001,7 +9037,7 @@ export class LocalOperationalStore {
   public generateDreStatement(params: {startDate: string; endDate: string; costCenterId?: string | null}): DreStatement {
     const startDay = params.startDate.slice(0,10), endDay = params.endDate.slice(0,10);
     if (startDay > endDay) throw new Error('Período inválido.');
-    const centers = ['REST','BAR','DELIV','HOTEL','ADMIN'];
+    const centers = ['REST','BAR','DELIV','HOTEL','ADMIN','MUSIC'];
     if (params.costCenterId && !centers.includes(params.costCenterId)) throw new Error('Centro de custo inválido.');
     const revenueByCostCenter: Record<string,number> = Object.fromEntries(centers.map(c=>[c,0]));
     const deductions: Record<string,number> = {...revenueByCostCenter};
@@ -9023,19 +9059,20 @@ export class LocalOperationalStore {
       let used=0; entries.forEach(([c,v],index)=>{const share=index===entries.length-1 ? amount-used : Math.round(amount*v/total);used+=share;add(map,c,share);});
     };
     // Revenue comes from completed services/sales, never from receipts or transfers.
-    for (const tab of rows("SELECT * FROM tabs WHERE type != 'HOTEL_FOLIO' AND status = 'CLOSED' AND date(closed_at) BETWEEN ? AND ?",startDay,endDay)) {
+    for (const tab of rows("SELECT * FROM tabs WHERE type != 'HOTEL_FOLIO' AND status = 'CLOSED' AND id NOT IN (SELECT o.tab_id FROM orders o JOIN delivery_orders d ON d.order_id=o.id WHERE o.tab_id IS NOT NULL) AND date(closed_at,'-3 hours') BETWEEN ? AND ?",startDay,endDay)) {
       const weights: Record<string,number> = {};
       for (const order of rows("SELECT id FROM orders WHERE tab_id = ? AND status != 'CANCELLED'",String(tab.id))) for (const [c,v] of Object.entries(weightsForOrder(String(order.id)))) add(weights,c,v);
       allocate(revenueByCostCenter,Number(tab.subtotal_cents)+Number(tab.service_fee_cents),weights);
       allocate(deductions,Number(tab.discount_cents),weights);
+      add(revenueByCostCenter,'MUSIC',Number(tab.cover_charge_cents??0));
     }
-    for (const order of rows("SELECT * FROM delivery_orders WHERE status = 'ENTREGUE' AND date(COALESCE(delivered_at,created_at)) BETWEEN ? AND ?",startDay,endDay)) {
+    for (const order of rows("SELECT * FROM delivery_orders WHERE status = 'ENTREGUE' AND date(COALESCE(delivered_at,created_at),'-3 hours') BETWEEN ? AND ?",startDay,endDay)) {
       add(revenueByCostCenter,'DELIV',Number(order.items_subtotal_cents)+Number(order.delivery_fee_cents));
       add(deductions,'DELIV',Number(order.discount_cents)); add(costs,'DELIV',Number(order.courier_fee_cents));
     }
-    for (const entry of rows("SELECT * FROM hotel_folio_entries WHERE date(created_at) BETWEEN ? AND ? AND (source_reference_type IS NULL OR source_reference_type != 'TAB')",startDay,endDay)) {
+    for (const entry of rows("SELECT * FROM hotel_folio_entries WHERE date(created_at,'-3 hours') BETWEEN ? AND ? AND (source_reference_type IS NULL OR source_reference_type != 'TAB')",startDay,endDay)) {
       const type=String(entry.entry_type), amount=Number(entry.amount_cents);
-      if (type==='PAYMENT') continue;
+      if (type==='PAYMENT'||entry.source_reference_type==='CORPORATE_BILLING') continue;
       const center=type==='RESTAURANT_ORDER'?'REST':'HOTEL';
       if (['DISCOUNT','REVERSAL'].includes(type) || amount<0) add(deductions,center,Math.abs(amount));
       else add(revenueByCostCenter,center,amount);
@@ -9043,11 +9080,11 @@ export class LocalOperationalStore {
     for (const ar of rows("SELECT cost_center_id, total_amount_cents FROM accounts_receivable WHERE origin = 'MANUAL' AND status != 'CANCELED' AND date(accrual_date) BETWEEN ? AND ?",startDay,endDay)) add(revenueByCostCenter,String(ar.cost_center_id),Number(ar.total_amount_cents));
     // Snapshot costs follow the originating channel. Mixed restaurant/bar orders
     // allocate shared ingredient costs by their actual item values (integer remainder).
-    for (const movement of rows("SELECT sm.*, COALESCE(sm.unit_cost_cents, original.unit_cost_cents, cp.cost_price_cents, 0) AS cost FROM stock_movements sm LEFT JOIN stock_movements original ON original.reversed_by_movement_id = sm.id LEFT JOIN catalog_products cp ON cp.id = sm.product_id WHERE date(sm.created_at) BETWEEN ? AND ? AND (sm.movement_type IN ('SALE_DEDUCTION','RECIPE_CONSUMPTION','WASTE_OR_LOSS') OR (sm.movement_type = 'REVERSAL_ENTRY' AND original.movement_type IN ('SALE_DEDUCTION','RECIPE_CONSUMPTION','WASTE_OR_LOSS')))",startDay,endDay)) {
+    for (const movement of rows("SELECT sm.*, COALESCE(sm.unit_cost_cents, original.unit_cost_cents, cp.cost_price_cents, 0) AS cost FROM stock_movements sm LEFT JOIN stock_movements original ON original.reversed_by_movement_id = sm.id LEFT JOIN catalog_products cp ON cp.id = sm.product_id WHERE date(sm.created_at,'-3 hours') BETWEEN ? AND ? AND (sm.movement_type IN ('SALE_DEDUCTION','RECIPE_CONSUMPTION','WASTE_OR_LOSS','INTERNAL_USE') OR (sm.movement_type = 'REVERSAL_ENTRY' AND original.movement_type IN ('SALE_DEDUCTION','RECIPE_CONSUMPTION','WASTE_OR_LOSS','INTERNAL_USE')))",startDay,endDay)) {
       const amount=Math.round(-Number(movement.quantity_delta)*Number(movement.cost));
       const channel=String(movement.origin_channel);
       if (['DELIVERY','PICKUP'].includes(channel)) add(costs,'DELIV',amount);
-      else if (channel==='HOTEL_ROOM') add(costs,'HOTEL',amount);
+      else if (channel==='HOTEL_ROOM'||channel==='STAFF_MEAL_HOTEL') add(costs,'HOTEL',amount);
       else allocate(costs,amount,weightsForOrder(String(movement.reference_entity_id)));
     }
     for (const ap of rows("SELECT ap.cost_center_id, ap.total_amount_cents, fc.name FROM accounts_payable ap JOIN financial_categories fc ON fc.id=ap.category_id WHERE fc.type='EXPENSE_OP' AND ap.status != 'CANCELED' AND date(ap.accrual_date) BETWEEN ? AND ?",startDay,endDay)) {
@@ -10149,7 +10186,8 @@ export class LocalOperationalStore {
       serviceFeeEnabled: tab.serviceFeeEnabled,
       serviceFeeBasisPoints: tab.serviceFeeBasisPoints,
       discountCents: tab.discountCents,
-      paidCents: tab.paidCents
+      paidCents: tab.paidCents,
+      coverChargeCents:tab.coverChargeCents
     });
 
     const lines = [
@@ -10159,6 +10197,7 @@ export class LocalOperationalStore {
       '           *** NÃO É DOCUMENTO FISCAL ***',
       '================================================',
       `Comanda: ${tab.code}  Mesa: ${tab.tableNumber ?? 'Balcão'}`,
+      ...(tab.coverChargeCents?[`COUVERT ARTÍSTICO: ${'R$ '+(tab.coverChargeCents/100).toFixed(2)}`]:[]),
       `Abertura: ${tab.openedAt}`,
       '------------------------------------------------',
       '#  ITEM                   QTD    UNIT     TOTAL',

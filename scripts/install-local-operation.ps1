@@ -24,6 +24,8 @@ $shortcut.IconLocation = $destination+',0'
 $shortcut.Description = 'Operação local do DECK 26 — dados próprios, caixa, hotel e atendimento Wi-Fi.'
 $shortcut.Save()
 Copy-Item -LiteralPath (Join-Path $repo 'docs\CHECKLIST_OPERACIONAL.html') -Destination (Join-Path $ApplicationDirectory 'CHECKLIST OPERACIONAL.html') -Force
+Copy-Item -LiteralPath (Join-Path $repo 'docs\CHECKLIST_COMPLETO.html') -Destination (Join-Path $ApplicationDirectory 'CHECKLIST COMPLETO.html') -Force
+Copy-Item -LiteralPath (Join-Path $repo 'docs\CHECKLIST_COMPLETO.md') -Destination (Join-Path $ApplicationDirectory 'CHECKLIST COMPLETO.md') -Force
 Write-Output ('Atalho: '+(Join-Path $desktop 'DECK 26 - Operacao Local.lnk'))
 Write-Output ('Aplicativo: '+$destination)
 Write-Output ('Dados próprios: '+$DataDirectory)

@@ -1,3 +1,5 @@
+import {registerExtensionRoutes} from './extension-routes.js';
+import {stayOptionsSchema,extensionSettings} from './extension-models.js';
 import {registerDesktopRoutes} from './desktop-routes.js';
 import {registerFiscalPreparationRoutes} from './fiscal-preparation-routes.js';
 import {registerOperationRoutes} from './operation-routes.js';
@@ -358,6 +360,7 @@ export async function buildLocalServer(options?: {
       catalog: can('catalog:manage') ? catalog : {...catalog,products:catalog.products.filter(p=>p.active).map(p=>({...p,costPriceCents:undefined,internalNotes:''}))},
       recipes: can('stock:adjust') ? recipes : [],
       qrTables: can('tabs:manage') ? qrTables : [],
+      publicDeliveryPendingCount:can('delivery:manage_orders')?Number((store.db.prepare("SELECT COUNT(*) AS count FROM public_delivery_requests WHERE status='PENDING'").get() as any).count):0,
       serviceCalls: can('tabs:manage') ? store.listTableServiceCalls() : [],
       tabs: can('tabs:manage') ? tabs.filter(tab => tab.type !== 'HOTEL_FOLIO' || can('hotel:view_pii')) : [],
       orders: orders.filter(order => order.channel !== 'HOTEL_ROOM' || can('hotel:view_pii')).map(order => can('tabs:manage') ? order : {...order, customerNotes: undefined}),
@@ -1224,7 +1227,7 @@ export async function buildLocalServer(options?: {
     const session = authorizePermission(req, reply, serviceTransition?'orders:create':'orders:advance_kitchen');
     if (!session) return;
     const existing=store.getOrderById(req.params.id);
-    if(serviceTransition&&existing&&!hasPermission(session.role,'orders:advance_kitchen')&&!(status==='RECEIVED'&&['PENDING_APPROVAL','RECEIVED'].includes(existing.status))&&!(status==='DELIVERED'&&['READY','DELIVERED'].includes(existing.status)))return reply.code(403).send({error:'O garçom pode aprovar pedidos pendentes ou confirmar pedidos prontos.'});
+    if(serviceTransition&&existing&&!hasPermission(session.role,'orders:advance_kitchen')&&!(status==='RECEIVED'&&['PENDING_APPROVAL','RECEIVED'].includes(existing.status))&&!(status==='DELIVERED'&&(extensionSettings(store.db).kitchenWorkflow==='PAPER'?['RECEIVED','IN_PREPARATION','READY','DELIVERED']:['READY','DELIVERED']).includes(existing.status)))return reply.code(403).send({error:'O garçom pode aprovar pedidos pendentes ou confirmar pedidos prontos.'});
 
     const parsed = AdvanceOrderBodySchema.safeParse(req.body);
     if (!parsed.success) {
@@ -1780,6 +1783,7 @@ export async function buildLocalServer(options?: {
   });
 
   const AdvancedCheckInSchema = z.object({
+    options:stayOptionsSchema.optional(),
     roomNumber: z.string().min(1),
     guestId: z.string().optional(),
     guestName: z.string().optional(),
@@ -1804,6 +1808,7 @@ export async function buildLocalServer(options?: {
     try {
       if (parsed.data.guestId && parsed.data.checkOutScheduledAt) {
         const result = store.checkInHotelStay({
+          options:parsed.data.options,
           roomNumber: parsed.data.roomNumber,
           guestId: parsed.data.guestId,
           checkInAt: parsed.data.checkInAt,
@@ -2942,6 +2947,7 @@ export async function buildLocalServer(options?: {
     }
   });
 
+  registerExtensionRoutes(app,store,authorizePermission);
   registerDesktopRoutes(app,store,authorizePermission,resolveSession);
   registerOperationRoutes(app,store,authorizePermission);
   registerFiscalPreparationRoutes(app,store,authorizePermission);

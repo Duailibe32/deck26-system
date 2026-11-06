@@ -1,9 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { buildLocalServer, signSessionToken } from './server.js';
 import { calculateNightsCount, areDateIntervalsOverlapping, calculateStayFolioTotals } from '@deck26/contracts';
+
+beforeEach(()=>{vi.useFakeTimers({toFake:['Date']});vi.setSystemTime(new Date('2026-11-04T15:00:00.000Z'));});afterEach(()=>vi.useRealTimers());
 
 describe('DECK 26 — Etapa 5: Bateria Completa dos 35 Testes Obrigatórios do PMS Hotel Auto Posto Milla', () => {
   it('1. Cadastro de quarto: cadastrar quarto 105 com todos os campos e comodidades', async () => {

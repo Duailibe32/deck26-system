@@ -8,7 +8,7 @@ Restaurante, bar, delivery e Hotel Auto Posto Milla em uma operação local inte
 
 ## Instalação operacional local
 
-A versão Windows possui instalação própria, login pessoal e dados persistentes separados da demonstração. O primeiro acesso permite aproveitar os 93 produtos e 24 apartamentos, sem vendas, hóspedes, estoque ou saldos fictícios. O terminal do garçom funciona pelo navegador na mesma rede, conectado à API do PC na porta 4800.
+A versão Windows possui instalação própria, login pessoal e dados persistentes separados da demonstração. O primeiro acesso permite aproveitar os 93 produtos e 24 apartamentos, sem vendas, hóspedes, estoque ou saldos fictícios. O terminal do garçom e o cardápio de pedidos do cliente funcionam pelo navegador na mesma rede, conectados à API do PC na porta 4800.
 
 - [Guia de instalação, uso, celular e backups](docs/OPERACAO_LOCAL.md)
 - [Checklist interativo de 66 verificações](docs/CHECKLIST_OPERACIONAL.html)
@@ -16,7 +16,7 @@ A versão Windows possui instalação própria, login pessoal e dados persistent
 
 Impressoras virtuais de caixa e cozinha geram vias de 58/80 mm. Impressão física e emissão fiscal ainda precisam de integração/homologação; a simulação fiscal está bloqueada nesta instalação. Nuvem não configurada. Os registros de PIX/cartão não efetuam cobranças bancárias.
 
-Validação desta entrega: 182 testes automatizados, verificação de tipos e compilação nativa Windows. A conferência usa bancos isolados; a abertura no celular físico depende da rede do estabelecimento.
+Validação desta entrega: 212 testes automatizados, verificação de tipos e compilação nativa Windows. A conferência usa bancos isolados; a abertura no celular físico depende da rede do estabelecimento.
 
 ## PDV touch e atendimento por função
 
@@ -26,7 +26,22 @@ O carrinho lateral usa cupom amarelo com quantidades, valores e controles +/−.
 
 Chamados pelo QR sinalizam a mesa e exigem atendimento da equipe. Transferir consumo ao quarto exige confirmação recente por PIN autorizado, mantém uma identificação para reenvio seguro e envia a mesa à limpeza. O componente de auditoria apresenta ações recentes com operador e horário, disponível à gerência.
 
-Veja o [checklist e roteiro de vídeo do PDV touch](docs/CHECKLIST_PDV_TOUCH.md), incluindo evidências e os recursos adicionais que ainda estão pendentes. A aparência de recibo não habilita emissão fiscal nem impressão física.
+Veja o [checklist e roteiro de vídeo do PDV touch](docs/CHECKLIST_PDV_TOUCH.md), incluindo evidências do PDV. A aparência de recibo não habilita emissão fiscal nem impressão física.
+
+## Operação integrada: restaurante, hotel e delivery
+
+As funcionalidades adicionais estão disponíveis em subabas, mantendo a visão de cada cargo:
+
+| Restaurante e caixa | Hotel | Estoque e gestão |
+| --- | --- | --- |
+| Promoções por dia/horário; escolhas obrigatórias de executivos; baldes com baixa de unidades; couvert separado; refeições da equipe | Calendário com barras; pernoite e day use 4/6 h; café incluso e vouchers; veículos; manutenção com bloqueios | Reposição por fornecedor; margem e sugestão de preço com confirmação; produção/porcionamento; convênios e faturas no Contas a Receber |
+
+O cardápio do cliente abre em **/?delivery=1**, com busca, destaques por horário, personalização, taxa por região e acompanhamento da confirmação. A equipe aceita o pedido antes da baixa de estoque e da produção. O terminal do garçom continua em **/?terminal=garcom**. Os links atuais estão em Administração. O resumo do Turno e a cotação de compras ficam prontos para copiar no WhatsApp; não há envio automático.
+
+- [Checklist completo interativo, com marcações e exportação](docs/CHECKLIST_COMPLETO.html)
+- [Roteiro completo de testes e vídeo, com caminhos e pré-requisitos](docs/CHECKLIST_COMPLETO.md)
+
+A previsão de entrega aumenta com a fila e considera a região. Créditos de café, refeições internas e faturamento corporativo mantêm a distinção entre consumo, receita e dinheiro recebido. A migração e o reenvio de operações têm testes de preservação de saldos e de idempotência.
 
 ## Preparação fiscal sem certificado A1
 
