@@ -23,7 +23,7 @@ Dados persistentes no computador do estabelecimento, com acesso pela rede Wi-Fi.
 ---
 
 > **Estado da entrega · Etapa 7A revisada, antes da 7B**<br>
-> Aplicativo Windows compilado, API local e banco persistente; **212 testes automatizados aprovados** na entrega funcional de 06/11/2026. Emissão fiscal real, impressão física e publicação na internet têm pendências próprias, detalhadas [abaixo](#limites). O sistema não efetua cobranças bancárias automaticamente.
+> Aplicativo Windows compilado, API local e banco persistente; **227 testes automatizados aprovados** na entrega atual de 06/11/2026. Emissão fiscal real, impressão física e publicação na internet têm pendências próprias, detalhadas [abaixo](#limites). O sistema não efetua cobranças bancárias automaticamente.
 
 <a id="experiencia"></a>
 
@@ -102,6 +102,12 @@ Fichas técnicas, combos, produção interna, compras por fornecedor, alertas de
 
 O cadastro inicial inclui **93 produtos e 24 apartamentos, dos quais 12 estão ativos para operação**. A atualização preserva a numeração real e as unidades em construção. Preços, tarifas, saldos e permissões precisam ser revisados pelo responsável.
 
+### Delivery com expedição visual
+
+Pedidos em colunas com tempo por etapa e destaque de atraso, agenda semanal, exceções, pausa temporária, sugestões opcionais no carrinho, CEP assistido, acompanhamento por identificador secreto e etiqueta de embalagem. A conclusão apresenta conferência explícita do recebimento.
+
+Consulte o [registro completo e evidências](docs/MELHORIAS_DELIVERY_20261106.md) e o [checklist específico de delivery](docs/CHECKLIST_DELIVERY.md). O atalho de WhatsApp abre a mensagem para revisão; não há envio automático.
+
 <a id="windows"></a>
 
 ## 🖥️ Começar no Windows
@@ -179,6 +185,7 @@ Comece pelo **[checklist completo em texto](docs/CHECKLIST_COMPLETO.md): 70 veri
 
 | Material | Quando usar |
 | --- | --- |
+| [Delivery e expedição — interativo](docs/CHECKLIST_DELIVERY.html) | Agenda, carrinho, acompanhamento, etiqueta e recebimento. |
 | [Checklist completo — texto](docs/CHECKLIST_COMPLETO.md) | Ler no GitHub e conferir todos os módulos. |
 | [Checklist completo — interativo](docs/CHECKLIST_COMPLETO.html) | Baixar e abrir no navegador; instalado como **CHECKLIST COMPLETO.html**. |
 | [PDV touch e roteiro de vídeo](docs/CHECKLIST_PDV_TOUCH.md) | Mesas, observações, pagamento, transferência e auditoria. |
@@ -284,7 +291,7 @@ Para conhecer somente a prévia visual, use `npm run dev:web`. Os scripts carreg
 | `npm run build:windows:local` | Compila a versão nativa operacional no Windows. |
 | `npm run build:windows:test` | Compila o ambiente nativo de testes, separado da operação. |
 
-Na entrega funcional de **06/11/2026**, os **212 testes** passaram, incluindo os **182 anteriores**, com verificação de tipos, smoke das APIs e compilação Windows. A CI principal também aprovou tipos, testes, auditoria npm e build do [commit funcional 714db78](https://github.com/Duailibe32/deck26-system/commit/714db78d09e8cd5e442877b6b9801d3fc0faec16). Os selos no topo levam aos workflows; consulte as execuções para ver o resultado de cada commit. Eles não representam uma certificação do produto.
+A evolução de delivery foi validada com **227 testes**. Na entrega funcional anterior de **06/11/2026**, os **212 testes** passaram, incluindo os **182 anteriores**, com verificação de tipos, smoke das APIs e compilação Windows. A CI principal também aprovou tipos, testes, auditoria npm e build do [commit funcional 714db78](https://github.com/Duailibe32/deck26-system/commit/714db78d09e8cd5e442877b6b9801d3fc0faec16). Os selos no topo levam aos workflows; consulte as execuções para ver o resultado de cada commit. Eles não representam uma certificação do produto.
 
 As verificações cobrem autenticação, permissões, reenvio sem duplicação, rollback financeiro, PMS, estoque, promoções, escolhas obrigatórias, combos, produção, café, convênios e migração persistente. Bancos de teste são isolados. A interface foi conferida no navegador em tamanhos desktop e celular; isso não substitui teste no aparelho físico.
 

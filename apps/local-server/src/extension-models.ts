@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import {deliveryServiceSchema} from './delivery-service.js';
 import type { DatabaseSync } from 'node:sqlite';
 import type { CatalogProduct, SalesChannel } from '@deck26/contracts';
 import { resolveChannelPriceCents } from '@deck26/contracts';
@@ -54,6 +55,7 @@ export function promotionalPrice(db: DatabaseSync, product: CatalogProduct, chan
   };
 }
 export const settingsSchema = z.object({
+  deliveryService: deliveryServiceSchema.default(()=>deliveryServiceSchema.parse({})),
   kitchenWorkflow: z.enum(['PAPER', 'KDS']).default('PAPER'),
   deliveryBaseMin: z.number().int().min(5).max(240).default(30),
   deliveryBaseMax: z.number().int().min(5).max(300).default(45),

@@ -8194,6 +8194,7 @@ export class LocalOperationalStore {
       now,
       deliveryOrderId
     );
+    this.recordAuditLog({actorUserId,action:'DELIVERY_STAGE_CHANGED',entityType:'DELIVERY_ORDER',entityId:deliveryOrderId,metadata:{from:order.status,status:newStatus}});
 
     return this.getDeliveryOrderById(deliveryOrderId)!;
 
@@ -8215,6 +8216,7 @@ export class LocalOperationalStore {
       WHERE id = ?
     `).run(courier.id, courier.name, courier.feePerDeliveryCents, now, now, deliveryOrderId);
     this.updateDeliveryCourierStatus(courier.id, 'EM_ENTREGA');
+    this.recordAuditLog({actorUserId,action:'DELIVERY_STAGE_CHANGED',entityType:'DELIVERY_ORDER',entityId:deliveryOrderId,metadata:{from:order.status,status:'SAIU_PARA_ENTREGA'}});
     return this.getDeliveryOrderById(deliveryOrderId)!;
 
     });

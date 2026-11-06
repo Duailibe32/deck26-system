@@ -1,3 +1,4 @@
+import {DeliveryExperience} from './DeliveryExperience.js';
 import {parseMoney} from './desktopModels.js';
 import React, { useState } from 'react';
 import {
@@ -44,7 +45,7 @@ export const DeliveryModule: React.FC<DeliveryModuleProps> = ({
   refreshState,
   notify
 }) => {
-  const [subTab, setSubTab] = useState<'PEDIDOS' | 'DESPACHO' | 'ACERTO' | 'REGIOES' | 'CLIENTES'>('PEDIDOS');
+  const [subTab, setSubTab] = useState<'PAINEL' | 'PEDIDOS' | 'DESPACHO' | 'ACERTO' | 'REGIOES' | 'CLIENTES'>('PAINEL');
   const [statusFilter, setStatusFilter] = useState<'ALL' | DeliveryOrderStatus>('ALL');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
@@ -291,6 +292,7 @@ export const DeliveryModule: React.FC<DeliveryModuleProps> = ({
           </p>
         </div>
         <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+          <button className={`d26-btn ${subTab === 'PAINEL' ? 'd26-btn-primary' : 'd26-btn-secondary'}`} onClick={()=>setSubTab('PAINEL')}>✦ Expedição visual</button>
           <button
             className={`d26-btn ${subTab === 'PEDIDOS' ? 'd26-btn-primary' : 'd26-btn-secondary'}`}
             onClick={() => setSubTab('PEDIDOS')}
@@ -324,6 +326,7 @@ export const DeliveryModule: React.FC<DeliveryModuleProps> = ({
         </div>
       </div>
 
+      {subTab==='PAINEL'&&<DeliveryExperience base={localApiBase} headers={getAuthHeaders} orders={deliveryOrders} couriers={deliveryCouriers} refresh={refreshState} notify={notify}/>}
       {/* ABA: PEDIDOS */}
       {subTab === 'PEDIDOS' && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import {lookupCep} from './delivery-cep.js';
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { hasPermission, type Permission } from '@deck26/contracts';
 import type { LocalOperationalStore } from './store.js';
@@ -122,6 +123,9 @@ export function registerExtensionRoutes(app: FastifyInstance, store: LocalOperat
   get('/api/ops/shift-summary', 'pos:open_close_register', req => ops.summary(z.object({
     day: z.iso.date().optional()
   }).parse(req.query).day));
+  get('/api/ops/delivery-service','delivery:manage_orders',(_req,a)=>({config:ops.deliveryService(),canConfigure:hasPermission(a.role,'staff:manage')}));
+  post('/api/ops/delivery-service','staff:manage',(body,a)=>ops.saveDeliveryService(body,a));
+  get('/api/ops/delivery-label/:id','delivery:manage_orders',(req,a)=>ops.deliveryLabel(z.string().max(100).parse((req.params as any).id),a));
   get('/api/ops/delivery-inbox', 'delivery:manage_orders', () => ops.deliveryInbox());
   post('/api/ops/delivery-decision', 'delivery:manage_orders', (body, a) => {
     const d = z.object({
@@ -133,6 +137,17 @@ export function registerExtensionRoutes(app: FastifyInstance, store: LocalOperat
   get('/api/ops/delivery-repeat', 'delivery:manage_orders', req => ops.repeatLast(z.object({
     phone: z.string().max(25)
   }).parse(req.query).phone));
+  const cepCache=new Map<string,{at:number;value:Awaited<ReturnType<typeof lookupCep>>}>(),cepRate=new Map<string,{at:number;count:number}>();
+  app.get('/api/public/delivery/cep/:cep',async(req,reply)=>{
+    const now=Date.now();const parsed=z.string().regex(/^\d{8}$/).safeParse((req.params as any).cep);
+    if(!parsed.success)return reply.code(400).send({error:'Informe um CEP com oito dígitos.'});
+    const old=cepRate.get(req.ip);if(old&&now-old.at<60000&&old.count>=15)return reply.code(429).send({error:'Aguarde um minuto ou preencha o endereço manualmente.'});
+    if(cepRate.size>=4096&&!old){for(const [key,value] of cepRate)if(now-value.at>60000)cepRate.delete(key);if(cepRate.size>=4096)return reply.code(429).send({error:'Tente novamente mais tarde.'});}
+    cepRate.set(req.ip,old&&now-old.at<60000?{...old,count:old.count+1}:{at:now,count:1});
+    const cached=cepCache.get(parsed.data);if(cached&&now-cached.at<86400000)return cached.value??reply.code(404).send({error:'CEP não encontrado. Preencha manualmente.'});
+    try {const value=await lookupCep(parsed.data);if(cepCache.size>=500)cepCache.delete(cepCache.keys().next().value!);cepCache.set(parsed.data,{at:now,value});return value??reply.code(404).send({error:'CEP não encontrado. Preencha manualmente.'});}
+    catch{return reply.code(503).send({error:'Consulta indisponível. Preencha o endereço manualmente.'});}
+  });
   app.get('/api/public/delivery/catalog', (_req, reply) => safe(reply, () => ops.publicCatalog('DELIVERY')));
   app.post('/api/public/delivery/quote', (req, reply) => safe(reply, () => ops.deliveryQuote(z.object({
     items: orderItemsSchema,

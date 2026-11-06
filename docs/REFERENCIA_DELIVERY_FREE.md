@@ -4,6 +4,8 @@ Análise de 06/11/2026 · leitura estática do repositório público, sem instal
 
 **Referência:** [eusougabrielgadelha/delivery-free](https://github.com/eusougabrielgadelha/delivery-free), apresentado como Delivery Hub. A versão examinada corresponde ao commit [aa748dd](https://github.com/eusougabrielgadelha/delivery-free/tree/aa748ddefc5c9e6c6959a57eae13fea13eb627ea).
 
+> **Atualização:** as melhorias de agenda, painel, sugestões, CEP, acompanhamento e expedição foram implementadas posteriormente em código próprio. Veja [entrega e validação](MELHORIAS_DELIVERY_20261106.md). A comparação abaixo registra o estado anterior.
+
 ## O que vale observar
 
 O projeto concentra o atendimento de delivery em um tema WordPress/PHP: cardápio, carrinho, adicionais, checkout, quadro de pedidos e comunicação com WhatsApp. O README descreve recursos que podem servir como referência de experiência de uso; essa descrição não foi tratada como comprovação de funcionamento. [Apresentação do projeto](https://github.com/eusougabrielgadelha/delivery-free/blob/aa748ddefc5c9e6c6959a57eae13fea13eb627ea/README.md).

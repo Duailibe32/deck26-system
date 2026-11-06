@@ -1,4 +1,4 @@
-﻿param(
+param(
   [string]$ApplicationDirectory = "$env:USERPROFILE\Deck26\Aplicativo",
   [string]$DataDirectory = "$env:USERPROFILE\Deck26\DadosOperacionais"
 )
@@ -29,3 +29,6 @@ Copy-Item -LiteralPath (Join-Path $repo 'docs\CHECKLIST_COMPLETO.md') -Destinati
 Write-Output ('Atalho: '+(Join-Path $desktop 'DECK 26 - Operacao Local.lnk'))
 Write-Output ('Aplicativo: '+$destination)
 Write-Output ('Dados próprios: '+$DataDirectory)
+
+Copy-Item -LiteralPath (Join-Path $repo 'docs\CHECKLIST_DELIVERY.html') -Destination (Join-Path $ApplicationDirectory 'CHECKLIST DELIVERY.html') -Force
+Copy-Item -LiteralPath (Join-Path $repo 'docs\CHECKLIST_DELIVERY.md') -Destination (Join-Path $ApplicationDirectory 'CHECKLIST DELIVERY.md') -Force

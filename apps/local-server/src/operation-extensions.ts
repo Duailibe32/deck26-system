@@ -1,5 +1,7 @@
 import { z } from 'zod';
 import crypto from 'node:crypto';
+import {deliveryAvailability,deliveryServiceSchema,packageLabel} from './delivery-service.js';
+import {renderThermalPreview} from './thermal-preview.js';
 import type { SalesChannel, UserRole } from '@deck26/contracts';
 import { formatBrlCents as money } from '@deck26/contracts';
 import type { LocalOperationalStore } from './store.js';
@@ -127,6 +129,21 @@ export class OperationExtensions {
     this.audit(a, 'OPERATION_SETTINGS_CHANGED', 'settings');
     return d;
   }
+  deliveryService() {return extensionSettings(this.db).deliveryService;}
+  saveDeliveryService(raw:unknown,a:Actor) {
+    const config=deliveryServiceSchema.parse(raw);
+    for(const id of config.suggestionIds)if(!this.store.getProductById(id)?.active)throw Error('Sugestão precisa ser um produto ativo.');
+    this.saveSettings({...extensionSettings(this.db),deliveryService:config},a);
+    this.audit(a,'DELIVERY_SERVICE_CONFIGURED','delivery-service',{mode:config.mode,pausedUntil:config.pausedUntil});
+    return config;
+  }
+  deliveryLabel(orderId:string,a:Actor) {
+    const order=this.store.getDeliveryOrderById(orderId);if(!order)throw Error('Pedido não encontrado.');
+    const base=this.store.getOrderById(order.orderId);
+    const text=packageLabel(order,base?.items.filter(i=>i.status!=='CANCELLED')??[]);
+    this.audit(a,'DELIVERY_LABEL_PREVIEW',orderId);
+    return {text,html:renderThermalPreview(text,80,'Expedição · simulação')};
+  }
   savePromotion(raw: unknown, a: Actor) {
     const d = promotionSchema.parse(raw);
     for (const p of d.productIds) if (!this.store.getProductById(p)) throw Error('Produto não encontrado.');
@@ -210,13 +227,16 @@ export class OperationExtensions {
         }) => p)
       },
       zones: this.store.listDeliveryZones(false).filter(z => z.active),
+      service: deliveryAvailability(this.deliveryService()),
+      suggestionIds: this.deliveryService().suggestionIds,
       eta: this.eta(),
       highlights: this.highlights(),
       coverNotice: activeCover(this.db, 1),
       serverTime: now()
     };
   }
-  deliveryQuote(d: Pick<z.infer<typeof publicDeliverySchema>, 'items' | 'deliveryType' | 'deliveryZoneId' | 'deliveryAddress'>) {
+  deliveryQuote(d: Pick<z.infer<typeof publicDeliverySchema>, 'items' | 'deliveryType' | 'deliveryZoneId' | 'deliveryAddress'>, existingRequest=false) {
+    const service=deliveryAvailability(this.deliveryService());if(!existingRequest&&!service.open)throw Error(service.message);
     const subtotal = this.quote(d.items, d.deliveryType === 'PICKUP' ? 'PICKUP' : 'DELIVERY');
     let fee = 0;
     if (d.deliveryType === 'DELIVERY') {
@@ -256,7 +276,7 @@ export class OperationExtensions {
     });
   }
   deliveryStatus(cap: string) {
-    const r = this.rows('SELECT id,status,quoted_total_cents,delivery_order_id,payload_json FROM public_delivery_requests WHERE idempotency_key=?', cap)[0];
+    const r = this.rows('SELECT id,status,quoted_total_cents,delivery_order_id,payload_json,created_at,updated_at FROM public_delivery_requests WHERE idempotency_key=?', cap)[0];
     if (!r) throw Error('Pedido não encontrado.');
     const accepted = r.delivery_order_id ? this.store.getDeliveryOrderById(r.delivery_order_id) : null;
     return {
@@ -264,6 +284,12 @@ export class OperationExtensions {
       status: r.status,
       totalCents: r.quoted_total_cents,
       orderNumber: accepted?.orderNumber,
+      timeline: [
+        {status:'PENDING',at:r.created_at},
+        ...(r.status==='REJECTED'?[{status:'REJECTED',at:r.updated_at}]:[]),
+        ...(accepted?[{status:'ACCEPTED',at:r.updated_at},...this.rows("SELECT metadata_json,created_at FROM audit_logs WHERE entity_type='DELIVERY_ORDER' AND entity_id=? AND action='DELIVERY_STAGE_CHANGED' ORDER BY created_at,rowid",accepted.id).map(e=>({status:JSON.parse(e.metadata_json).status,at:e.created_at})),...(accepted.status==='NOVO'?[]:[{status:accepted.status,at:accepted.updatedAt}])]:[])
+      ],
+      deliveryType: accepted?.deliveryType ?? JSON.parse(r.payload_json).deliveryType,
       deliveryStatus: accepted?.status,
       eta: this.etaForZone(JSON.parse(r.payload_json).deliveryZoneId)
     };
@@ -290,7 +316,7 @@ export class OperationExtensions {
         };
       }
       const d = publicDeliverySchema.parse(JSON.parse(r.payload_json)),
-        quote = this.deliveryQuote(d);
+        quote = this.deliveryQuote(d,true);
       if (quote.totalCents !== r.quoted_total_cents) throw Error('Preço ou taxa mudou. Rejeite e peça ao cliente para conferir e reenviar.');
       const result = this.store.createDeliveryOrder({
         ...d,
