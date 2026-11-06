@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import crypto from 'node:crypto';
-import {deliveryAvailability,deliveryServiceSchema,packageLabel} from './delivery-service.js';
+import {deliveryAvailability,deliveryServiceSchema,packageLabel,pendingWaitMinutes} from './delivery-service.js';
 import {renderThermalPreview} from './thermal-preview.js';
 import type { SalesChannel, UserRole } from '@deck26/contracts';
 import { formatBrlCents as money } from '@deck26/contracts';
@@ -295,10 +295,13 @@ export class OperationExtensions {
     };
   }
   deliveryInbox() {
+    const sla=this.deliveryService().acceptanceSlaMinutes;
     return this.rows("SELECT * FROM public_delivery_requests WHERE status='PENDING' ORDER BY created_at ASC").map(r => ({
       id: r.id,
       ...JSON.parse(r.payload_json),
-      createdAt: r.created_at
+      createdAt: r.created_at,
+      waitingMinutes:pendingWaitMinutes(r.created_at),
+      late:pendingWaitMinutes(r.created_at)>=sla
     }));
   }
   decideDelivery(requestId: string, accept: boolean, a: Actor) {

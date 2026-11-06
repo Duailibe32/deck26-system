@@ -1,3 +1,4 @@
+import {StockWorkspace} from './StockWorkspace.js';
 import {OperationsHub} from './OperationsHub.js';
 import {StayOptionsFields,defaultStayOptions,RoomExtras} from './HotelExtras.js';
 import {CustomerMenu} from './CustomerMenu.js';
@@ -3667,7 +3668,9 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
         {/* =====================================================================
             MÓDULO: ESTOQUE COMPLETO, ALERTAS E KARDEX AUDITÁVEL (SEÇÕES 8 E 9)
            ===================================================================== */}
+        {activeModule==='estoque'&&hasPermission(authSession.role,'stock:adjust')&&<StockWorkspace api={localApiBase} headers={getAuthHeaders} role={authSession.role} userId={authSession.userId} products={snapshot.catalog.products} categories={snapshot.catalog.categories} balances={snapshot.stock.balances} movements={snapshot.stock.recentMovements} refresh={refreshState}/>}
         {activeModule==='estoque'&&hasPermission(authSession.role,'stock:adjust')&&<details className="d26-ops-module-details"><summary>Rotinas de compras, margens e produção</summary><OperationsHub api={localApiBase} headers={getAuthHeaders} role={authSession.role} userId={authSession.userId} products={snapshot.catalog.products} scope="stock" onRefresh={refreshState}/></details>}
+        {activeModule==='estoque'&&<details className="d26-stock-advanced"><summary>Histórico completo, estornos e ferramentas avançadas</summary>
         {activeModule === 'estoque' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             {/* FORMULÁRIO DE ENTRADA DE COMPRA, PERDA, DEVOLUÇÃO OU AJUSTE */}
@@ -3847,6 +3850,8 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
             </div>
           </div>
         )}
+
+</details>}
 
         {/* =====================================================================
             MÓDULO: HOTEL AUTO POSTO MILLA & RESERVAS

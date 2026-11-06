@@ -14,6 +14,7 @@ type Config = {
   closedDates: string[];
   suggestionIds: string[];
   slaMinutes: number;
+  acceptanceSlaMinutes:number;
 };
 const days = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
 const labels: Record<string, string> = {
@@ -43,6 +44,10 @@ export function DeliveryExperience({
   notify: (s: string) => void;
 }) {
   const labelFrame = useRef<HTMLIFrameElement>(null);
+  const audio=useRef<AudioContext|null>(null),played=useRef(new Set<string>());
+  const [sound,setSound]=useState(false);
+  const tone=()=>{const context=audio.current;if(!context||context.state!=='running')return;const oscillator=context.createOscillator(),gain=context.createGain();oscillator.frequency.value=660;gain.gain.setValueAtTime(.06,context.currentTime);gain.gain.exponentialRampToValueAtTime(.001,context.currentTime+.25);oscillator.connect(gain);gain.connect(context.destination);oscillator.start();oscillator.stop(context.currentTime+.25);oscillator.onended=()=>{oscillator.disconnect();gain.disconnect();};};
+  useEffect(()=>()=>{void audio.current?.close().catch(()=>{});},[]);
   const [config, setConfig] = useState<Config | null>(null),
     [canConfigure, setCanConfigure] = useState(false),
     [products, setProducts] = useState<any[]>([]),
@@ -95,6 +100,7 @@ export function DeliveryExperience({
       clearInterval(timer);
     };
   }, [base]);
+  useEffect(()=>{if(!sound)return;const overdue=inbox.filter(r=>r.late&&!played.current.has(r.id));if(!overdue.length)return;overdue.forEach(r=>played.current.add(r.id));tone();},[inbox,sound]);
   const mutate = async (id: string, verb: string, body: unknown = {}, method = 'POST') => {
     const r = await fetch(base + '/api/delivery/orders/' + encodeURIComponent(id) + '/' + verb, {
       method,
@@ -195,7 +201,7 @@ export function DeliveryExperience({
           })} /></label><label>Aviso para o cliente<input maxLength={200} value={config.notice} onChange={e => setConfig({
             ...config,
             notice: e.target.value
-          })} /></label><label>Meta por etapa em minutos<input type="number" min={5} max={240} value={config.slaMinutes} onChange={e => setConfig({
+          })} /></label><label>Alerta de pedido sem aceite (minutos)<input type="number" min={1} max={120} value={config.acceptanceSlaMinutes} onChange={e=>setConfig({...config,acceptanceSlaMinutes:Number(e.target.value)})}/></label><label>Meta por etapa em minutos<input type="number" min={5} max={240} value={config.slaMinutes} onChange={e => setConfig({
             ...config,
             slaMinutes: Number(e.target.value)
           })} /></label><label>Sugestões opcionais no carrinho (até 8)<select multiple aria-label="Produtos sugeridos no carrinho" value={config.suggestionIds} onChange={e => setConfig({
@@ -203,7 +209,9 @@ export function DeliveryExperience({
             suggestionIds: Array.from(e.target.selectedOptions).map(o => o.value)
           })}>{products.filter(p => p.active).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label><button className="d26-delivery-primary" disabled={busy}>Salvar configuração</button></form></details>}
  <div className="d26-delivery-toolbar"><label>Buscar pedido<input placeholder="Número, nome ou telefone" value={search} onChange={e => setSearch(e.target.value)} /></label><label className="d26-delivery-inline"><input type="checkbox" checked={showFinal} onChange={e => setShowFinal(e.target.checked)} />Mostrar encerrados</label><span>{orders.filter(o => !['ENTREGUE', 'CANCELADO'].includes(o.status)).length} ativos · {inbox.length} aguardando aceite</span></div>
- {inbox.length > 0 && <section className="d26-delivery-inbox"><h3>Primeiro, confira os pedidos dos clientes <b>{inbox.length}</b></h3><div>{inbox.map(r => <article key={r.id}><small>AGUARDANDO ACEITE</small><h4>{r.customerName}</h4><p>{r.deliveryType === 'PICKUP' ? 'Retirada' : 'Entrega'} · {money(r.quotedTotalCents)} · {r.customerPhone}</p><ul>{r.items.map((i: any, index: number) => <li key={index}>{i.quantity}× {products.find(p => p.id === i.productId)?.name ?? 'Produto'}{i.notes ? ' · ' + i.notes : ''}{i.modifiers?.length ? ' · ' + i.modifiers.map((m: any) => m.optionName).join(', ') : ''}</li>)}</ul>{r.deliveryAddress && <p>{r.deliveryAddress.street}, {r.deliveryAddress.number} · {r.deliveryAddress.neighborhood}</p>}<div className="d26-delivery-actions"><button disabled={busy} onClick={() => void action(() => call('/api/ops/delivery-decision', {
+ <div className="d26-alert-sound"><button aria-pressed={sound} onClick={async()=>{if(sound){setSound(false);return;}try{audio.current??=new AudioContext();await audio.current.resume();setSound(true);tone();}catch{setMessage('Aviso sonoro indisponível neste navegador. Os alertas visuais continuam ativos.');}}}>{sound?'🔔 Aviso sonoro ativado':'🔕 Ativar aviso sonoro'}</button><span>Opcional · alerta uma vez por pedido atrasado nesta sessão.</span></div>
+ {inbox.some(r=>r.late)&&<div className="d26-accept-alert" role="status"><strong>{inbox.filter(r=>r.late).length} pedido(s) aguardando aceite além da meta</strong><span>Confira a fila antes de iniciar outro atendimento.</span></div>}
+ {inbox.length > 0 && <section className="d26-delivery-inbox"><h3>Primeiro, confira os pedidos dos clientes <b>{inbox.length}</b></h3><div>{inbox.map(r => <article className={r.late?'late':''} key={r.id}><small>AGUARDANDO ACEITE</small><span className="d26-inbox-age">◷ {r.waitingMinutes??0} min aguardando {r.late?'· precisa de atenção':''}</span><h4>{r.customerName}</h4><p>{r.deliveryType === 'PICKUP' ? 'Retirada' : 'Entrega'} · {money(r.quotedTotalCents)} · {r.customerPhone}</p><ul>{r.items.map((i: any, index: number) => <li key={index}>{i.quantity}× {products.find(p => p.id === i.productId)?.name ?? 'Produto'}{i.notes ? ' · ' + i.notes : ''}{i.modifiers?.length ? ' · ' + i.modifiers.map((m: any) => m.optionName).join(', ') : ''}</li>)}</ul>{r.deliveryAddress && <p>{r.deliveryAddress.street}, {r.deliveryAddress.number} · {r.deliveryAddress.neighborhood}</p>}<div className="d26-delivery-actions"><button disabled={busy} onClick={() => void action(() => call('/api/ops/delivery-decision', {
               id: r.id,
               accept: true
             }))}>Conferido · aceitar</button><button disabled={busy} onClick={() => void action(() => call('/api/ops/delivery-decision', {

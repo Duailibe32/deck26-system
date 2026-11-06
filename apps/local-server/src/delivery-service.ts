@@ -12,6 +12,7 @@ export const deliveryServiceSchema = z.object({
   }).strict().refine(v => v.open !== v.close, 'Abertura e fechamento devem ser diferentes.')).max(28).default([]),
   closedDates: z.array(z.iso.date()).max(180).default([]),
   suggestionIds: z.array(z.string().min(1).max(100)).max(8).default([]),
+  acceptanceSlaMinutes: z.number().int().min(1).max(120).default(3),
   slaMinutes: z.number().int().min(5).max(240).default(30)
 }).strict();
 export type DeliveryService = z.infer<typeof deliveryServiceSchema>;
@@ -62,3 +63,5 @@ export function packageLabel(order: DeliveryOrder, items: Array<{
   const clean = (v: unknown) => String(v ?? '').replace(/[\x00-\x1f\x7f]/g, ' ').slice(0, 200);
   return ['DECK 26 · EXPEDIÇÃO', 'PEDIDO #' + order.orderNumber, 'Cliente: ' + clean(order.customerName), order.deliveryType === 'TAKEOUT' ? 'RETIRADA NO BALCÃO' : 'ENTREGA', ...(order.deliveryAddress ? ['Endereço: ' + clean(order.deliveryAddress.street) + ', ' + clean(order.deliveryAddress.number), 'Bairro: ' + clean(order.deliveryAddress.neighborhood), 'Referência: ' + clean(order.deliveryAddress.reference)] : []), '--------------------------------', ...items.flatMap(i => [i.quantity + 'x ' + clean(i.productName), ...(i.modifiers ?? []).map(m => '  + ' + clean(m.optionName)), ...(i.notes ? ['  OBS: ' + clean(i.notes)] : [])]), '--------------------------------', 'Conferido por: __________________', 'Volumes: ____ de ____', 'SIMULAÇÃO · SEM VALIDADE FISCAL'].join('\n');
 }
+
+export function pendingWaitMinutes(createdAt:string,at=Date.now()){const timestamp=Date.parse(createdAt);return Number.isFinite(timestamp)?Math.max(0,Math.floor((at-timestamp)/60000)):0;}

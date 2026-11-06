@@ -128,7 +128,7 @@ Na rede local, o endereço é http://IP-DO-PC:4800/?delivery=1 para o cliente e 
 
 ## Evidências e limites
 
-A entrega atual possui 227 testes automatizados, incluindo os 182 anteriores, além de verificação de tipos e compilação Windows. As conferências usam bancos temporários: promoção e expiração, escolhas obrigatórias, consumo de cinco unidades por combo, lote com balanço de massa e rollback, café e excedente, convênio sem receita/recebimento duplicado, migração persistente e permissões. A interface foi conferida no navegador, inclusive em largura de celular. O celular físico e a rede do estabelecimento precisam da sua conferência local.
+A entrega atual possui 241 testes automatizados, incluindo os 182 anteriores, além de verificação de tipos e compilação Windows. As conferências usam bancos temporários: promoção e expiração, escolhas obrigatórias, consumo de cinco unidades por combo, lote com balanço de massa e rollback, café e excedente, convênio sem receita/recebimento duplicado, migração persistente e permissões. A interface foi conferida no navegador, inclusive em largura de celular. O celular físico e a rede do estabelecimento precisam da sua conferência local.
 
 Continuam fora da emissão operacional: certificado A1, XML/assinatura, transmissão direta à SEFAZ/prefeitura, DANFE/QR fiscal oficial e contingência fiscal oficial. Como combinado, essa etapa fiscal foi adiada até haver os dados e o certificado. Impressão física depende das impressoras; envio de WhatsApp e cobrança bancária não são automáticos. Os testes não equivalem a homologação fiscal ou de hardware.
 

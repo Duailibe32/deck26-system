@@ -595,7 +595,7 @@ describe('DECK 26 — ETAPA 6: Delivery Próprio, Gestão Financeira, Fluxo de C
       store.checkInHotelStay({
         roomNumber: '101',
         guestId: guest.id,
-        checkOutScheduledAt: '2026-11-06T12:00:00.000Z',
+        checkOutScheduledAt: new Date(Date.now() + 86400000).toISOString(),
         dailyRateCents: 0,
         operatorUserId: 'usr-reception-01',
         operatorName: 'Recepção'

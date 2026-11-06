@@ -23,7 +23,7 @@ Dados persistentes no computador do estabelecimento, com acesso pela rede Wi-Fi.
 ---
 
 > **Estado da entrega · Etapa 7A revisada, antes da 7B**<br>
-> Aplicativo Windows compilado, API local e banco persistente; **227 testes automatizados aprovados** na entrega atual de 06/11/2026. Emissão fiscal real, impressão física e publicação na internet têm pendências próprias, detalhadas [abaixo](#limites). O sistema não efetua cobranças bancárias automaticamente.
+> Aplicativo Windows compilado, API local e banco persistente; **241 testes automatizados aprovados** na entrega atual de 06/11/2026. Emissão fiscal real, impressão física e publicação na internet têm pendências próprias, detalhadas [abaixo](#limites). O sistema não efetua cobranças bancárias automaticamente.
 
 <a id="experiencia"></a>
 
@@ -101,6 +101,14 @@ Fichas técnicas, combos, produção interna, compras por fornecedor, alertas de
 **As cores ajudam; os textos confirmam.** 🟢 Livre · 🟡 Ocupada · 🔴 Aguardando pagamento/chamado · 🔵 Limpeza · ⚪ Indisponível. A identidade combina rosa `#F72585`, preto `#111111`, roxo `#7209B7` e tons neutros, com áreas de toque amplas.
 
 O cadastro inicial inclui **93 produtos e 24 apartamentos, dos quais 12 estão ativos para operação**. A atualização preserva a numeração real e as unidades em construção. Preços, tarifas, saldos e permissões precisam ser revisados pelo responsável.
+
+### Estoque mais fácil e cardápio com fotos
+
+Busca por nome/código, filtros de reposição, unidade real e ações de entrada, saída e contagem no cartão. A contagem recebe o total encontrado, calcula a diferença e confere o saldo antes de gravar. Reenvios não duplicam o lançamento.
+
+A gerência pode adicionar fotos locais em **Estoque → Fotos do cardápio**. O cliente escolhe **Entrega / Retirada** por botões amplos. Na expedição, solicitações sem aceite têm meta, destaque e som opcional.
+
+Veja o [registro e as evidências](docs/MELHORIAS_ESTOQUE_CARDAPIO_20261106.md), o [checklist em texto](docs/CHECKLIST_ESTOQUE_CARDAPIO.md) e a [versão interativa](docs/CHECKLIST_ESTOQUE_CARDAPIO.html).
 
 ### Delivery com expedição visual
 
@@ -291,7 +299,7 @@ Para conhecer somente a prévia visual, use `npm run dev:web`. Os scripts carreg
 | `npm run build:windows:local` | Compila a versão nativa operacional no Windows. |
 | `npm run build:windows:test` | Compila o ambiente nativo de testes, separado da operação. |
 
-A evolução de delivery foi validada com **227 testes**. Na entrega funcional anterior de **06/11/2026**, os **212 testes** passaram, incluindo os **182 anteriores**, com verificação de tipos, smoke das APIs e compilação Windows. A CI principal também aprovou tipos, testes, auditoria npm e build do [commit funcional 714db78](https://github.com/Duailibe32/deck26-system/commit/714db78d09e8cd5e442877b6b9801d3fc0faec16). Os selos no topo levam aos workflows; consulte as execuções para ver o resultado de cada commit. Eles não representam uma certificação do produto.
+A entrega atual de estoque e cardápio passou em **241 testes**. A evolução anterior de delivery foi validada com **227 testes**. Na entrega funcional anterior de **06/11/2026**, os **212 testes** passaram, incluindo os **182 anteriores**, com verificação de tipos, smoke das APIs e compilação Windows. A CI principal também aprovou tipos, testes, auditoria npm e build do [commit funcional 714db78](https://github.com/Duailibe32/deck26-system/commit/714db78d09e8cd5e442877b6b9801d3fc0faec16). Os selos no topo levam aos workflows; consulte as execuções para ver o resultado de cada commit. Eles não representam uma certificação do produto.
 
 As verificações cobrem autenticação, permissões, reenvio sem duplicação, rollback financeiro, PMS, estoque, promoções, escolhas obrigatórias, combos, produção, café, convênios e migração persistente. Bancos de teste são isolados. A interface foi conferida no navegador em tamanhos desktop e celular; isso não substitui teste no aparelho físico.
 

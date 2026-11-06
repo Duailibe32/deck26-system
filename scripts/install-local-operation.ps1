@@ -32,3 +32,6 @@ Write-Output ('Dados próprios: '+$DataDirectory)
 
 Copy-Item -LiteralPath (Join-Path $repo 'docs\CHECKLIST_DELIVERY.html') -Destination (Join-Path $ApplicationDirectory 'CHECKLIST DELIVERY.html') -Force
 Copy-Item -LiteralPath (Join-Path $repo 'docs\CHECKLIST_DELIVERY.md') -Destination (Join-Path $ApplicationDirectory 'CHECKLIST DELIVERY.md') -Force
+
+Copy-Item -LiteralPath (Join-Path $repo 'docs\CHECKLIST_ESTOQUE_CARDAPIO.html') -Destination (Join-Path $ApplicationDirectory 'CHECKLIST ESTOQUE E CARDAPIO.html') -Force
+Copy-Item -LiteralPath (Join-Path $repo 'docs\CHECKLIST_ESTOQUE_CARDAPIO.md') -Destination (Join-Path $ApplicationDirectory 'CHECKLIST ESTOQUE E CARDAPIO.md') -Force

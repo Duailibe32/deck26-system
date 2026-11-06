@@ -181,6 +181,7 @@ export class LocalOperationalStore {
       this.db.exec(fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../../../packages/contracts/migrations/local/0009_fiscal_preparation.sql'),'utf8'));
       this.db.exec(fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../../../packages/contracts/migrations/local/0010_pos_workspace.sql'),'utf8'));
       if(!this.db.prepare("SELECT version FROM schema_migrations WHERE version='0011_operation_extensions'").get())this.atomic(()=>this.db.exec(fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../../../packages/contracts/migrations/local/0011_operation_extensions.sql'),'utf8')));
+      if(!this.db.prepare("SELECT version FROM schema_migrations WHERE version='0012_product_photos'").get())this.atomic(()=>this.db.exec(fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../../../packages/contracts/migrations/local/0012_product_photos.sql'),'utf8')));
       this.seedBaseCatalogAndInfrastructure();
     } catch (err) {
       try {

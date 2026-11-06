@@ -1,5 +1,7 @@
 # Testes e validação
 
+> Atualização de 06/11/2026: 241 testes aprovados, checagem de tipos, smoke das APIs e compilação Windows. Veja [estoque, fotos e atendimento](MELHORIAS_ESTOQUE_CARDAPIO_20261106.md). Os números de revisões anteriores abaixo são históricos.
+
 Execute na raiz: npm ci, npm run typecheck, npm test, npm run build e npm audit --audit-level=moderate.
 
 Em 05/11/2026: 140 testes em oito arquivos aprovados, além de scripts/smoke-runtime.mjs, que importa e inicia as duas APIs pelo Node e verifica integridade referencial. O smoke existe porque o ciclo de importação fiscal passava pelo Vitest e impedia a inicialização real.

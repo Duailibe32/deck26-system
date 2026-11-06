@@ -1,3 +1,4 @@
+import {registerStockExperienceRoutes} from './stock-experience.js';
 import {registerExtensionRoutes} from './extension-routes.js';
 import {stayOptionsSchema,extensionSettings} from './extension-models.js';
 import {registerDesktopRoutes} from './desktop-routes.js';
@@ -2948,6 +2949,7 @@ export async function buildLocalServer(options?: {
   });
 
   registerExtensionRoutes(app,store,authorizePermission);
+  registerStockExperienceRoutes(app,store,authorizePermission);
   registerDesktopRoutes(app,store,authorizePermission,resolveSession);
   registerOperationRoutes(app,store,authorizePermission);
   registerFiscalPreparationRoutes(app,store,authorizePermission);
