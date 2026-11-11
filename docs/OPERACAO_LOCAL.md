@@ -36,11 +36,26 @@ A regra de firewall permite somente TCP 4800 do Node.js, no IPv4 privado do PC e
 
 Os links por mesa estão em **Garçons (Wi-Fi)**. QR de cliente apresenta somente o cardápio público; os pedidos exigem aprovação por padrão e só entram na conta após aprovação.
 
-## Caixa e cozinha: simulação térmica
+## Caixa e cozinha: impressão térmica
 
 Em **Impressoras**, existem modelos de produção, pré-conta, recibo de pagamento e fechamento. Em **Administração**, selecione bobinas de 58 ou 80 mm para caixa e cozinha. A cada trabalho de impressão, o simulador grava uma via HTML em `impressoes-simuladas`. Exemplos independentes ficam em `modelos-de-impressao` (quatro modelos, duas larguras).
 
-Abra as vias pelo painel ou pelo arquivo HTML e use o navegador para imprimir/salvar em PDF. As vias estão identificadas como simulação, sem validade fiscal e sem equipamento acionado. O sistema não marca uma simulação como impressão física concluída. A autorização de segunda via é auditada. A integração física USB/rede e a homologação do equipamento ainda precisam ser feitas quando houver as impressoras.
+Abra as vias simuladas pelo painel ou pelo arquivo HTML para conferir o modelo. Para usar uma impressora térmica ESC/POS em USB ou rede, instale a fila do fabricante no Windows e confira o nome em **Impressoras e scanners**. Feche o aplicativo e crie `impressoras-windows.json` na pasta dos dados operacionais:
+
+```json
+{
+  "PRINTER_CASHIER": "Nome da fila térmica do caixa",
+  "PRINTER_KITCHEN": "Nome da fila térmica da cozinha"
+}
+```
+
+Abra o aplicativo novamente. A fila da cozinha recebe as vias de cozinha quente, fria, chapa e bar. Se houver filas separadas, informe `PRINTER_KITCHEN_HOT`, `PRINTER_KITCHEN_COLD`, `PRINTER_GRIDDLE` ou `PRINTER_BAR` no mesmo arquivo. Destinos sem configuração física usam o simulador. Na primeira ativação, vias antigas só entram na impressão física se uma nova cópia for autorizada.
+
+Em **Impressoras → Falhas**, consulte o motivo. Se o Windows recebeu a via e informar falta de papel ou pausa, corrija o equipamento e aguarde a mesma via. Se houve recusa antes da entrega, use **Reenviar a mesma via**. Se o resultado for desconhecido, confira a fila do Windows e o papel antes de confirmar a saída ou autorizar a segunda via. Valide com um pedido fictício, teste sem papel e confira a recuperação antes de usar em atendimento.
+
+## Inventário pelo celular
+
+Na mesma rede, abra o endereço local do computador principal com `/?terminal=estoque` e entre com um PIN autorizado para estoque. Informe o local, busque por nome, SKU ou código de barras e registre a quantidade de cada prateleira. Confira todos os locais de cada produto incluído, revise as divergências e confirme. O inventário é aplicado em uma transação, e o sistema pede nova contagem se alguma venda ou movimentação alterar o saldo durante a conferência.
 
 ## Backup e continuidade
 

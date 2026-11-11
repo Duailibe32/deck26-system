@@ -963,6 +963,28 @@ describe('Expedição e cardápio com disponibilidade controlada',()=>{
 });
 
 describe('Estoque rápido, fotos e fila sem aceite',()=>{
+ it('soma prateleiras, aplica o inventário em lote e bloqueia reenvios alterados',async()=>{
+   const {app,headers,product,store}=await fixture();
+   const a=product('Estoque em dois locais'),b=product('Estoque concorrente');
+   const url='/api/ops/shelf-inventory';
+   const lines=[
+     {productId:a.id,shelf:'Balcão',quantity:3,expectedQuantity:20},
+     {productId:a.id,shelf:'Depósito',quantity:5,expectedQuantity:20},
+     {productId:b.id,shelf:'Cozinha',quantity:20,expectedQuantity:19}
+   ];
+   const idempotencyKey='inventory-'+'b'.repeat(32);
+   expect((await app.inject({method:'POST',url,headers,payload:{idempotencyKey,lines}})).statusCode).toBe(400);
+   expect(store.getProductStockQuantity(a.id)).toBe(20);
+   lines[2]!.expectedQuantity=20;
+   const post=()=>app.inject({method:'POST',url,headers,payload:{idempotencyKey,lines}});
+   expect((await post()).json()).toMatchObject({products:2,adjusted:1,idempotentReplay:false});
+   expect((await post()).json()).toMatchObject({idempotentReplay:true});
+   expect(store.getProductStockQuantity(a.id)).toBe(8);
+   expect(store.getProductStockQuantity(b.id)).toBe(20);
+   lines[0]!.quantity=4;
+   expect((await post()).statusCode).toBe(400);
+   expect(store.getProductStockQuantity(a.id)).toBe(8);
+ });
  const stockBody=(id:string,key='d',extra:Record<string,unknown>={})=>({idempotencyKey:'stock-ui-'+key.repeat(32),productId:id,mode:'ENTRY',quantity:5,expectedQuantity:20,reason:'Conferência fixture',...extra});
  it('entrada avulsa é auditada, não gera cobrança e reenvio não duplica',async()=>{const {app,headers,product,store}=await fixture();const p=product('Entrada rápida fixture');const payload=stockBody(p.id);const first=await app.inject({method:'POST',url:'/api/ops/stock-quick',headers,payload});expect(first.statusCode).toBe(200);expect(first.json().currentQuantity).toBe(25);const replay=await app.inject({method:'POST',url:'/api/ops/stock-quick',headers,payload});expect(replay.json().idempotentReplay).toBe(true);expect(store.getProductStockQuantity(p.id)).toBe(25);expect(store.listFinancialTransactions()).toHaveLength(0);expect(store.listAccountsReceivable()).toHaveLength(0);expect((store.db.prepare("SELECT COUNT(*) AS n FROM audit_logs WHERE action='STOCK_QUICK_RECORDED'").get() as any).n).toBe(1);});
  it('reenvio alterado é recusado sem aplicar uma segunda entrada',async()=>{const {app,headers,product,store}=await fixture();const p=product('Reenvio estoque fixture'),payload=stockBody(p.id);await app.inject({method:'POST',url:'/api/ops/stock-quick',headers,payload});const changed=await app.inject({method:'POST',url:'/api/ops/stock-quick',headers,payload:{...payload,quantity:8}});expect(changed.statusCode).toBe(400);expect(store.getProductStockQuantity(p.id)).toBe(25);});

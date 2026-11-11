@@ -4,6 +4,7 @@ import { hasPermission } from '@deck26/contracts';
 import { randomBrowserId } from './browserIds.js';
 import { parseMoney } from './desktopModels.js';
 import { ProductPhotoManager } from './ProductPhotos.js';
+import { ShelfInventory } from './ShelfInventory.js';
 import './stock-workspace.css';
 type Balance = {
   productId: string;
@@ -52,7 +53,7 @@ export function StockWorkspace({
   refresh: () => Promise<void>;
 }) {
   const key = 'deck26:stock-quick:' + userId;
-  const [pane, setPane] = useState<'BALANCES' | 'HISTORY' | 'PHOTOS'>('BALANCES'),
+  const [pane, setPane] = useState<'BALANCES' | 'HISTORY' | 'PHOTOS' | 'INVENTORY'>(()=>new URLSearchParams(window.location.search).get('terminal')==='estoque'?'INVENTORY':'BALANCES'),
     [query, setQuery] = useState(''),
     [category, setCategory] = useState('ALL'),
     [filter, setFilter] = useState('ALL'),
@@ -156,9 +157,10 @@ export function StockWorkspace({
     }
   };
   return <section className="d26-stock-workspace"><header className="d26-stock-hero"><div><small>DECK 26 · ESTOQUE SEM COMPLICAÇÃO</small><h2>Encontre. Confira. Movimente.</h2><p>Quantidade e unidade sempre à vista. Toda alteração mantém seu histórico.</p></div><button disabled={busy} onClick={() => void refresh().catch(() => setMessage('Não foi possível atualizar.'))}>↻ Atualizar saldos</button></header>
- <nav aria-label="Áreas do estoque"><button aria-pressed={pane === 'BALANCES'} onClick={() => setPane('BALANCES')}>Saldos & movimentos</button><button aria-pressed={pane === 'HISTORY'} onClick={() => setPane('HISTORY')}>Histórico recente</button>{hasPermission(role, 'catalog:manage') && <button aria-pressed={pane === 'PHOTOS'} onClick={() => setPane('PHOTOS')}>Fotos do cardápio</button>}</nav>
+ <nav aria-label="Áreas do estoque"><button aria-pressed={pane === 'BALANCES'} onClick={() => setPane('BALANCES')}>Saldos & movimentos</button><button aria-pressed={pane === 'INVENTORY'} onClick={() => setPane('INVENTORY')}>Inventário por prateleira</button><button aria-pressed={pane === 'HISTORY'} onClick={() => setPane('HISTORY')}>Histórico recente</button>{hasPermission(role, 'catalog:manage') && <button aria-pressed={pane === 'PHOTOS'} onClick={() => setPane('PHOTOS')}>Fotos do cardápio</button>}</nav>
+ {pane==='INVENTORY'&&<ShelfInventory key={userId} api={api} headers={headers} userId={userId} products={tracked} balance={balance} refresh={refresh}/>}
  {message && <p role="status" className="d26-stock-message">{message}</p>}{pending && <aside className="d26-stock-message">Envio sem confirmação. Os dados originais estão guardados para evitar duplicação. <button disabled={busy} onClick={() => void submit()}>Reenviar operação original</button></aside>}
- {pane === 'PHOTOS' ? <ProductPhotoManager api={api} headers={headers} products={products} refresh={refresh} /> : <><div className="d26-stock-stats"><button aria-pressed={filter === 'ALL'} onClick={() => {
+ {pane === 'INVENTORY' ? null : pane === 'PHOTOS' ? <ProductPhotoManager api={api} headers={headers} products={products} refresh={refresh} /> : <><div className="d26-stock-stats"><button aria-pressed={filter === 'ALL'} onClick={() => {
           setFilter('ALL');
           setPane('BALANCES');
         }}><span>Produtos controlados</span><b>{tracked.length}</b></button><button aria-pressed={filter === 'LOW'} onClick={() => {

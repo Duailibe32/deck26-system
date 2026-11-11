@@ -163,6 +163,7 @@ O assistente mostra a versão, a pasta do aplicativo e a pasta dos dados. Cada v
 - Em um PC sem acesso ao GitHub privado, transfira o instalador verificado. O aplicativo opera normalmente pela rede local depois da instalação.
 - O Dependabot monitora dependências npm, Rust e GitHub Actions e abre pull requests. A versão operacional usa as dependências do lockfile da compilação selecionada.
 - Em **Administração → Acesso e continuidade**, consulte os links para o celular, a versão, o último ensaio de restauração e as prévias térmicas do caixa e da cozinha.
+- Veja no [guia de operação](docs/OPERACAO_LOCAL.md) como vincular filas térmicas do Windows, recuperar vias com falha e acessar o inventário por prateleira pelo celular.
 
 ### Compilar e empacotar a partir do código
 

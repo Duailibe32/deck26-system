@@ -72,6 +72,54 @@ export function quickStock(store: LocalOperationalStore, raw: unknown, actor: Ac
     return result;
   });
 }
+
+const shelfInventorySchema=z.object({
+  idempotencyKey:z.string().regex(/^inventory-[a-f0-9]{32}$/),
+  lines:z.array(z.object({
+    productId:z.string().min(1).max(100),
+    shelf:z.string().trim().min(1).max(60),
+    quantity,
+    expectedQuantity:z.number().finite()
+  }).strict()).min(1).max(600)
+}).strict();
+
+function commitShelfInventory(store:LocalOperationalStore,raw:unknown,actor:Actor){
+  const data=shelfInventorySchema.parse(raw);
+  const hash=crypto.createHash('sha256').update(JSON.stringify({data,actorId:actor.userId})).digest('hex');
+  return store.runOperationalTransaction(()=>{
+    const previous=store.db.prepare("SELECT metadata_json FROM audit_logs WHERE entity_type='SHELF_INVENTORY' AND entity_id=?").get(data.idempotencyKey);
+    if(previous){
+      const metadata=JSON.parse(String(previous.metadata_json));
+      if(metadata.hash!==hash)throw Error('Este inventário já foi enviado com outros dados.');
+      return {...metadata.result,idempotentReplay:true};
+    }
+    const byProduct=new Map<string,{expectedQuantity:number;count:number;shelves:Map<string,string>}>();
+    for(const line of data.lines){
+      const entry=byProduct.get(line.productId)??{expectedQuantity:line.expectedQuantity,count:0,shelves:new Map<string,string>()};
+      const shelfKey=line.shelf.toLocaleLowerCase('pt-BR');
+      if(entry.shelves.has(shelfKey)||line.expectedQuantity!==entry.expectedQuantity)throw Error('Confira as contagens repetidas ou os saldos de referência de cada produto.');
+      entry.shelves.set(shelfKey,line.shelf);
+      entry.count+=Math.round(line.quantity*1000);
+      byProduct.set(line.productId,entry);
+    }
+    const records=[...byProduct].map(([productId,entry])=>{
+      const product=store.getProductById(productId);
+      if(!product?.active||!product.trackStock)throw Error('Um dos produtos deixou de aceitar contagem.');
+      if(Math.abs(store.getProductStockQuantity(productId)-entry.expectedQuantity)>0.000001){
+        throw Error('O saldo de '+product.name+' mudou. Atualize e reconte esse produto antes de confirmar.');
+      }
+      const operationId=crypto.createHash('sha256').update(JSON.stringify([data.idempotencyKey,productId])).digest('hex').slice(0,32);
+      return quickStock(store,{
+        idempotencyKey:'stock-ui-'+operationId,productId,mode:'COUNT',quantity:entry.count/1000,expectedQuantity:entry.expectedQuantity,
+        reason:('Inventário físico · '+[...entry.shelves.values()].join(', ')).slice(0,280)
+      },actor);
+    });
+    const result={products:records.length,adjusted:records.filter(record=>record.delta!==0).length};
+    store.recordAuditLog({actorUserId:actor.userId,action:'SHELF_INVENTORY_COMMITTED',entityType:'SHELF_INVENTORY',entityId:data.idempotencyKey,
+      metadata:{hash,result,lines:data.lines}});
+    return {...result,idempotentReplay:false};
+  });
+}
 /** Only locally compressed JPEGs are stored. No external URL or SVG is accepted. */
 export function decodeProductPhoto(value: string) {
   if (!value.startsWith('data:image/jpeg;base64,') || value.length > 850000) throw Error('Use uma foto JPEG de até 600 KB.');
@@ -100,6 +148,12 @@ export function decodeProductPhoto(value: string) {
   return bytes;
 }
 export function registerStockExperienceRoutes(app: FastifyInstance, store: LocalOperationalStore, auth: Auth) {
+  app.post('/api/ops/shelf-inventory',(req,reply)=>{
+    const actor=auth(req,reply,'stock:adjust');
+    if(!actor)return;
+    try{return commitShelfInventory(store,req.body,actor);}
+    catch(error){return reply.code(400).send({error:error instanceof z.ZodError?'Confira os produtos, as prateleiras e as quantidades.':(error as Error).message});}
+  });
   app.post('/api/ops/stock-quick', (req, reply) => {
     const actor = auth(req, reply, 'stock:adjust');
     if (!actor) return;

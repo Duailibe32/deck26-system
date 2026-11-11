@@ -4,6 +4,7 @@ import {stayOptionsSchema,extensionSettings} from './extension-models.js';
 import {registerDesktopRoutes} from './desktop-routes.js';
 import {registerFiscalPreparationRoutes} from './fiscal-preparation-routes.js';
 import {registerOperationRoutes} from './operation-routes.js';
+import type {WindowsPrintTargets,WindowsPrintTransport} from './windows-printing.js';
 /**
  * DECK 26 — Servidor Operacional Local (Fastify + SQLite WAL + Autenticação Real & Autorização RBAC)
  *
@@ -140,6 +141,7 @@ export async function buildLocalServer(options?: {
   cloudApiUrl?: string;
   requireStrictAuth?: boolean;
   demoMode?: boolean;
+  windowsPrinting?: {targets:WindowsPrintTargets;send:WindowsPrintTransport;enabledSince:string};
 }): Promise<{
   app: FastifyInstance;
   store: LocalOperationalStore;
@@ -1440,6 +1442,10 @@ export async function buildLocalServer(options?: {
   app.patch<{ Params: { id: string } }>('/api/print-jobs/:id/status', async (req, reply) => {
     const session = authorizePermission(req, reply, 'printers:manage');
     if (!session) return;
+    const job=store.getPrintJob(req.params.id);
+    if(job&&(options?.windowsPrinting?.targets[job.targetPrinter]||store.db.prepare('SELECT 1 FROM windows_print_dispatches WHERE job_id=? AND copy_number=?').get(job.id,job.copyNumber??1))){
+      return reply.code(409).send({error:'A via é controlada pela fila do Windows.'});
+    }
 
     const parsed = UpdatePrintJobStatusSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -1463,6 +1469,10 @@ export async function buildLocalServer(options?: {
   app.post<{ Params: { id: string } }>('/api/print-jobs/:id/mark-printed', async (req, reply) => {
     const session = authorizePermission(req, reply, 'printers:manage');
     if (!session) return;
+    const job=store.getPrintJob(req.params.id);
+    if(job&&(options?.windowsPrinting?.targets[job.targetPrinter]||store.db.prepare('SELECT 1 FROM windows_print_dispatches WHERE job_id=? AND copy_number=?').get(job.id,job.copyNumber??1))){
+      return reply.code(409).send({error:'Use a confirmação da via na fila do Windows.'});
+    }
 
     try {
       const job = store.markPrintJobPrinted(req.params.id);
@@ -2959,7 +2969,7 @@ export async function buildLocalServer(options?: {
   registerExtensionRoutes(app,store,authorizePermission);
   registerStockExperienceRoutes(app,store,authorizePermission);
   registerDesktopRoutes(app,store,authorizePermission,resolveSession);
-  registerOperationRoutes(app,store,authorizePermission);
+  registerOperationRoutes(app,store,authorizePermission,options?.windowsPrinting);
   registerFiscalPreparationRoutes(app,store,authorizePermission);
   return {
     app,

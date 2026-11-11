@@ -5,6 +5,7 @@ import os from 'node:os';
 import {DatabaseSync} from 'node:sqlite';
 import {buildLocalServer} from './server.js';
 import {renderThermalPreview} from './thermal-preview.js';
+import {createWindowsPrintQueue,type WindowsPrintTransport} from './windows-printing.js';
 const cleanup:Array<()=>Promise<void>>=[];
 afterEach(async()=>{for(const close of cleanup.splice(0).reverse())await close();vi.unstubAllEnvs();});
 async function fixture(importCatalog=true){
@@ -120,5 +121,38 @@ describe('Instalação operacional local, operadores e impressão virtual',()=>{
     const {app,store,headers}=await fixture(false);const before=store.listFinancialTransactions().length;
     const model=await app.inject({url:'/api/operation/print-models/bill',headers});expect(model.json().html).toContain('SEM VALIDADE FISCAL');expect(store.listFinancialTransactions()).toHaveLength(before);
     const html=renderThermalPreview('<script>alert(1)</script>',58,'Caixa');expect(html).toContain('58mm');expect(html).toContain('&lt;script&gt;');expect(html).not.toContain('<script>');
+  });
+  it('preserva a via ao faltar papel e só permite repetir um envio recusado antes da entrega',async()=>{
+    const {store}=await fixture();
+    const product=store.getCatalog().products[0]!;
+    store.db.prepare('UPDATE catalog_products SET track_stock=0 WHERE id=?').run(product.id);
+    const table=store.openTable({tableNumber:1});
+    store.createOrder({tabId:table.tab.id,tableNumber:1,originNode:'WAITER_MOBILE',channel:'DINE_IN',idempotencyKey:'windows-print-test',
+      items:[{productId:product.id,quantity:1}]});
+    const job=store.listPrintJobs()[0]!;
+    const send=vi.fn<WindowsPrintTransport>()
+      .mockResolvedValueOnce({state:'REJECTED',message:'Impressora indisponível'})
+      .mockResolvedValueOnce({state:'ACCEPTED',jobId:12})
+      .mockResolvedValueOnce({state:'WAITING',message:'Sem papel'})
+      .mockResolvedValueOnce({state:'UNKNOWN'});
+    const targets={[job.targetPrinter]:'Cozinha Windows'};
+    const queue=createWindowsPrintQueue(store,targets,send,()=>80,'1970-01-01');
+    await Promise.all([queue.poll(),queue.poll()]);
+    expect(store.getPrintJob(job.id)).toMatchObject({status:'FAILED'});
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(queue.retry(job.id,1,'usr-owner-01')).toMatchObject({status:'QUEUED',copyNumber:1});
+    expect(()=>queue.retry(job.id,1,'usr-owner-01')).toThrow();
+    await queue.poll();
+    expect(send.mock.calls[0]?.[0].title).toBe(send.mock.calls[1]?.[0].title);
+    const restarted=createWindowsPrintQueue(store,targets,send,()=>80,'1970-01-01');
+    await restarted.poll();
+    expect(send.mock.calls[2]?.[0]).toMatchObject({mode:'inspect',spoolId:12});
+    expect(store.getPrintJob(job.id)).toMatchObject({status:'SENDING',lastError:'Sem papel'});
+    expect(()=>store.reprintJob(job.id,'usr-owner-01',1)).toThrow();
+    await restarted.poll();
+    await restarted.poll();
+    expect(store.getPrintJob(job.id)).toMatchObject({status:'UNKNOWN_OUTCOME',copyNumber:1});
+    expect(()=>restarted.retry(job.id,1,'usr-owner-01')).toThrow();
+    expect(send).toHaveBeenCalledTimes(4);
   });
 });

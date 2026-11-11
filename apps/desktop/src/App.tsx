@@ -97,6 +97,7 @@ import { ReportsModule } from './ReportsModule.js';
 
 interface CashierOperationalSummary {
   activeSession: CashRegisterSession | null;
+  activeShiftReceivedByMethod?: Record<PaymentMethod, number>;
   recentSessions: CashRegisterSession[];
   movements: CashRegisterMovement[];
   financialSummary: {
@@ -485,7 +486,9 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
         name: data.user.name,
         role: data.user.role
       });
-      setInterfaceMode('SIMPLIFIED');setActiveModule(roleHome(data.user.role));
+      const stockTerminal=new URLSearchParams(window.location.search).get('terminal')==='estoque';
+      setInterfaceMode('SIMPLIFIED');
+      setActiveModule(stockTerminal&&hasPermission(data.user.role,'stock:adjust')?'estoque':roleHome(data.user.role));
       setShowPinModal(false);setPinInput('');
       notify(`Bem-vindo, ${data.user.name}.`);
     } catch {
@@ -3027,8 +3030,17 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
                       <h3>Conferência de fechamento</h3>
                       <dl>
                         <div><dt>Dinheiro esperado</dt><dd>{formatBrlCents(currentCashSession?.expectedCashCents??0)}</dd></div>
-                        <div><dt>PIX registrado</dt><dd>{formatBrlCents(snapshot.cashierSummary.financialSummary.receivedByMethod.PIX??0)}</dd></div>
-                        <div><dt>Cartão registrado</dt><dd>{formatBrlCents((snapshot.cashierSummary.financialSummary.receivedByMethod.CREDIT_CARD??0)+(snapshot.cashierSummary.financialSummary.receivedByMethod.DEBIT_CARD??0))}</dd></div>
+                        {([
+                          ['CASH','Dinheiro registrado no turno'],
+                          ['PIX','PIX do turno'],
+                          ['CREDIT_CARD','Crédito do turno'],
+                          ['DEBIT_CARD','Débito do turno'],
+                          ['ROOM_CHARGE','Lançamentos em quartos'],
+                          ['VOUCHER','Vouchers do turno']
+                        ] as const).map(([method,label])=>{
+                          const amount=snapshot.cashierSummary?.activeShiftReceivedByMethod?.[method];
+                          return <div key={method}><dt>{label}</dt><dd>{amount===undefined?'—':formatBrlCents(amount)}</dd></div>;
+                        })}
                       </dl>
                       <label>Dinheiro contado<input className="d26-input" inputMode="decimal" required value={cashShiftCountedReais} disabled={cashCloseBusy} onChange={event=>setCashShiftCountedReais(event.target.value)}/></label>
                       {cashDifference!==null&&<p role="status" data-difference={cashDifference!==0}>{cashDifference===0?'Dinheiro conferido':(cashDifference<0?'Falta ':'Sobra ')+formatBrlCents(Math.abs(cashDifference))}</p>}

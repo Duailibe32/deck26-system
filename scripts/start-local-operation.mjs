@@ -7,6 +7,7 @@ import {fileURLToPath} from 'node:url';
 import fastifyStatic from '@fastify/static';
 import {buildLocalServer} from '../apps/local-server/src/server.ts';
 import {renderThermalPreview,thermalModels} from '../apps/local-server/src/thermal-preview.ts';
+import {WindowsPrintConfigurationSchema,resolveWindowsPrintTargets,windowsPrintTransport} from '../apps/local-server/src/windows-printing.ts';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const directory=path.resolve(process.env.DECK26_OPERATION_DATA_DIR??path.join(os.homedir(),'Deck26','DadosOperacionais'));
 const ui=path.resolve(process.env.DECK26_OPERATION_UI_DIR??path.join(root,'apps','desktop','dist'));
@@ -31,7 +32,15 @@ process.env.DECK26_OPERATION_DATA_DIR=directory;process.env.DECK26_AUTH_SECRET=s
 process.env.PORT='4800';process.env.DECK26_CLOUD_API_URL='http://127.0.0.1:4799';
 delete process.env.DECK26_BOOTSTRAP_PIN;delete process.env.DECK26_SYNC_SECRET;
 process.env.DECK26_ALLOWED_ORIGINS=['http://tauri.localhost','tauri://localhost','http://localhost:4800','http://127.0.0.1:4800',...networks.map(item=>'http://'+item.address+':4800')].join(',');
-const {app,store}=await buildLocalServer({dbPath:path.join(directory,'deck26-operacao.sqlite'),demoMode:false,requireStrictAuth:true});
+const windowsPrintConfig=path.join(directory,'impressoras-windows.json');
+const windowsPrintHelper=path.join(root,'scripts','windows-package','Imprimir-DECK26.ps1');
+let windowsPrinting;
+if(process.platform==='win32'&&fs.existsSync(windowsPrintHelper)){
+  const configured=fs.existsSync(windowsPrintConfig);
+  const targets=resolveWindowsPrintTargets(WindowsPrintConfigurationSchema.parse(configured?JSON.parse(fs.readFileSync(windowsPrintConfig,'utf8').replace(/^\uFEFF/,'')):{}));
+  windowsPrinting={targets,send:windowsPrintTransport(windowsPrintHelper),enabledSince:configured?fs.statSync(windowsPrintConfig).mtime.toISOString():new Date().toISOString()};
+}
+const {app,store}=await buildLocalServer({dbPath:path.join(directory,'deck26-operacao.sqlite'),demoMode:false,requireStrictAuth:true,windowsPrinting});
 app.addHook('onRequest',async(req,reply)=>{
   const ip=req.ip.replace(/^::ffff:/,'');if(['127.0.0.1','::1'].includes(ip))return;
   if(!networks.some(item=>(numeric(ip)&numeric(item.netmask))===(numeric(item.address)&numeric(item.netmask))))return reply.code(403).send({error:'Acesso disponível somente na rede local do estabelecimento.'});

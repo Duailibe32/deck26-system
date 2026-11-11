@@ -2130,6 +2130,7 @@ describe('@deck26/local-server — Bateria Completa dos 34 Testes Obrigatórios 
 
       const cashSummary = storeRestarted.getCashierOperationalSummary();
       expect(cashSummary.financialSummary.actualReceivedTotalCents).toBe(14080);
+      expect(cashSummary.activeShiftReceivedByMethod).toMatchObject({ CASH: 4000, PIX: 5000, DEBIT_CARD: 5080 });
       expect(cashSummary.financialSummary.totalChangeGivenCents).toBe(1000);
       expect(cashSummary.activeSession?.expectedCashCents).toBe(24000); // 20000 fundo + 4000 dinheiro líquido
 

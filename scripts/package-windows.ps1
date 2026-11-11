@@ -32,7 +32,7 @@ $items = @(
   'apps\local-server\package.json','apps\local-server\src',
   'apps\desktop\package.json','apps\cloud-api\package.json','apps\web\package.json',
   'packages\contracts\package.json','packages\contracts\src','packages\contracts\migrations',
-  'packages\ui\package.json','scripts\open-local-operation.ps1','scripts\start-local-operation.mjs',
+  'packages\ui\package.json','scripts\open-local-operation.ps1','scripts\start-local-operation.mjs','scripts\windows-package\Imprimir-DECK26.ps1',
   'docs\CHECKLIST_OPERACIONAL.html','docs\CHECKLIST_COMPLETO.html','docs\BACKUP_AND_RECOVERY.md'
 )
 foreach ($item in $items) {

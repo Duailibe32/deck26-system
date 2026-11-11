@@ -182,6 +182,7 @@ export class LocalOperationalStore {
       this.db.exec(fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../../../packages/contracts/migrations/local/0010_pos_workspace.sql'),'utf8'));
       if(!this.db.prepare("SELECT version FROM schema_migrations WHERE version='0011_operation_extensions'").get())this.atomic(()=>this.db.exec(fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../../../packages/contracts/migrations/local/0011_operation_extensions.sql'),'utf8')));
       if(!this.db.prepare("SELECT version FROM schema_migrations WHERE version='0012_product_photos'").get())this.atomic(()=>this.db.exec(fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../../../packages/contracts/migrations/local/0012_product_photos.sql'),'utf8')));
+      if(!this.db.prepare("SELECT version FROM schema_migrations WHERE version='0013_windows_print_dispatches'").get())this.atomic(()=>this.db.exec(fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../../../packages/contracts/migrations/local/0013_windows_print_dispatches.sql'),'utf8')));
       this.seedBaseCatalogAndInfrastructure();
     } catch (err) {
       try {
@@ -4669,6 +4670,7 @@ export class LocalOperationalStore {
 
   public getCashierOperationalSummary(): {
     activeSession: CashRegisterSession | null;
+    activeShiftReceivedByMethod: Record<PaymentMethod, number>;
     recentSessions: CashRegisterSession[];
     movements: CashRegisterMovement[];
     financialSummary: {
@@ -4737,6 +4739,12 @@ export class LocalOperationalStore {
       MANUAL_DECLARED: 0,
       ELECTRONIC_PROVIDER_CONFIRMED: 0
     };
+    const activeShiftReceivedByMethod = {...receivedByMethod};
+    if(activeSession){
+      const shiftTotals=this.db.prepare(`SELECT method, SUM(amount_cents) AS amount FROM payments
+        WHERE cash_register_session_id=? AND status='CONFIRMED' GROUP BY method`).all(activeSession.id);
+      for(const total of shiftTotals)activeShiftReceivedByMethod[total.method as PaymentMethod]=Number(total.amount);
+    }
 
     let actualReceivedTotalCents = 0;
     let totalChangeGivenCents = 0;
@@ -4755,6 +4763,7 @@ export class LocalOperationalStore {
 
     return {
       activeSession,
+      activeShiftReceivedByMethod,
       recentSessions,
       movements,
       financialSummary: {
@@ -4811,6 +4820,11 @@ export class LocalOperationalStore {
       .prepare('SELECT * FROM payments ORDER BY created_at DESC LIMIT 100')
       .all() as Array<Record<string, unknown>>;
     return rows.map((r) => this.mapPaymentRow(r));
+  }
+
+  public getPrintJob(id: string): PrintJob | undefined {
+    const row=this.db.prepare('SELECT * FROM print_jobs WHERE id=?').get(id);
+    return row ? this.mapPrintJobRow(row) : undefined;
   }
 
   public listPrintJobs(): PrintJob[] {
@@ -4900,6 +4914,7 @@ export class LocalOperationalStore {
       throw new Error(`Trabalho de impressão '${jobId}' não encontrado.`);
     }
     if (row.status === 'CANCELLED') throw new Error('Trabalho de impressão cancelado.');
+    if (row.status === 'SENDING' || row.status === 'PRINTING') throw new Error('A via ainda está na fila da impressora.');
     const copyNumber = Number(row.copy_number ?? 1);
     if (expectedCopyNumber !== undefined && expectedCopyNumber !== copyNumber) {
       throw new Error('A via já mudou. Atualize a fila antes de autorizar outra cópia.');
