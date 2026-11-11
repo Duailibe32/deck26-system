@@ -6,6 +6,38 @@ import { buildLocalServer } from './server.js';
 import { buildCloudApiServer } from '../../cloud-api/src/server.js';
 
 describe('@deck26/local-server & @deck26/cloud-api — Bateria Completa dos 18 Testes Obrigatórios da Etapa 3', () => {
+  it('protege o pedido do garçom contra troca da comanda ativa e preserva o reenvio confirmado', async () => {
+    const { app, store } = await buildLocalServer({ dbPath: ':memory:' });
+    try {
+      const { tab } = store.openTable({ tableNumber: 5 });
+      const request = {
+        tabId: tab.id,
+        tableNumber: 5,
+        channel: 'DINE_IN',
+        originNode: 'WAITER_MOBILE',
+        idempotencyKey: 'mobile-original-tab-confirmed',
+        items: [{ productId: 'prd-tapioca-frango-catupiry', quantity: 1 }]
+      };
+      const send = (payload: typeof request) => app.inject({ method: 'POST', url: '/api/orders', payload });
+      const original = await send(request);
+      expect(original.statusCode).toBe(201);
+
+      store.transferTable({ fromTableNumber: 5, toTableNumber: 6, actorUserId: 'usr-waiter-01' });
+      const replacement = store.openTable({ tableNumber: 5 });
+      const stale = await send({ ...request, idempotencyKey: 'mobile-original-tab-stale' });
+      expect(stale.statusCode).toBe(400);
+      expect(stale.json().error).toContain('A comanda original');
+      expect(store.getTabById(replacement.tab.id)?.totalCents).toBe(0);
+
+      const replay = await send(request);
+      expect(replay.statusCode).toBe(200);
+      expect(replay.json().order.id).toBe(original.json().order.id);
+      expect(replay.json().idempotentReplay).toBe(true);
+    } finally {
+      await app.close();
+    }
+  });
+
   it('1. Cadastro de produto: criar produto completo e confirmar exibição nos canais', async () => {
     const { app } = await buildLocalServer({ dbPath: ':memory:' });
 

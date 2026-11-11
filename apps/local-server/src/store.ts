@@ -2625,6 +2625,12 @@ export class LocalOperationalStore {
     let resolvedTab: Tab | null = null;
     if (input.tabId) {
       resolvedTab = this.getTabById(input.tabId);
+      if (input.originNode === 'WAITER_MOBILE' && input.channel === 'DINE_IN' && resolvedTableNumber !== null) {
+        const table = this.getDiningTableByNumber(resolvedTableNumber);
+        if (!resolvedTab || table?.activeTabId !== resolvedTab.id) {
+          throw new Error('A comanda original não está mais ativa nesta mesa. Confira antes de lançar novamente.');
+        }
+      }
     } else if (resolvedTableNumber) {
       resolvedTab = this.openOrGetTab({
         code: `MESA-${String(resolvedTableNumber).padStart(2, '0')}`,
