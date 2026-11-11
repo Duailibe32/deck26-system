@@ -1,0 +1,16 @@
+.d26-table-qr {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+.d26-table-qr svg {
+  display: block;
+  flex-shrink: 0;
+}
+.d26-table-qr > div {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+}
+.d26-table-qr a { color: #ff9ec5; }

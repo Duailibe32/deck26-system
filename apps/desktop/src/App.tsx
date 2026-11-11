@@ -1,3 +1,4 @@
+import {TableQrCode,tableMenuBase} from './TableQrCode.js';
 import {StockWorkspace} from './StockWorkspace.js';
 import {OperationsHub} from './OperationsHub.js';
 import {StayOptionsFields,defaultStayOptions,RoomExtras} from './HotelExtras.js';
@@ -3424,30 +3425,27 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
             {/* PAINEL DE QR CODES CRIPTOGRÁFICOS NÃO-PREVISÍVEIS POR MESA (SEÇÃO 12) */}
             <div className="d26-card">
               <h2 style={{ fontSize: '1rem', marginBottom: '6px' }}>
-                QR Codes Seguros por Mesa (Identificadores Não-Previsíveis contra Fraude de URL)
+                QR Codes Seguros por Mesa
               </h2>
               <p style={{ fontSize: '0.78rem', color: 'var(--d26-gray-400)', marginBottom: '12px' }}>
-                Cada mesa possui um token HMAC único validado no servidor, impedindo que clientes alterem o número da mesa ou o preço na URL.
+                Escaneie o QR com a câmera do celular conectado à mesma rede. Baixe a imagem para imprimir e identificar a mesa.
               </p>
               <table className="d26-table">
                 <thead>
                   <tr>
                     <th>Mesa</th>
-                    <th>Token Criptográfico QR</th>
                     <th>Política de Recebimento</th>
-                    <th>Link Direto para Teste no Navegador / Celular</th>
+                    <th>QR Code e link do cardápio</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {(snapshot.qrTables ?? []).slice(0, 10).map((qt) => {
-                    const qrUrl = `${import.meta.env.VITE_DECK26_OPERATIONAL==='true'?('http://'+(snapshot.lanAddresses.find(ip=>/^(192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/.test(ip))??'127.0.0.1')+':4800'):'http://localhost:5174'}/?qr=${qt.qrToken}`;
+                  {(snapshot.qrTables ?? []).filter(qt => qt.active && qt.qrToken).map((qt) => {
+                    const menu = new URL('/', tableMenuBase(localApiBase, window.location.origin, snapshot.lanAddresses));
+                    menu.searchParams.set('qr', qt.qrToken);
                     return (
                       <tr key={qt.tableNumber}>
                         <td>
                           <strong>Mesa {String(qt.tableNumber).padStart(2, '0')}</strong>
-                        </td>
-                        <td>
-                          <code>{qt.qrToken}</code>
                         </td>
                         <td>
                           <button
@@ -3468,14 +3466,7 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
                           </button>
                         </td>
                         <td>
-                          <a
-                            href={qrUrl}
-                            target="_blank"
-                            rel="noreferrer"
-                            style={{ color: '#F72585', fontSize: '0.78rem', fontWeight: 600 }}
-                          >
-                            Abrir Cardápio QR da Mesa {String(qt.tableNumber).padStart(2, '0')} ↗
-                          </a>
+                          <TableQrCode number={qt.tableNumber} url={menu.href} />
                         </td>
                       </tr>
                     );
