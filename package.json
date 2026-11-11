@@ -1,6 +1,6 @@
 {
   "name": "deck26-monorepo",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "description": "DECK 26 — Sistema Profissional de Gestão Integrada para Bar, Restaurante e Hotel (Hotel Auto Posto Milla)",
   "workspaces": [

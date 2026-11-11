@@ -87,6 +87,9 @@ try {
   if(Test-Path -LiteralPath $statePath){
     try{$previous=(Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json).release}catch{}
   }
+  if(!$previous -and (Test-Path -LiteralPath (Join-Path $appRoot 'Deck26-Operacao.exe') -PathType Leaf)){
+    $previous=$appRoot
+  }
   $record=[ordered]@{version=$manifest.version;commit=$manifest.commit;installedAt=[DateTime]::UtcNow.ToString('o');release=$release;previousRelease=$previous;dataDirectory=$dataRoot;backup=$backup}
   $temporary=$statePath+'.'+[guid]::NewGuid().ToString('N')+'.tmp'
   [IO.File]::WriteAllText($temporary,($record|ConvertTo-Json),[Text.UTF8Encoding]::new($false))

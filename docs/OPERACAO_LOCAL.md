@@ -38,7 +38,7 @@ Os links por mesa estão em **Garçons (Wi-Fi)**. QR de cliente apresenta soment
 
 ## Caixa e cozinha: impressão térmica
 
-Em **Impressoras**, existem modelos de produção, pré-conta, recibo de pagamento e fechamento. Em **Administração**, selecione bobinas de 58 ou 80 mm para caixa e cozinha. A cada trabalho de impressão, o simulador grava uma via HTML em `impressoes-simuladas`. Exemplos independentes ficam em `modelos-de-impressao` (quatro modelos, duas larguras).
+Em **Impressoras**, existem modelos de produção, pré-conta, recibo de pagamento e fechamento. Em **Administração**, selecione bobinas de 58 ou 80 mm para caixa e cozinha. Para destinos em simulação, o aplicativo grava as vias HTML em `impressoes-simuladas`. Exemplos independentes ficam em `modelos-de-impressao` (quatro modelos, duas larguras).
 
 Abra as vias simuladas pelo painel ou pelo arquivo HTML para conferir o modelo. Para usar uma impressora térmica ESC/POS em USB ou rede, instale a fila do fabricante no Windows e confira o nome em **Impressoras e scanners**. Feche o aplicativo e crie `impressoras-windows.json` na pasta dos dados operacionais:
 
