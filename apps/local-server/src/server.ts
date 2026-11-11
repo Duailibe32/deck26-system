@@ -1403,6 +1403,7 @@ export async function buildLocalServer(options?: {
   const CloseCashSessionSchema = z.object({
     sessionId: z.string().optional(),
     countedCashCents: z.number().int().nonnegative(),
+    expectedCashCents: z.number().int().optional(),
     notes: z.string().optional()
   });
 
@@ -1418,6 +1419,7 @@ export async function buildLocalServer(options?: {
       const cashSession = store.closeCashRegisterSession({
         sessionId: parsed.data.sessionId,
         countedCashCents: parsed.data.countedCashCents,
+        expectedCashCents: parsed.data.expectedCashCents,
         closedByUserId: session.userId,
         notes: parsed.data.notes
       });

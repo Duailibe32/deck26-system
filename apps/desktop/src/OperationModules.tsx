@@ -73,11 +73,12 @@ const printStatus:Record<PrintJob['status'],string>={
 };
 const problem=(job:PrintJob)=>job.status==='FAILED'||job.status==='UNKNOWN_OUTCOME';
 const printerName=(job:PrintJob)=>job.targetPrinter==='PRINTER_CASHIER'?'Caixa':job.targetPrinter==='PRINTER_BAR'?'Bar':'Cozinha';
-export function PrintingModule({api,headers,jobs,onRefresh}:{api:string;headers:Headers;jobs:PrintJob[];onRefresh:()=>Promise<void>}){
+export function PrintingModule({api,headers,jobs,onRefresh,initialJobId}:{api:string;headers:Headers;jobs:PrintJob[];onRefresh:()=>Promise<void>;initialJobId?:string}){
   const [simulations,setSimulations]=useState<{job_id:string;copy_number:number}[]>([]);
   const [html,setHtml]=useState(''),[message,setMessage]=useState(''),[busy,setBusy]=useState(false);
   const [filter,setFilter]=useState('all'),[device,setDevice]=useState('all');
   const [confirm,setConfirm]=useState<PrintJob|null>(null);
+  const [focusedJob,setFocusedJob]=useState(initialJobId);
   const reload=async()=>{
     try {setSimulations((await request(api,'/api/operation/printers',headers)).simulations);}
     catch(error){setMessage((error as Error).message);}
@@ -90,7 +91,7 @@ export function PrintingModule({api,headers,jobs,onRefresh}:{api:string;headers:
   const simulated=(job:PrintJob)=>simulations.some(item=>item.job_id===job.id&&item.copy_number===(job.copyNumber??1));
   const groups={queue:jobs.filter(job=>['QUEUED','PENDING','PRINTING','SENDING'].includes(job.status)&&!simulated(job)),
     failures:jobs.filter(problem),completed:jobs.filter(job=>job.status==='PRINTED'||simulated(job)&&!problem(job)&&job.status!=='CANCELLED')};
-  const visible=(filter==='all'?jobs:groups[filter as keyof typeof groups]).filter(job=>device==='all'||printerName(job)===device);
+  const visible=(filter==='all'?jobs:groups[filter as keyof typeof groups]).filter(job=>(!focusedJob||job.id===focusedJob)&&(device==='all'||printerName(job)===device));
   const run=async(job:PrintJob,reprint=false)=>{
     setBusy(true);setMessage('');
     try {
@@ -107,9 +108,10 @@ export function PrintingModule({api,headers,jobs,onRefresh}:{api:string;headers:
   };
   return <>
     <div className="d26-card"><h2>Fila de impressão</h2><p>Caixa, cozinha e bar. As prévias em simulador geram arquivos para conferência.</p>
+      {focusedJob&&<button className="d26-btn d26-btn-secondary" onClick={()=>setFocusedJob(undefined)}>Mostrar todas as vias</button>}
       <div className="d26-print-models" aria-label="Filtrar vias">
         {Object.entries({all:'Todas',queue:'Na fila · '+groups.queue.length,failures:'Falhas · '+groups.failures.length,completed:'Concluídas · '+groups.completed.length}).map(([value,label])=>
-          <button key={value} className="d26-btn d26-btn-secondary" aria-pressed={filter===value} onClick={()=>setFilter(value)}>{label}</button>)}
+          <button key={value} className="d26-btn d26-btn-secondary" aria-pressed={filter===value} onClick={()=>{setFocusedJob(undefined);setFilter(value);}}>{label}</button>)}
         <label>Destino<select className="d26-input" value={device} onChange={event=>setDevice(event.target.value)}>
           {['all','Cozinha','Caixa','Bar'].map(value=><option key={value} value={value}>{value==='all'?'Todos':value}</option>)}
         </select></label>

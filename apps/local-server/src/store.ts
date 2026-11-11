@@ -4583,6 +4583,7 @@ export class LocalOperationalStore {
   public closeCashRegisterSession(input: {
     sessionId?: string;
     countedCashCents: number;
+    expectedCashCents?: number;
     closedByUserId: string;
     notes?: string;
   }): CashRegisterSession {
@@ -4604,6 +4605,14 @@ export class LocalOperationalStore {
       const currentSession = this.getCashRegisterSessionById(sessionId)!;
       const expectedCashCents = currentSession.expectedCashCents;
       const differenceCents = input.countedCashCents - expectedCashCents;
+      if (input.expectedCashCents !== undefined) {
+        if (input.expectedCashCents !== expectedCashCents) {
+          throw new Error('O saldo esperado mudou. Confira os valores atualizados antes de fechar.');
+        }
+        if (differenceCents !== 0 && (input.notes?.trim().length ?? 0) < 3) {
+          throw new Error('Justifique a diferença de caixa antes de fechar o turno.');
+        }
+      }
       const now = new Date().toISOString();
 
       this.db

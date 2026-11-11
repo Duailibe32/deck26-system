@@ -1,0 +1,50 @@
+.d26-shift-queue {
+  margin: 12px 0 18px;
+  padding: 18px;
+  color: #fff3f8;
+  background: radial-gradient(ellipse at 97% 0%, #482036, transparent 58%), #201b20;
+  border: 1px solid #604355;
+  border-radius: 17px;
+}
+.d26-shift-queue header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.d26-shift-queue header h2 { margin: 0; font-size: 20px; }
+.d26-shift-queue header p { margin: 5px 0 0; color: #e1c5d2; font-size: 13px; }
+.d26-shift-queue-status { color: #ffbdab; background: #452c2a; border-radius: 20px; padding: 6px 10px; font-size: 11px; white-space: nowrap; }
+.d26-shift-queue-status[data-connected="true"] { color: #b9efd3; background: #223d34; }
+.d26-shift-queue-filters { display: flex; flex-wrap: wrap; gap: 7px; margin: 14px 0; }
+.d26-shift-queue button { font: inherit; cursor: pointer; min-height: 44px; }
+.d26-shift-queue-filters button, .d26-shift-queue-more {
+  color: #f3dce7; background: #372a34; border: 1px solid #674859;
+  border-radius: 10px; padding: 6px 10px; font-size: 13px;
+}
+.d26-shift-queue-filters button[aria-pressed="true"] { border-color: #ff86b9; background: #593048; color: #fff; }
+.d26-shift-queue-filters b { margin-left: 4px; }
+.d26-shift-queue ul { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; padding: 0; margin: 0; list-style: none; }
+.d26-shift-queue li button {
+  width: 100%; min-height: 62px; display: grid; grid-template-columns: 34px minmax(0,1fr) 12px;
+  align-items: center; text-align: left; gap: 9px; color: #f7eaf0;
+  background: #272127; border: 1px solid #4c3a47; border-radius: 11px; padding: 7px 9px;
+}
+.d26-shift-queue button:hover { border-color: #df78a1; }
+.d26-shift-queue button:focus-visible { outline: 2px solid #ffb5d3; outline-offset: 2px; }
+.d26-shift-queue-icon { display: grid; place-items: center; height: 34px; border-radius: 9px; color: #ffb9d7; background: #4a2f41; }
+.d26-shift-queue-icon[data-priority="0"] { color: #ffd1db; background: #66334a; }
+.d26-shift-queue-task { display: grid; gap: 3px; overflow-wrap: anywhere; }
+.d26-shift-queue-task small { color: #d6b8c8; font-size: 12px; }
+.d26-shift-queue-more { margin-top: 9px; }
+.d26-waiter .d26-shift-queue { margin-inline: 18px; }
+@media(max-width: 680px) {
+  .d26-shift-queue { padding: 13px; }
+  .d26-shift-queue ul { grid-template-columns: 1fr; }
+  .d26-shift-queue header { flex-wrap: wrap; gap: 7px; }
+}
+
+.d26-shift-count { width: 100%; display: grid; gap: 10px; padding: 16px; border: 1px solid #604355; border-radius: 12px; background: #241e23; }
+.d26-shift-count h3, .d26-shift-count p, .d26-shift-count dl, .d26-shift-count dd { margin: 0; }
+.d26-shift-count dl { display: grid; grid-template-columns: repeat(auto-fit,minmax(138px,1fr)); gap: 8px; }
+.d26-shift-count dl > div { background: #332a32; padding: 9px; border-radius: 8px; }
+.d26-shift-count dt { color: #e0c4d2; font-size: 12px; }
+.d26-shift-count dd { font-weight: 700; }
+.d26-shift-count label { display: grid; gap: 6px; }
+.d26-shift-count p[data-difference="true"] { color: #ffc09a; }
+.d26-shift-count button { justify-self: start; }

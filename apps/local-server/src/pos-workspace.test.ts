@@ -4,6 +4,31 @@ import fs from 'node:fs';import os from 'node:os';import path from 'node:path';
 const clean:Array<()=>Promise<void>>=[];afterEach(async()=>{for(const f of clean.splice(0).reverse())await f();vi.unstubAllEnvs();});
 async function fixture(){const directory=fs.mkdtempSync(path.join(os.tmpdir(),'deck26-pos-tests-'));vi.stubEnv('DECK26_OPERATION_DATA_DIR',directory);const {app,store}=await buildLocalServer({dbPath:':memory:',demoMode:false,requireStrictAuth:true});clean.push(async()=>{await app.close();store.close();if(path.resolve(directory).startsWith(path.resolve(os.tmpdir())+path.sep+'deck26-pos-tests-'))fs.rmSync(directory,{recursive:true,force:true});});store.initializeLocalOperation({name:'Responsável fixture',pin:'536821',importCatalog:true,actorIp:'127.0.0.1'});const login=await app.inject({method:'POST',url:'/api/auth/login',payload:{pin:'536821'}});const token=login.json().token;const user=store.db.prepare("SELECT id FROM users WHERE role='OWNER'").get() as {id:string};store.db.prepare('UPDATE catalog_products SET track_stock=0').run();return {app,store,actor:user.id,token,headers:{authorization:'Bearer '+token}};}
 describe('PDV por função, chamados QR e transferência confirmada',()=>{
+ it('mantém chamados resolvidos no histórico da comanda e restringe o acesso',async()=>{
+   const {app,store,headers}=await fixture();
+   const {table,tab}=store.openTable({tableNumber:1,waiterUserId:'usr-owner-01'});
+   const created=store.requestTableService({qrToken:table.qrToken,kind:'BILL',paymentPreference:'PIX'});
+   store.resolveTableServiceCall(created.id,'usr-owner-01');
+   expect(store.listTableServiceCalls()).toHaveLength(0);
+   const url='/api/pos/tabs/'+tab.id+'/activity';
+   expect((await app.inject(url)).statusCode).toBe(401);
+   const history=await app.inject({url,headers});
+   expect(history.statusCode).toBe(200);
+   expect(history.json()).toMatchObject({openedBy:'Responsável fixture',calls:[{id:created.id,kind:'BILL',resolvedBy:'Responsável fixture'}],bills:[]});
+   expect(history.json().calls[0].resolvedAt).toBeTruthy();
+ });
+ it('revalida o saldo do fechamento e exige motivo para uma divergência',async()=>{
+   const {app,store,headers,actor}=await fixture();
+   const opened=store.openCashRegisterSession({openingBalanceCents:1000,openedByUserId:actor});
+   const close=(expectedCashCents:number,notes?:string)=>app.inject({method:'POST',url:'/api/cash-sessions/close',headers,
+     payload:{sessionId:opened.id,countedCashCents:900,expectedCashCents,notes}});
+   expect((await close(1200,'Conferência do turno')).json().error).toContain('saldo esperado mudou');
+   expect((await close(1000)).json().error).toContain('Justifique');
+   expect(store.getCashRegisterSessionById(opened.id)?.status).toBe('OPEN');
+   const confirmed=await close(1000,'Diferença na contagem');
+   expect(confirmed.statusCode,confirmed.body).toBe(200);
+   expect(confirmed.json().cashSession).toMatchObject({differenceCents:-100,notes:'Diferença na contagem'});
+ });
  it('rejeita transferências com comanda de origem desatualizada ou incorreta',async()=>{
    const {app,store,headers,actor}=await fixture();
    const from=store.openTable({tableNumber:1}).tab;

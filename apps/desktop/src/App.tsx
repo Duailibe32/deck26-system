@@ -1,3 +1,5 @@
+import {ShiftQueue,useShiftClock} from './ShiftQueue.js';
+import {receptionQueue} from './shiftQueueModel.js';
 import {TableQrCode,TableQrKit,tableMenuBase} from './TableQrCode.js';
 import {StockWorkspace} from './StockWorkspace.js';
 import {OperationsHub} from './OperationsHub.js';
@@ -5,7 +7,7 @@ import {StayOptionsFields,defaultStayOptions,RoomExtras} from './HotelExtras.js'
 import {CustomerMenu} from './CustomerMenu.js';
 import {PosWorkspace} from './PosWorkspace.js';
 import {AuditLogs} from './AuditLogs.js';
-import {visibleModules,roleHome,canChooseView,type InterfaceMode} from './desktopModels.js';
+import {visibleModules,roleHome,canChooseView,parseMoney,type InterfaceMode} from './desktopModels.js';
 import {useOperationalEvents} from './useOperationalEvents.js';
 import {fetchHotelFolio,sendHotelFolioPayment,HotelFolioRequestError} from './hotelFolio.js';
 import {FiscalPreparationModule,FiscalCheckoutPreview} from './FiscalPreparationModule.js';
@@ -126,6 +128,7 @@ interface ServerStateSnapshot {
   orders: Order[];
   payments: Payment[];
   printJobs: PrintJob[];
+  publicDeliveryPendingCount?: number;
   stock: {
     balances: Array<{
       productId: string;
@@ -344,9 +347,19 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
   const [cashShiftMovementReais, setCashShiftMovementReais] = useState<string>('50,00');
   const [cashShiftMovementReason, setCashShiftMovementReason] = useState<string>('Sangria para cofre');
   const [cashShiftCountedReais, setCashShiftCountedReais] = useState<string>('');
+  const [cashCloseReason, setCashCloseReason] = useState('');
+  const [cashCloseBusy, setCashCloseBusy] = useState(false);
+  const cashCloseLock = useRef(false);
+  const currentCashSession = snapshot.cashierSummary?.activeSession;
+  const countedCash = parseMoney(cashShiftCountedReais);
+  const cashDifference = currentCashSession && countedCash!==null ? countedCash-currentCashSession.expectedCashCents : null;
+  useEffect(()=>{setCashShiftCountedReais('');setCashCloseReason('');},[currentCashSession?.id]);
 
   // Estados da Etapa 5 e 7A: PMS Hotel Auto Posto Milla (24 Apartamentos)
   const [hotelSubTab, setHotelSubTab] = useState<'MAPA' | 'RESERVAS' | 'HOSPEDES' | 'CHECKIN_CHECKOUT' | 'FOLIO' | 'RESTAURANTE' | 'FRIGOBAR_SERVICOS' | 'GOVERNANCA' | 'CALENDARIO' | 'CAFE_PATIO' | 'MANUTENCAO' | 'CONVENIOS'>('MAPA');
+  const [attentionRoom,setAttentionRoom] = useState<string|null>(null);
+  const [printingTarget,setPrintingTarget] = useState<string|undefined>();
+  const shiftNow=useShiftClock(activeModule==='hotel-reservas');
   const [hotelRoomFilter, setHotelRoomFilter] = useState<'ALL' | 'OPERACIONAL' | 'EM_CONSTRUCAO' | 'LIVRE' | 'OCUPADO' | 'RESERVADO' | 'BLOQUEADO' | 'SUJO'>('ALL');
   const [editingRoom, setEditingRoom] = useState<HotelRoom | null>(null);
   const [editRoomName, setEditRoomName] = useState<string>('');
@@ -421,6 +434,14 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
   const [maintBlockRoom, setMaintBlockRoom] = useState<boolean>(true);
 
   const activeRole: UserRole = authSession?.role ?? 'WAITER';
+  const receptionTasks=useMemo(()=>activeModule==='hotel-reservas'?receptionQueue(snapshot.hotelRooms,snapshot.hotelStays??[],snapshot.tabs,activeRole,shiftNow):[],[activeModule,snapshot.hotelRooms,snapshot.hotelStays,snapshot.tabs,activeRole,shiftNow]);
+  useEffect(()=>{
+    if(!attentionRoom||hotelSubTab!=='MAPA')return;
+    const room=document.getElementById('d26-room-'+attentionRoom);
+    room?.scrollIntoView({block:'center'});
+    room?.focus({preventScroll:true});
+    setAttentionRoom(null);
+  },[attentionRoom,hotelSubTab]);
 
   function getAuthHeaders(): Record<string, string> {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -980,33 +1001,33 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
     );
   }
 
-  async function handleCloseCashSession(e: React.FormEvent) {
-    e.preventDefault();
-    const activeSession = snapshot.cashierSummary?.activeSession;
-    if (!activeSession) return;
-    const countedCents = parseReaisToCents(
-      cashShiftCountedReais,
-      activeSession.expectedCashCents
-    );
-    const res = await fetch(`${localApiBase}/api/cash-sessions/close`, {
-      method: 'POST',
-      headers: getAuthHeaders(),
-      body: JSON.stringify({
-        sessionId: activeSession.id,
-        countedCashCents: countedCents,
-        notes: 'Fechamento e conferência de turno de caixa'
-      })
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      notify(data.error ?? 'Falha ao fechar turno de caixa.');
+  async function handleCloseCashSession(event: React.FormEvent) {
+    event.preventDefault();
+    if (!currentCashSession || countedCash === null || cashCloseLock.current) return;
+    if (cashDifference !== 0 && cashCloseReason.trim().length < 3) {
+      notify('Informe o motivo da diferença antes de fechar.');
       return;
     }
-    setCashShiftCountedReais('');
-    await refreshState();
-    notify(
-      `Turno de Caixa encerrado! Esperado: ${formatBrlCents(data.cashSession.expectedCashCents)} | Contado: ${formatBrlCents(data.cashSession.countedCashCents)} | Diferença: ${formatBrlCents(data.cashSession.differenceCents)}`
-    );
+    cashCloseLock.current = true;
+    setCashCloseBusy(true);
+    try {
+      const response = await fetch(localApiBase+'/api/cash-sessions/close', {
+        method:'POST',headers:getAuthHeaders(),body:JSON.stringify({
+          sessionId:currentCashSession.id,countedCashCents:countedCash,expectedCashCents:currentCashSession.expectedCashCents,
+          notes:cashCloseReason.trim()||undefined
+        })
+      });
+      const result = await response.json();
+      if (!response.ok) throw Error(result.error??'Falha ao fechar turno de caixa.');
+      await refreshState();
+      notify('Turno encerrado. Diferença em dinheiro: '+formatBrlCents(result.cashSession.differenceCents));
+    } catch(error) {
+      await refreshState();
+      notify((error as Error).message);
+    } finally {
+      cashCloseLock.current=false;
+      setCashCloseBusy(false);
+    }
   }
 
   async function handleAcknowledgeNotification(notificationId: string) {
@@ -2869,7 +2890,7 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
         {/* =====================================================================
             MÓDULOS DE LANÇAMENTO DE PEDIDOS E CAIXA (PDV E GARÇONS)
            ===================================================================== */}
-        {(['caixa-pdv','garcons','mesas-comandas'] as SystemModuleId[]).includes(activeModule)&&<PosWorkspace api={localApiBase} session={authSession} snapshot={snapshot} onRefresh={refreshState} onNotice={notify} onFiscalPreview={setFiscalPreviewTab} onNavigate={setActiveModule} entry={activeModule} shiftPanel={<>{snapshot.cashierSummary && (
+        {(['caixa-pdv','garcons','mesas-comandas'] as SystemModuleId[]).includes(activeModule)&&<PosWorkspace api={localApiBase} session={authSession} snapshot={snapshot} onRefresh={refreshState} onNotice={notify} onFiscalPreview={setFiscalPreviewTab} onNavigate={(module,jobId)=>{setPrintingTarget(jobId);setActiveModule(module);}} entry={activeModule} connected={serverConnected} shiftPanel={<>{snapshot.cashierSummary && (
               <div className="d26-card" style={{ borderLeft: '4px solid #F72585' }}>
                 <div
                   style={{
@@ -3003,21 +3024,17 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
                       </button>
                     </form>
 
-                    <form
-                      onSubmit={handleCloseCashSession}
-                      style={{ display: 'flex', gap: '8px', alignItems: 'center', marginLeft: 'auto' }}
-                    >
-                      <input
-                        type="text"
-                        className="d26-input"
-                        style={{ width: '165px' }}
-                        placeholder="Espécie contado (R$)"
-                        value={cashShiftCountedReais}
-                        onChange={(e) => setCashShiftCountedReais(e.target.value)}
-                      />
-                      <button type="submit" className="d26-btn d26-btn-tertiary">
-                        Fechar Turno de Caixa
-                      </button>
+                    <form className="d26-shift-count" onSubmit={handleCloseCashSession}>
+                      <h3>Conferência de fechamento</h3>
+                      <dl>
+                        <div><dt>Dinheiro esperado</dt><dd>{formatBrlCents(currentCashSession?.expectedCashCents??0)}</dd></div>
+                        <div><dt>PIX registrado</dt><dd>{formatBrlCents(snapshot.cashierSummary.financialSummary.receivedByMethod.PIX??0)}</dd></div>
+                        <div><dt>Cartão registrado</dt><dd>{formatBrlCents((snapshot.cashierSummary.financialSummary.receivedByMethod.CREDIT_CARD??0)+(snapshot.cashierSummary.financialSummary.receivedByMethod.DEBIT_CARD??0))}</dd></div>
+                      </dl>
+                      <label>Dinheiro contado<input className="d26-input" inputMode="decimal" required value={cashShiftCountedReais} disabled={cashCloseBusy} onChange={event=>setCashShiftCountedReais(event.target.value)}/></label>
+                      {cashDifference!==null&&<p role="status" data-difference={cashDifference!==0}>{cashDifference===0?'Dinheiro conferido':(cashDifference<0?'Falta ':'Sobra ')+formatBrlCents(Math.abs(cashDifference))}</p>}
+                      {cashDifference!==null&&cashDifference!==0&&<label>Justificativa da diferença<textarea className="d26-input" minLength={3} maxLength={300} required value={cashCloseReason} disabled={cashCloseBusy} onChange={event=>setCashCloseReason(event.target.value)}/></label>}
+                      <button type="submit" className="d26-btn d26-btn-primary" disabled={cashCloseBusy||countedCash===null||cashDifference!==0&&cashCloseReason.trim().length<3}>{cashCloseBusy?'Fechando turno…':'Confirmar fechamento'}</button>
                     </form>
                   </div>
                 )}
@@ -3857,6 +3874,14 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
            ===================================================================== */}
         {activeModule === 'hotel-reservas' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <ShiftQueue title="Passagem de turno · recepção" tasks={receptionTasks} now={shiftNow} connected={serverConnected} onOpen={target=>{
+              if(target.kind!=='room')return;
+              if(target.stayId&&hasPermission(activeRole,'hotel:post_charges')){
+                setSelectedFolioStayId(target.stayId);setHotelSubTab('FOLIO');
+              }else{
+                setHotelRoomFilter('ALL');setHotelSubTab('MAPA');setAttentionRoom(target.number);
+              }
+            }}/>
             {/* Header & Sub-navigation */}
             <div className="d26-card">
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px', marginBottom: '14px' }}>
@@ -4036,7 +4061,7 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
                         ? '#4ADE80'
                         : '#7209B7';
                       return (
-                        <div key={room.id} className="d26-product-card" style={{ borderLeft: `4px solid ${borderLeftColor}` }}>
+                        <div key={room.id} id={'d26-room-'+room.number} tabIndex={-1} className="d26-product-card" style={{ borderLeft: `4px solid ${borderLeftColor}` }}>
                           <div>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                               <div>
@@ -5500,7 +5525,7 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
         {/* =====================================================================
             MÓDULO: IMPRESSORAS TÉRMICAS ESC/POS (COM REIMPRESSÃO AUTORIZADA)
            ===================================================================== */}
-        {activeModule === 'impressoras' && <PrintingModule api={localApiBase} headers={getAuthHeaders} jobs={snapshot.printJobs} onRefresh={refreshState}/> }
+        {activeModule === 'impressoras' && <PrintingModule api={localApiBase} headers={getAuthHeaders} jobs={snapshot.printJobs} onRefresh={refreshState} initialJobId={printingTarget}/> }
         {false && activeModule === 'impressoras' && (
           <div className="d26-card">
             <h2 style={{ fontSize: '1.05rem', marginBottom: '12px' }}>
