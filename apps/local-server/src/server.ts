@@ -758,6 +758,7 @@ export async function buildLocalServer(options?: {
   const TransferTableBodySchema = z.object({
     fromTableNumber: z.number().int().positive(),
     toTableNumber: z.number().int().positive(),
+    expectedTabId: z.string().uuid().optional(),
     reason: z.string().optional(),
     originNode: OriginNodeSchema.default('WINDOWS_PDV')
   });
@@ -1017,6 +1018,7 @@ export async function buildLocalServer(options?: {
     try {
       const result = store.transferOrderItemBetweenTabs({
         orderItemId: parsed.data.orderItemId,
+        expectedSourceTabId: req.params.id,
         quantityToTransfer: parsed.data.quantityToTransfer,
         targetTabId: parsed.data.targetTabId,
         reason: parsed.data.reason,
@@ -1213,6 +1215,7 @@ export async function buildLocalServer(options?: {
   // 7. Avanço de Status na Cozinha / KDS / Garçom / Cancelamento por Estágio (Seções 14, 15, 16 e 17)
   const AdvanceOrderBodySchema = z.object({
     status: OrderStatusSchema,
+    expectedTabId: z.string().uuid().optional(),
     originNode: OriginNodeSchema.default('KITCHEN_KDS'),
     priority: OrderPrioritySchema.optional(),
     reverseStockOnCancel: z.boolean().optional(),
@@ -1238,6 +1241,7 @@ export async function buildLocalServer(options?: {
     try {
       const order = store.advanceOrderStatus({
         orderId: req.params.id,
+        expectedTabId: parsed.data.expectedTabId,
         newStatus: parsed.data.status,
         originNode: parsed.data.originNode,
         priority: parsed.data.priority,

@@ -10,3 +10,51 @@
 .d26-pos-ticket header{padding:10px 14px}.d26-pos-ticket .d26-receipt-brand{font-size:19px;line-height:1.2;margin-bottom:5px}.d26-pos-ticket h3{font-size:12px;line-height:1.3;margin:5px 0}.d26-pos-ticket .d26-receipt-caption{font-size:8px;margin-bottom:0;line-height:1.5}.d26-pos-ticket header>span{display:block;font-size:10px;line-height:1.5;margin-top:4px}.d26-pos-ticket footer{gap:9px}.d26-pos-cart-lines article>div:first-child{gap:2px}.d26-pos-cart-lines article>div>button{min-height:29px}.d26-pos-cart-lines article{padding:11px 0}.d26-pos-cart-lines article>div:first-child>small:empty{display:none}
 @media(min-width:800px){.d26-pos-payment{max-width:950px;grid-template-columns:minmax(0,1fr) 360px;gap:16px 24px;align-items:start}.d26-pos-payment>*{grid-column:1}.d26-pos-payment>.d26-pos-due,.d26-pos-payment>.d26-pos-payment-methods{grid-column:1/-1}.d26-pos-payment>.d26-pos-keypad-area{grid-column:2;grid-row:3/span 10;position:sticky;top:18px}.d26-pos-payment>.d26-pos-action-row,.d26-pos-payment>small:last-child{grid-column:1/-1}.d26-pos-payment .d26-pos-banknotes{grid-template-columns:repeat(3,minmax(0,1fr))}.d26-pos-due strong{font-size:40px}.d26-pos-due{padding:16px}}
 .d26-pos-ticket .d26-pos-cart-lines .d26-pos-quantity button{width:40px;height:44px;min-height:44px;display:grid;place-items:center;padding:0;border:1px solid #ae9963;border-radius:7px;background:#fff8dd;color:#332b19;font:600 22px ui-monospace,monospace;text-decoration:none;cursor:pointer}.d26-pos-ticket .d26-pos-cart-lines .d26-pos-quantity button:disabled{opacity:.45}.d26-pos-ticket footer>small{font-size:9px;line-height:1.4}.d26-pos-ticket .d26-pos-primary{min-height:46px;padding:11px 16px}.d26-pos-ticket footer{padding:12px;gap:8px}
+
+.d26-pos-map-toolbar {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 12px 22px;
+  margin: 16px 0;
+}
+.d26-pos-map-toolbar > label { display: grid; gap: 6px; width: min(100%, 180px); font-size: 13px; }
+.d26-pos-map-toolbar .d26-pos-legend { margin: 0; padding-bottom: 8px; flex-wrap: wrap; }
+.d26-pos-map-toolbar details { max-width: 380px; color: #dac4cf; font-size: 13px; }
+.d26-pos-map-toolbar details summary { cursor: pointer; min-height: 36px; display: list-item; padding-top: 8px; }
+.d26-pos-map-toolbar details p { margin: 7px 0; }
+.d26-pos-table { min-height: 122px; gap: 8px; }
+.d26-pos-table header { align-items: center; }
+.d26-pos-table.service-call em { color: #ffb3ca; }
+.d26-pos-drawer-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.d26-pos-drawer-header button small { margin-left: 6px; color: inherit; }
+.d26-pos-secondary-tabs { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 18px; }
+.d26-pos-secondary-tabs button {
+  min-height: 44px;
+  background: #252025;
+  color: #e5cbd8;
+  border: 1px solid #57404e;
+  border-radius: 9px;
+  padding: 7px 12px;
+  font: inherit;
+  cursor: pointer;
+}
+.d26-pos-secondary-tabs button[aria-pressed="true"] { background: #593145; border-color: #f72585; color: #fff; }
+.d26-pos-secondary-tabs button:disabled { opacity: .5; cursor: not-allowed; }
+.d26-pos-detail { display: grid; gap: 12px; margin-top: 15px; }
+.d26-pos-detail h3, .d26-pos-detail p { margin: 0; }
+.d26-pos-detail label { display: grid; gap: 6px; }
+.d26-pos-detail article, .d26-pos-summary > div {
+  border: 1px solid #4a3944;
+  background: #252025;
+  border-radius: 10px;
+  padding: 12px;
+  display: grid;
+  gap: 5px;
+}
+.d26-pos-detail article time, .d26-pos-detail article small { color: #c9b3be; font-size: 13px; }
+.d26-pos-summary { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 8px; margin: 0; }
+.d26-pos-summary dt { color: #d6bfcb; font-size: 12px; }
+.d26-pos-summary dd { margin: 0; font-weight: 700; }
+.d26-pos-danger { color: #fff; background: #901f42; border: 1px solid #bf5575; }
+.d26-pos-danger:disabled { opacity: .55; }

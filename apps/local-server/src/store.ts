@@ -1844,6 +1844,7 @@ export class LocalOperationalStore {
   public transferTable(input: {
     fromTableNumber: number;
     toTableNumber: number;
+    expectedTabId?: string;
     actorUserId: string;
     reason?: string;
     originNode?: OriginNode;
@@ -1872,6 +1873,9 @@ export class LocalOperationalStore {
 
       if (!activeTabRow) {
         throw new Error(`A Mesa ${input.fromTableNumber} não possui comanda ativa para transferir.`);
+      }
+      if (input.expectedTabId && activeTabRow.id !== input.expectedTabId) {
+        throw new Error('A comanda de origem mudou. Confira a mesa antes de transferir.');
       }
 
       const toTableActiveTab = this.db
@@ -2802,6 +2806,7 @@ export class LocalOperationalStore {
    */
   public transferOrderItemBetweenTabs(input: {
     orderItemId: string;
+    expectedSourceTabId?: string;
     quantityToTransfer?: number;
     targetTabId: string;
     actorUserId: string;
@@ -2831,6 +2836,9 @@ export class LocalOperationalStore {
       }
 
       const sourceTabId = String(sourceOrderRow.tab_id);
+      if (input.expectedSourceTabId && sourceTabId !== input.expectedSourceTabId) {
+        throw new Error('O item não pertence à comanda de origem informada.');
+      }
       if (sourceTabId === input.targetTabId) {
         throw new Error('A comanda de destino deve ser diferente da comanda de origem.');
       }
@@ -3311,6 +3319,7 @@ export class LocalOperationalStore {
    */
   public advanceOrderStatus(input: {
     orderId: string;
+    expectedTabId?: string;
     newStatus: OrderStatus;
     originNode: OriginNode;
     reverseStockOnCancel?: boolean;
@@ -3323,6 +3332,16 @@ export class LocalOperationalStore {
     const existing = this.getOrderById(input.orderId);
     if (!existing) {
       throw new Error(`Pedido ${input.orderId} não encontrado.`);
+    }
+    if (input.newStatus === 'CANCELLED' && input.expectedTabId) {
+      const tab = this.getTabById(input.expectedTabId);
+      if (existing.tabId !== input.expectedTabId || !tab || tab.status === 'CLOSED' || tab.status === 'CANCELLED') {
+        throw new Error('O pedido não pertence mais a uma comanda ativa nesta tela.');
+      }
+      if (existing.status === 'CANCELLED') return existing;
+      if (tab.paidCents > 0) {
+        throw new Error('A comanda tem recebimentos. Confira os valores com o caixa antes de cancelar.');
+      }
     }
 
     const now = new Date().toISOString();
