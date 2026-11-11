@@ -18,7 +18,7 @@ jobs:
 
     steps:
       - name: Checkout do código
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Configurar Node.js 22 (com suporte nativo a node:sqlite)
         uses: actions/setup-node@v4
