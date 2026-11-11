@@ -148,7 +148,13 @@ npm run build:windows:local
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-local-operation.ps1
 ```
 
-O instalador cria o atalho e copia executável, interface e checklists. **Mantenha o repositório no mesmo local:** o servidor usa seu código e suas dependências. Esta entrega ainda não é um instalador autossuficiente para outros computadores.
+Esse atalho de desenvolvimento usa o repositório e suas dependências. Para entregar o aplicativo a outro computador, compile a versão operacional e monte um ZIP de instalação:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-windows.ps1 -OutputDirectory ..\Entregas-DECK26
+```
+
+No computador de destino, instale Node.js **22.13+** com npm, confira o WebView2, extraia todo o ZIP e execute **Instalar-DECK26.cmd**. O instalador baixa as dependências do lockfile, verifica o servidor e cria o atalho **DECK 26 - Operacao Local**. O ZIP já inclui o executável compilado e a interface, e a instalação fica em uma pasta própria, independente do checkout. São necessários internet durante a instalação e acesso à rede local para os terminais.
 
 | Local no Windows | Conteúdo |
 | --- | --- |
@@ -157,6 +163,8 @@ O instalador cria o atalho e copia executável, interface e checklists. **Manten
 | `%LOCALAPPDATA%\Deck26\build-target\release` | Saída da compilação Windows. |
 
 Atualizar o aplicativo não importa demonstrações para o banco operacional. Antes de migrar uma base existente, faça backup consistente e ensaie a atualização em uma cópia. Consulte o [guia de operação local](docs/OPERACAO_LOCAL.md) para instalação, encerramento e recuperação.
+
+Em **Administração → Acesso e continuidade**, use **Diagnóstico e backup** para conferir a resposta do servidor, as bobinas virtuais e a última cópia. **Ensaiar restauração** verifica uma cópia temporária sem substituir a base ativa. No caixa, **Fila de impressão** abre os filtros de vias e o fluxo de segunda via.
 
 <a id="celular"></a>
 

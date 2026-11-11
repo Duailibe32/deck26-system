@@ -14,3 +14,8 @@
   gap: 8px;
 }
 .d26-table-qr a { color: #ff9ec5; }
+.d26-qr-kit { padding: 16px; margin: 12px 0 20px; border: 1px solid #624452; border-radius: 12px; }
+.d26-qr-kit h3 { margin-top: 0; }
+.d26-qr-kit > div { display: flex; flex-wrap: wrap; gap: 8px; }
+.d26-qr-kit-options { margin-top: 12px; }
+.d26-qr-kit-options label { display: flex; align-items: center; gap: 6px; min-height: 40px; padding: 0 8px; }

@@ -4885,13 +4885,18 @@ export class LocalOperationalStore {
     return this.updatePrintJobStatus({ jobId, status: 'PRINTED' });
   }
 
-  public reprintJob(jobId: string, actorUserId: string): PrintJob {
+  public reprintJob(jobId: string, actorUserId: string, expectedCopyNumber?: number): PrintJob {
     const row = this.db.prepare('SELECT * FROM print_jobs WHERE id = ?').get(jobId) as Record<string, unknown> | undefined;
     if (!row) {
       throw new Error(`Trabalho de impressão '${jobId}' não encontrado.`);
     }
+    if (row.status === 'CANCELLED') throw new Error('Trabalho de impressão cancelado.');
+    const copyNumber = Number(row.copy_number ?? 1);
+    if (expectedCopyNumber !== undefined && expectedCopyNumber !== copyNumber) {
+      throw new Error('A via já mudou. Atualize a fila antes de autorizar outra cópia.');
+    }
     const now = new Date().toISOString();
-    const nextCopyNumber = Number(row.copy_number ?? 1) + 1;
+    const nextCopyNumber = copyNumber + 1;
     const rawPayload = String(row.payload_text);
     const reprintBanner = `*** 2a VIA / REIMPRESSAO AUTORIZADA (COPIA #${nextCopyNumber}) ***`;
     const cleanPayloadWithoutOldBanner = rawPayload

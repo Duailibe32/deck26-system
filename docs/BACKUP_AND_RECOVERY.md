@@ -2,6 +2,10 @@
 
 # DECK 26 — POLÍTICA DE BACKUP, RECUPERAÇÃO E CONTINGÊNCIA
 
+Em **Administração → Acesso e continuidade → Diagnóstico e backup**, consulte a data da última cópia, crie um backup sob demanda e selecione **Ensaiar restauração**. O teste copia o arquivo para uma pasta temporária, verifica a integridade e as chaves estrangeiras e consulta operadores, pedidos, pagamentos e hospedagens. O resultado aprovado fica na auditoria. A base em uso continua atendendo normalmente.
+
+A instalação Windows tenta criar uma cópia diária enquanto está aberta e uma cópia no encerramento. A seção de retenção abaixo descreve a política de armazenamento a organizar para o estabelecimento. Para recuperar após perda do computador, mantenha também uma cópia em outro dispositivo.
+
 Este documento descreve as diretrizes operacionais para geração de cópias de segurança atômicas, verificação de integridade e restauração do banco de dados SQLite com WAL (Write-Ahead Logging) do **DECK 26**.
 
 ---

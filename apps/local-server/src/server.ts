@@ -1476,11 +1476,13 @@ export async function buildLocalServer(options?: {
     const session = authorizePermission(req, reply, 'printers:manage');
     if (!session) return;
 
+    const body = z.object({ expectedCopyNumber: z.number().int().positive().optional() }).safeParse(req.body ?? {});
+    if (!body.success) return reply.code(400).send({error:'Número da via inválido.'});
     try {
-      const job = store.reprintJob(req.params.id, session.userId);
+      const job = store.reprintJob(req.params.id, session.userId, body.data.expectedCopyNumber);
       return { printJob: job };
     } catch (err) {
-      return reply.status(404).send({
+      return reply.status(err instanceof Error && err.message.includes('não encontrado') ? 404 : 409).send({
         error: err instanceof Error ? err.message : 'Trabalho de impressão não encontrado'
       });
     }

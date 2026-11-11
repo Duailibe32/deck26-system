@@ -76,13 +76,40 @@ describe('Instalação operacional local, operadores e impressão virtual',()=>{
     const result=await app.inject({method:'POST',url:'/api/operation/backup',headers});expect(result.statusCode).toBe(200);
     const db=new DatabaseSync(result.json().path,{readOnly:true});try{expect(db.prepare('PRAGMA integrity_check').get()).toEqual({integrity_check:'ok'});expect(db.prepare('SELECT COUNT(*) AS count FROM users').get()).toEqual({count:1});}finally{db.close();}
   });
+  it('lista o backup e ensaia recuperação sem substituir a base ativa',async()=>{
+    const {app,store,headers,directory}=await fixture(false);
+    const created=await app.inject({method:'POST',url:'/api/operation/backup',headers});
+    expect(created.statusCode).toBe(200);
+    const name=path.basename(created.json().path);
+    const diagnostics=await app.inject({url:'/api/operation/diagnostics',headers});
+    expect(diagnostics.json().backups[0].name).toBe(name);
+    store.openTable({tableNumber:1});
+    const verify=(backup:string,remoteAddress?:string)=>app.inject({method:'POST',url:'/api/operation/backup/verify',headers,remoteAddress,payload:{name:backup}});
+    const result=await verify(name);
+    expect(result.statusCode,result.body).toBe(200);
+    expect(result.json()).toMatchObject({verified:true,counts:{users:1,orders:0,payments:0,hotel_stays:0}});
+    expect(store.getDiningTableByNumber(1)?.activeTabId).toBeTruthy();
+    expect((await verify(name,'192.168.1.50')).statusCode).toBe(403);
+    expect((await verify('../'+name)).statusCode).toBe(400);
+    fs.writeFileSync(path.join(directory,'backups','deck26-invalid.sqlite'),'arquivo inválido');
+    expect((await verify('deck26-invalid.sqlite')).statusCode).toBe(422);
+  });
   it('roteia produção à cozinha e simula cada cópia uma só vez sem marcar impressão física',async()=>{
     const {app,store,headers,directory}=await fixture();const product=store.getCatalog().products[0]!;store.db.prepare('UPDATE catalog_products SET track_stock=0 WHERE id=?').run(product.id);
     const table=store.openTable({tableNumber:1});store.createOrder({tabId:table.tab.id,tableNumber:1,originNode:'WAITER_MOBILE',channel:'DINE_IN',idempotencyKey:'operation-print-fixture',items:[{productId:product.id,quantity:1}]});
     const job=store.listPrintJobs()[0]!;expect(job).toBeDefined();const send=()=>app.inject({method:'POST',url:'/api/operation/print-jobs/'+job.id+'/simulate',headers});
     const first=(await send()).json(),again=(await send()).json();expect(first.id).toBe(again.id);expect(first.path.startsWith(directory)).toBe(true);expect(fs.readFileSync(first.path,'utf8')).toContain('NENHUMA IMPRESSORA ACIONADA');
     expect(store.listPrintJobs()[0]!.status).not.toBe('PRINTED');expect(store.db.prepare('SELECT COUNT(*) AS count FROM print_simulations').get()).toEqual({count:1});
-    store.reprintJob(job.id,'usr-owner-01');await send();expect(store.db.prepare('SELECT COUNT(*) AS count FROM print_simulations').get()).toEqual({count:2});
+    store.updatePrintJobStatus({jobId:job.id,status:'FAILED',errorMsg:'Falha de impressora simulada'});
+    const before=store.listOrders().length,stockBefore=store.getProductStockQuantity(product.id);
+    const reprint=()=>app.inject({method:'POST',url:'/api/print-jobs/'+job.id+'/reprint',headers,payload:{expectedCopyNumber:1}});
+    const authorized=await reprint();
+    expect(authorized.statusCode).toBe(200);
+    expect(authorized.json().printJob.payloadText).toContain('2a VIA');
+    expect((await reprint()).statusCode).toBe(409);
+    await send();expect(store.db.prepare('SELECT COUNT(*) AS count FROM print_simulations').get()).toEqual({count:2});
+    expect(store.listOrders()).toHaveLength(before);
+    expect(store.getProductStockQuantity(product.id)).toBe(stockBefore);
   });
   it('modelos de 58/80 mm escapam conteúdo e não criam movimentos financeiros',async()=>{
     const {app,store,headers}=await fixture(false);const before=store.listFinancialTransactions().length;

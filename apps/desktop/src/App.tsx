@@ -1,4 +1,4 @@
-import {TableQrCode,tableMenuBase} from './TableQrCode.js';
+import {TableQrCode,TableQrKit,tableMenuBase} from './TableQrCode.js';
 import {StockWorkspace} from './StockWorkspace.js';
 import {OperationsHub} from './OperationsHub.js';
 import {StayOptionsFields,defaultStayOptions,RoomExtras} from './HotelExtras.js';
@@ -3430,6 +3430,11 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
               <p style={{ fontSize: '0.78rem', color: 'var(--d26-gray-400)', marginBottom: '12px' }}>
                 Escaneie o QR com a câmera do celular conectado à mesma rede. Baixe a imagem para imprimir e identificar a mesa.
               </p>
+              <TableQrKit tables={(snapshot.qrTables ?? []).filter(qt => qt.active && qt.qrToken).map(qt => {
+                const menu = new URL('/', tableMenuBase(localApiBase, window.location.origin, snapshot.lanAddresses));
+                menu.searchParams.set('qr', qt.qrToken);
+                return { number: qt.tableNumber, url: menu.href };
+              })}/>
               <table className="d26-table">
                 <thead>
                   <tr>
@@ -5495,7 +5500,7 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
         {/* =====================================================================
             MÓDULO: IMPRESSORAS TÉRMICAS ESC/POS (COM REIMPRESSÃO AUTORIZADA)
            ===================================================================== */}
-        {activeModule === 'impressoras' && <PrintingModule api={localApiBase} headers={getAuthHeaders} jobs={snapshot.printJobs}/> }
+        {activeModule === 'impressoras' && <PrintingModule api={localApiBase} headers={getAuthHeaders} jobs={snapshot.printJobs} onRefresh={refreshState}/> }
         {false && activeModule === 'impressoras' && (
           <div className="d26-card">
             <h2 style={{ fontSize: '1.05rem', marginBottom: '12px' }}>

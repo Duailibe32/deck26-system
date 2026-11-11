@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import os from 'node:os';
+import {DatabaseSync} from 'node:sqlite';
 import {RoleSchema,type Permission,type UserRole,type PrintJob} from '@deck26/contracts';
 import type {LocalOperationalStore} from './store.js';
 import {renderThermalPreview,thermalModels} from './thermal-preview.js';
@@ -15,6 +16,23 @@ const settingsSchema=z.object({restaurantName:z.string().min(2).max(100),address
 export function registerOperationRoutes(app:FastifyInstance,store:LocalOperationalStore,authorize:Authorize){
   const settings=()=>{const row=store.db.prepare('SELECT json FROM operational_settings WHERE id=1').get() as {json:string}|undefined;return settingsSchema.parse(row?JSON.parse(row.json):{restaurantName:'DECK 26',cashierWidth:80,kitchenWidth:80});};
   const baseDirectory=()=>process.env.DECK26_OPERATION_DATA_DIR||path.dirname((store.db.prepare('PRAGMA database_list').get() as {file:string}).file||path.resolve('data/local-operation'));
+  const backupDirectory=()=>path.join(baseDirectory(),'backups');
+  const backupName=/^(?:deck26|diario|encerramento)-[\dA-Za-z-]+\.sqlite$/;
+  const listBackups=()=>{
+    const directory=backupDirectory();
+    if(!fs.existsSync(directory))return [];
+    return fs.readdirSync(directory,{withFileTypes:true}).flatMap(entry=>{
+      if(!entry.isFile()||!backupName.test(entry.name))return [];
+      try {
+        const stat=fs.lstatSync(path.join(directory,entry.name));
+        return stat.isFile()?[{name:entry.name,bytes:stat.size,createdAt:stat.mtime.toISOString()}]:[];
+      } catch(error) {
+        if((error as NodeJS.ErrnoException).code==='ENOENT')return [];
+        throw error;
+      }
+    }).sort((a,b)=>b.createdAt.localeCompare(a.createdAt));
+  };
+  const devices=()=>[{id:'CASHIER',name:'Caixa',width:settings().cashierWidth},{id:'KITCHEN',name:'Cozinha',width:settings().kitchenWidth}];
   const simulate=(job:PrintJob,actorId:string,automatic=false)=>{
     const device=job.targetPrinter==='PRINTER_CASHIER'?'CASHIER':'KITCHEN',copy=job.copyNumber??1,width=device==='CASHIER'?settings().cashierWidth:settings().kitchenWidth;
     const existing=store.db.prepare('SELECT id,width_mm,payload_text FROM print_simulations WHERE job_id=? AND copy_number=?').get(job.id,copy) as {id:string;width_mm:58|80;payload_text:string}|undefined;const html=renderThermalPreview(existing?.payload_text??job.payloadText,existing?.width_mm??width,device==='CASHIER'?'Caixa':'Cozinha');
@@ -41,10 +59,47 @@ export function registerOperationRoutes(app:FastifyInstance,store:LocalOperation
   app.get('/api/operation/audit',async(req,reply)=>{if(!authorize(req,reply,'admin:configure'))return;return store.listAuditLogs(undefined,150);});
   app.post('/api/operation/backup',async(req,reply)=>{
     const actor=authorize(req,reply,'admin:configure');if(!actor)return;if(!local(req))return reply.code(403).send({error:'Crie backups pelo computador principal.'});
-    const directory=path.join(baseDirectory(),'backups');fs.mkdirSync(directory,{recursive:true});const file=path.join(directory,'deck26-'+new Date().toISOString().replace(/[:.]/g,'-')+'-'+crypto.randomUUID().slice(0,6)+'.sqlite');
+    const directory=backupDirectory();fs.mkdirSync(directory,{recursive:true});const file=path.join(directory,'deck26-'+new Date().toISOString().replace(/[:.]/g,'-')+'-'+crypto.randomUUID().slice(0,6)+'.sqlite');
     store.db.prepare('VACUUM INTO ?').run(file);store.recordAuditLog({actorUserId:actor.userId,action:'LOCAL_BACKUP_CREATED',entityType:'BACKUP',entityId:path.basename(file)});return {path:file,bytes:fs.statSync(file).size};
   });
-  app.get('/api/operation/printers',async(req,reply)=>{if(!authorize(req,reply,'printers:manage'))return;return {mode:'SIMULATOR',devices:[{id:'CASHIER',name:'Caixa',width:settings().cashierWidth},{id:'KITCHEN',name:'Cozinha',width:settings().kitchenWidth}],simulations:store.db.prepare('SELECT * FROM print_simulations ORDER BY created_at DESC LIMIT 100').all()};});
+  app.get('/api/operation/diagnostics',async(req,reply)=>{
+    if(!authorize(req,reply,'admin:configure'))return;
+    const backups=local(req)?listBackups().slice(0,20):[];
+    return {operational:process.env.DECK26_OPERATIONAL==='true',serverTime:new Date().toISOString(),port:process.env.PORT||null,printerMode:'SIMULATOR',devices:devices(),backups,local:local(req)};
+  });
+  app.post('/api/operation/backup/verify',async(req,reply)=>{
+    const actor=authorize(req,reply,'admin:configure');if(!actor)return;
+    if(!local(req))return reply.code(403).send({error:'Valide a recuperação pelo computador principal.'});
+    const body=z.object({name:z.string().max(100).regex(backupName)}).strict().safeParse(req.body);
+    if(!body.success)return reply.code(400).send({error:'Selecione um backup da lista.'});
+    const backup=listBackups().find(file=>file.name===body.data.name);
+    if(!backup)return reply.code(404).send({error:'Backup não encontrado.'});
+    const directory=fs.mkdtempSync(path.join(os.tmpdir(),'deck26-restore-check-'));
+    try {
+      const restored=path.join(directory,'restaurado.sqlite');
+      fs.copyFileSync(path.join(backupDirectory(),backup.name),restored,fs.constants.COPYFILE_EXCL);
+      const database=new DatabaseSync(restored,{readOnly:true});
+      let counts:Record<string,number>;
+      try {
+        const integrity=database.prepare('PRAGMA integrity_check').all();
+        if(integrity.length!==1||integrity[0]?.integrity_check!=='ok'||database.prepare('PRAGMA foreign_key_check').get()){
+          return reply.code(422).send({error:'A cópia isolada apresentou falha de integridade.'});
+        }
+        counts=Object.fromEntries(['users','orders','payments','hotel_stays'].map(table=>[
+          table, Number(database.prepare('SELECT COUNT(*) AS count FROM '+table).get()?.count)
+        ]));
+        if(!counts.users)return reply.code(422).send({error:'A cópia não contém operadores cadastrados.'});
+      } finally { database.close(); }
+      store.recordAuditLog({actorUserId:actor.userId,action:'LOCAL_BACKUP_RESTORE_VERIFIED',entityType:'BACKUP',entityId:backup.name});
+      return {verified:true,backup:backup.name,counts};
+    } catch(error) {
+      app.log.warn({err:error},'Falha no ensaio de restauração do backup.');
+      return reply.code(422).send({error:'Não foi possível abrir a cópia isolada como um banco do DECK 26.'});
+    } finally {
+      fs.rmSync(directory,{recursive:true,force:true});
+    }
+  });
+  app.get('/api/operation/printers',async(req,reply)=>{if(!authorize(req,reply,'printers:manage'))return;return {mode:'SIMULATOR',devices:devices(),simulations:store.db.prepare('SELECT job_id, copy_number FROM print_simulations ORDER BY created_at DESC LIMIT 100').all()};});
   app.get<{Params:{model:string}}>('/api/operation/print-models/:model',async(req,reply)=>{if(!authorize(req,reply,'printers:manage'))return;const key=req.params.model as keyof typeof thermalModels;if(!thermalModels[key])return reply.code(404).send({error:'Modelo não encontrado.'});const device=key==='kitchen'?'Cozinha':'Caixa';return {html:renderThermalPreview(thermalModels[key],key==='kitchen'?settings().kitchenWidth:settings().cashierWidth,device)};});
   app.post<{Params:{id:string}}>('/api/operation/print-jobs/:id/simulate',async(req,reply)=>{
     const actor=authorize(req,reply,'printers:manage');if(!actor)return;const job=store.listPrintJobs().find(item=>item.id===req.params.id);if(!job)return reply.code(404).send({error:'Trabalho não encontrado.'});if(job.status==='CANCELLED')return reply.code(409).send({error:'Trabalho cancelado.'});
