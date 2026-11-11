@@ -1,0 +1,11 @@
+.d26-toast-stack { position:fixed; right:14px; bottom:calc(38px + env(safe-area-inset-bottom,0px)); z-index:1100; width:min(380px,calc(100vw - 28px)); display:grid; gap:8px; pointer-events:none; }
+.d26-toast { pointer-events:auto; display:grid; grid-template-columns:32px minmax(0,1fr) 44px; gap:9px; align-items:center; padding:8px 8px 8px 11px; color:#fff2f8; background:#262126; border:1px solid #78485f; border-left:4px solid #f72585; border-radius:12px; box-shadow:0 8px 24px #0008; overflow-wrap:anywhere; }
+.d26-toast strong { display:block; font-size:14px; }
+.d26-toast p { margin:4px 0 0; font-size:12px; color:#e3c7d4; }
+.d26-toast-icon { display:grid; place-items:center; width:30px; height:30px; border-radius:8px; background:#4c2b40; color:#ffb2d1; font-weight:750; }
+.d26-toast[data-tone="warning"] { border-left-color:#ffc377; }
+.d26-toast[data-tone="error"] { border-left-color:#ff879e; }
+.d26-toast[data-tone="warning"] .d26-toast-icon { background:#563d29; color:#ffd5a1; }
+.d26-toast[data-tone="error"] .d26-toast-icon { background:#633245; color:#ffd0da; }
+.d26-toast button { min-width:44px; min-height:44px; border:1px solid transparent; border-radius:8px; color:#ffe3ee; background:transparent; cursor:pointer; font-size:20px; }
+.d26-toast button:hover,.d26-toast button:focus-visible { border-color:#f7a6c7; }

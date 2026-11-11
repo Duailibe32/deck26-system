@@ -96,3 +96,5 @@
   .d26-customer-category { margin-block: 18px; }
   .d26-customer-category h2 { margin-block: 6px 12px; }
 }
+
+.d26-customer .d26-menu-group-filter { max-width:1100px; margin:12px auto; padding:0 22px; }

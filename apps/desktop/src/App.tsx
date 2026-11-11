@@ -1,3 +1,5 @@
+import {DesktopToasts,useDesktopToasts} from './DesktopToasts.js';
+import {alertBaseline,alertsSince} from './desktopAlerts.js';
 import {ShiftQueue,useShiftClock} from './ShiftQueue.js';
 import {receptionQueue} from './shiftQueueModel.js';
 import {TableQrCode,TableQrKit,tableMenuBase} from './TableQrCode.js';
@@ -225,7 +227,10 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
   const [showPinModal, setShowPinModal] = useState<boolean>(true);
 
   const [serverConnected, setServerConnected] = useState<boolean>(false);
-  const [feedbackBanner, setFeedbackBanner] = useState<string | null>(null);
+  const {toasts,push:pushToast,dismiss:dismissToast}=useDesktopToasts();
+  const alertsRef=useRef<{token:string;baseline:ReturnType<typeof alertBaseline>}|null>(null);
+  const refreshSequence=useRef({started:0,applied:0});
+  const currentSessionToken=useRef<string|undefined>(undefined);
 
   const [snapshot, setSnapshot] = useState<ServerStateSnapshot>({
     lanAddresses: ['127.0.0.1'],
@@ -434,6 +439,14 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
   const [maintBlockRoom, setMaintBlockRoom] = useState<boolean>(true);
 
   const activeRole: UserRole = authSession?.role ?? 'WAITER';
+  currentSessionToken.current=authSession?.token;
+  useEffect(()=>{
+    if(!authSession||!serverConnected)return;
+    const baseline=alertBaseline(snapshot,authSession.role);
+    const prior=alertsRef.current;
+    alertsRef.current={token:authSession.token,baseline};
+    if(prior?.token===authSession.token)alertsSince(prior.baseline,baseline).forEach(pushToast);
+  },[snapshot,serverConnected,authSession]);
   const receptionTasks=useMemo(()=>activeModule==='hotel-reservas'?receptionQueue(snapshot.hotelRooms,snapshot.hotelStays??[],snapshot.tabs,activeRole,shiftNow):[],[activeModule,snapshot.hotelRooms,snapshot.hotelStays,snapshot.tabs,activeRole,shiftNow]);
   useEffect(()=>{
     if(!attentionRoom||hotelSubTab!=='MAPA')return;
@@ -474,21 +487,30 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
       });
       setInterfaceMode('SIMPLIFIED');setActiveModule(roleHome(data.user.role));
       setShowPinModal(false);setPinInput('');
-      notify(`Operador autenticado: ${data.user.name} (${data.user.role})`);
+      notify(`Bem-vindo, ${data.user.name}.`);
     } catch {
       setLoginError('Não foi possível conectar à operação local. Aguarde alguns segundos e tente novamente.');
     } finally { setLoginBusy(false); }
   }
 
   async function refreshState() {
+    const token=authSession?.token;
+    if(!token)return;
+    const seq=++refreshSequence.current.started;
+    const stale=()=>token!==currentSessionToken.current||seq<refreshSequence.current.applied;
     try {
       const res = await fetch(`${localApiBase}/api/state`, {headers: getAuthHeaders()});
+      if(stale())return;
       if (res.status === 401) { onSignOut(); return; }
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = (await res.json()) as ServerStateSnapshot;
+      if(stale())return;
+      refreshSequence.current.applied=seq;
       setSnapshot(data);
       setServerConnected(true);
     } catch {
+      if(stale())return;
+      refreshSequence.current.applied=seq;
       setServerConnected(false);
     }
   }
@@ -527,8 +549,7 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
   useOperationalEvents(localApiBase,authSession?.token,!!authSession&&hasPermission(authSession.role,'tabs:manage'),()=>{void refreshState();});
 
   function notify(msg: string) {
-    setFeedbackBanner(msg);
-    setTimeout(() => setFeedbackBanner(null), 6500);
+    pushToast({title:msg,tone:'info'});
   }
 
   function parseReaisToCents(raw: string, fallbackCents: number): number {
@@ -1745,6 +1766,7 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
     });
   }, [snapshot.catalog.products, posSearchQuery, selectedCategoryId, selectedChannel, activeModule]);
 
+  const compactHeader=['caixa-pdv','mesas-comandas','garcons'].includes(activeModule);
   const currentModuleDef = SYSTEM_MODULES.find((m) => m.id === activeModule) ?? SYSTEM_MODULES[0]!;
   const openTabs = snapshot.tabs.filter((t) => t.status !== 'CLOSED' && t.status !== 'CANCELLED');
   const activeKitchenOrders = snapshot.orders.filter(
@@ -1981,33 +2003,10 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
           </div>
         )}
 
-        {feedbackBanner && (
-          <div
-            style={{
-              background: 'linear-gradient(90deg, rgba(247, 37, 133, 0.2), rgba(114, 9, 183, 0.25))',
-              border: '1px solid #F72585',
-              padding: '10px 16px',
-              borderRadius: '10px',
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              fontSize: '0.86rem',
-              fontWeight: 600
-            }}
-          >
-            <span>{feedbackBanner}</span>
-            <button
-              className="d26-btn d26-btn-secondary"
-              style={{ padding: '4px 10px' }}
-              onClick={() => setFeedbackBanner(null)}
-            >
-              Fechar
-            </button>
-          </div>
-        )}
+        <DesktopToasts toasts={toasts} dismiss={dismissToast}/>
 
         {/* CABEÇALHO DO MÓDULO ATIVO */}
-        <div
+        {!compactHeader&&<div
           className="d26-card"
           style={{
             display: 'flex',
@@ -2032,7 +2031,7 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
             </button>
             {import.meta.env.VITE_DECK26_OPERATIONAL!=='true'&&<button className="d26-btn d26-btn-primary" onClick={handleTriggerCloudSync}>⇄ Sincronizar</button>}
           </div>
-        </div>
+        </div>}
 
         {/* =====================================================================
             MÓDULO 1: DASHBOARD

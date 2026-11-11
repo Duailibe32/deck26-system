@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { Deck26Logo } from '@deck26/ui';
+import { Deck26Logo,MenuCategoryFilter,matchesMenuGroup,type MenuGroup } from '@deck26/ui';
 import { formatBrlCents as money, resolveChannelPriceCents, type CatalogProduct, type CatalogCategory, type Order } from '@deck26/contracts';
 import { noteSuggestions, toggleNote } from './desktopModels.js';
 import { productSeal } from './touchModels.js';
@@ -30,6 +30,7 @@ export function CustomerMenu({
     [message, setMessage] = useState(''),
     [busy, setBusy] = useState(false),
     [view, setView] = useState<'menu' | 'cart' | 'status' | 'service'>('menu'),
+    [group,setGroup]=useState<MenuGroup>('all'),
     [category, setCategory] = useState('ALL'),
     [search, setSearch] = useState(''),
     [cart, setCart] = useState<Line[]>(() => {
@@ -343,14 +344,25 @@ export function CustomerMenu({
   };
   if (!data) return <main className="d26-customer"><Deck26Logo /><p role="status">{error || 'Preparando o cardápio…'}</p><button onClick={() => location.reload()}>Tentar novamente</button></main>;
   const highlights = (c: CatalogCategory) => data.highlights.some((word: string) => normalize(c.name).includes(word));
-  const ordered = [...categories].sort((a, b) => Number(highlights(b)) - Number(highlights(a)) || a.sortOrder - b.sortOrder);
+  const byCategory=new Map<string,CatalogProduct[]>();
+  const menuCategoryIds=new Set<string>();
+  const term=normalize(search.trim());
+  for(const item of products){
+    if(!item.active||!item.availableChannels.includes(channel))continue;
+    menuCategoryIds.add(item.categoryId);
+    if(!matchesMenuGroup(item.categoryId,group)||!normalize(item.name+' '+item.description).includes(term))continue;
+    const list=byCategory.get(item.categoryId);
+    if(list)list.push(item);else byCategory.set(item.categoryId,[item]);
+  }
+  const ordered = categories.filter(c=>menuCategoryIds.has(c.id)&&matchesMenuGroup(c.id,group))
+    .sort((a, b) => Number(highlights(b)) - Number(highlights(a)) || a.sortOrder - b.sortOrder);
+  const visible=ordered.filter(c=>(category==='ALL'||c.id===category)&&byCategory.has(c.id));
   return <main className="d26-customer"><header><Deck26Logo showHotelSubtitle /><span>{qrToken ? 'Mesa ' + data.table.tableNumber + ' · DECK 26' : 'Peça do seu jeito'}</span><button aria-label="Atualizar cardápio" onClick={() => void call(endpoint).then(setData).catch(e => setMessage(e.message))}>↻</button></header>{view==='menu'&&<section className="d26-customer-hero"><small>FEITO NA HORA · DO NOSSO JEITO</small><h1>Seu próximo<br /><em>favorito está aqui.</em></h1><p>{qrToken ? 'Escolha, personalize e envie seu pedido direto para nossa equipe.' : 'Do Deck 26 até você. Comida de verdade, sabor de casa.'}</p>{!qrToken && <span className="d26-customer-eta">◷ Previsão atual: {etaMin}–{etaMax} min{data.eta.busy ? ' · cozinha movimentada' : ''}</span>}</section>}
  {qrToken && view === 'service' && <section className="d26-customer-service"><h1>Atendimento</h1><button disabled={busy || !data.table.open} onClick={() => void service('WAITER')}>🔔 Chamar garçom</button><button disabled={busy || !data.table.open} onClick={() => setBillChoice(!billChoice)}>💳 Pedir a conta</button>{billChoice && <div><button onClick={() => void service('BILL', 'CARD')}>Trazer maquininha</button><button onClick={() => void service('BILL', 'PIX')}>Pagar com PIX</button></div>}{!data.table.open && <p>Aguarde a equipe abrir sua mesa para enviar pedidos.</p>}</section>}
  {!qrToken&&data.service&&<div className={'d26-customer-store '+(storeOpen?'':'closed')} role="status"><strong>{storeOpen?'● ':''}{data.service.message}</strong>{data.service.notice&&<small>{data.service.notice}</small>}{!storeOpen&&<small>Você pode consultar o cardápio. Novos envios voltam a ser aceitos quando o atendimento reabrir.</small>}</div>}
  {qrToken && data.coverNotice && <p className="d26-customer-notice">🎵 {data.coverNotice.notice} · {money(data.coverNotice.unitCents)} por pessoa.</p>}{(message || error) && <p role="status" className="d26-customer-notice">{message || error}</p>}
- {view === 'menu' && <><div className="d26-customer-search"><input type="search" aria-label="Buscar produto" value={search} placeholder="Buscar no cardápio" onChange={e => setSearch(e.target.value)} /></div><nav className="d26-customer-categories"><button aria-pressed={category === 'ALL'} onClick={() => setCategory('ALL')}>Todo o cardápio</button>{ordered.map(c => <button key={c.id} aria-pressed={category === c.id} onClick={() => setCategory(c.id)}>{highlights(c) ? '★ ' : ''}{c.name}</button>)}</nav>{ordered.filter(c => category === 'ALL' || c.id === category).map(c => {
-        const list = products.filter(p => p.active && p.availableChannels.includes(channel) && p.categoryId === c.id && normalize(p.name + ' ' + p.description).includes(normalize(search)));
-        if (!list.length) return null;
+ {view === 'menu' && <><div className="d26-customer-search"><input type="search" aria-label="Buscar produto" value={search} placeholder="Buscar no cardápio" onChange={e => setSearch(e.target.value)} /></div><MenuCategoryFilter value={group} categoryIds={menuCategoryIds} onChange={next=>{setGroup(next);setCategory('ALL');}}/><nav className="d26-customer-categories" aria-label="Categorias específicas"><button aria-pressed={category === 'ALL'} onClick={() => setCategory('ALL')}>Todas desta seleção</button>{ordered.map(c => <button key={c.id} aria-pressed={category === c.id} onClick={() => setCategory(c.id)}>{highlights(c) ? '★ ' : ''}{c.name}</button>)}</nav>{!visible.length&&<p className="d26-customer-notice" role="status">Nenhum produto neste filtro.</p>}{visible.map(c => {
+        const list = byCategory.get(c.id)!;
         return <section className="d26-customer-category" key={c.id}><header><div><small>{highlights(c) ? 'DESTAQUE PARA AGORA' : 'PREPARADO COM CUIDADO'}</small><h2>{c.name}</h2></div><span>{list.length} opções</span></header><div className="d26-customer-grid">{list.map(p => {
               const seal = productSeal(p, c.name);
               return <article className={'d26-seal-' + seal.tone} key={p.id}><ProductPicture product={p} className="d26-customer-dish" fallback={seal.icon}/><div><h3>{p.name}</h3><p>{p.description}</p><footer><strong>{money(resolveChannelPriceCents(p, channel))}</strong><button disabled={!storeOpen || busy || pendingFlag || p.availableForSale === false || !!qrToken && !data.table.open} aria-label={(p.modifierGroups.length ? 'Personalizar ' : 'Adicionar ') + p.name} onClick={() => add(p)}>{p.availableForSale === false ? 'Indisponível agora' : p.modifierGroups.length ? 'Personalizar' : 'Adicionar ＋'}</button>{!p.modifierGroups.length && p.availableForSale !== false && <button disabled={!storeOpen || busy || pendingFlag || !!qrToken && !data.table.open} aria-label={'Personalizar ' + p.name} onClick={() => personalize(p)}>Personalizar</button>}</footer></div></article>;

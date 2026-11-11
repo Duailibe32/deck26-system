@@ -1,11 +1,11 @@
-import { DECK26_STAGE7A_MENU_93 as menu, DECK26_INITIAL_ROOMS_24 as rooms, calculateTabTotals, type Order } from '@deck26/contracts';
+import { DECK26_STAGE7A_MENU_93 as menu, DECK26_INITIAL_ROOMS_24 as rooms, calculateTabTotals, formatBrlCents, type Order } from '@deck26/contracts';
 
 export type Item = { productId:string; name:string; unitPriceCents:number; quantity:number };
 export type Sale = { id:string; label:string; center:'REST'|'HOTEL'|'DELIV'; totalCents:number; method:string; createdAt:string };
 export type RoomUse = { id:string; roomNumber:string; nights:number; rate:number; consumptionCents:number; guestLabel:string };
 export type Delivery = {id:string; number:number; items:Item[]; totalCents:number; feeCents:number; status:'NOVO'|'EM_PREPARO'|'SAIU_PARA_ENTREGA'|'ENTREGUE'|'CANCELADO'};
 export type Document = {id:string; label:string; type:'NFCE'|'NFSE'; totalCents:number; status:'SIMULADO'|'CANCELADO';createdAt:string};
-export type DemoState = {version:3; tables:Record<string,{items:Item[];paidCents:number}>; sales:Sale[]; stays:RoomUse[]; deliveries:Delivery[]; documents:Document[]};
+export type DemoState = {version:3; tables:Record<string,{items:Item[];paidCents:number;billRequested?:boolean}>; sales:Sale[]; stays:RoomUse[]; deliveries:Delivery[]; documents:Document[]};
 export const storageKey='deck26-demo-v3';
 export const uid=()=>crypto.randomUUID();
 export function itemFor(id:string):Item { const p=menu.find(p=>p.id===id);if(!p) throw Error('Produto indisponível.');return {productId:p.id,name:p.name,unitPriceCents:p.priceCents,quantity:1}; }
@@ -20,6 +20,33 @@ export function initialState():DemoState {
   const sales:Sale[]=[];
   for(let i=0;i<7;i++){const date=new Date();date.setDate(date.getDate()-(6-i));date.setHours(12,0,0,0);for(const [center,amount] of [['REST',185000+i*13000],['HOTEL',104000+i*6000],['DELIV',62000+i*4000]] as const)sales.push({id:uid(),label:'Movimento ilustrativo',center,totalCents:amount,method:'PIX',createdAt:date.toISOString()});}
   return {version:3,tables,sales,stays:rooms.filter(r=>r.commercialStatus==='OPERACIONAL').slice(0,3).map((r,i)=>({id:uid(),roomNumber:r.number,nights:2,rate:r.dailyRateCents,consumptionCents:0,guestLabel:'Hóspede exemplo '+(i+1)})),deliveries:[],documents:[]};
+}
+export function simulatePeak(state:DemoState):DemoState {
+  const tables={...state.tables};
+  for(const [index,number] of ['2','3','5','6','8','10'].entries()){
+    const current=tables[number];
+    if(!current||current.items.length)continue;
+    tables[number]={items:[{...itemFor(menu[index*7]!.id),quantity:2},itemFor(menu[75+index]!.id)],paidCents:0,billRequested:index>=4};
+  }
+  const stays=[...state.stays];
+  for(const room of rooms){
+    if(stays.length>=8)break;
+    if(room.commercialStatus!=='OPERACIONAL'||stays.some(stay=>stay.roomNumber===room.number))continue;
+    stays.push({id:uid(),roomNumber:room.number,nights:1,rate:room.dailyRateCents,consumptionCents:0,guestLabel:'Hóspede de demonstração'});
+  }
+  return {...state,tables,stays};
+}
+export function demoDaySummary(state:DemoState,date=new Date()) {
+  const day=date.toLocaleDateString('pt-BR');
+  const sales=state.sales.filter(sale=>new Date(sale.createdAt).toLocaleDateString('pt-BR')===day);
+  const total=(center:Sale['center'])=>formatBrlCents(sales.filter(sale=>sale.center===center).reduce((sum,sale)=>sum+sale.totalCents,0));
+  return [
+    '*DECK 26 · Resumo de demonstração*',day,
+    'Restaurante: '+total('REST'),'Hotel: '+total('HOTEL'),'Delivery: '+total('DELIV'),
+    'Mesas abertas: '+Object.values(state.tables).filter(table=>table.items.length>0).length,
+    'Quartos ocupados: '+state.stays.length+'/'+rooms.filter(room=>room.commercialStatus==='OPERACIONAL').length,
+    'Dados fictícios.'
+  ].join('\n');
 }
 export function addItem(state:DemoState,table:string,item:Item):DemoState {
   const current=state.tables[table];if(!current)throw Error('Mesa inválida.');if(current.paidCents>0)throw Error('Finalize os recebimentos desta comanda antes de adicionar itens.');

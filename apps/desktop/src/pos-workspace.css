@@ -58,3 +58,13 @@
 .d26-pos-summary dd { margin: 0; font-weight: 700; }
 .d26-pos-danger { color: #fff; background: #901f42; border: 1px solid #bf5575; }
 .d26-pos-danger:disabled { opacity: .55; }
+
+.d26-pos-top h1 { margin:0; font-size:clamp(20px,2vw,27px); line-height:1.15; }
+.d26-pos-map-filters { display:flex; gap:6px; flex-wrap:wrap; }
+.d26-pos-map-filters button { min-height:40px; padding:5px 9px; border-radius:9px; border:1px solid #594252; background:#2a2229; color:#f4dce8; font:inherit; font-size:12px; cursor:pointer; }
+.d26-pos-map-filters button[aria-pressed="true"] { background:#573146; border-color:#f48bb7; }
+.d26-pos-map-filters button[data-tone="free"] { color:#91ecb1; }
+.d26-pos-map-filters button[data-tone="occupied"] { color:#ffe17c; }
+.d26-pos-map-filters button[data-tone="payment"] { color:#ffadbd; }
+.d26-pos-table progress { accent-color:#ffb0d0; width:100%; height:6px; }
+.d26-pos-top-actions { display:flex; flex-wrap:wrap; justify-content:flex-end; align-items:center; gap:8px; }

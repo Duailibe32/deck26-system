@@ -76,4 +76,5 @@ export const MenuPriceBadge: React.FC<MenuPriceBadgeProps> = ({ cents }) => {
 };
 
 export { FinancialCharts } from './FinancialCharts.js';
+export { MenuCategoryFilter, matchesMenuGroup, normalizeMenuSearch, type MenuGroup } from './MenuCategoryFilter.js';
 export type { DailySalesPoint, RoomOccupancyPoint } from './FinancialCharts.js';

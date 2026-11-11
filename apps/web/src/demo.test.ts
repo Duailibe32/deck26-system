@@ -1,7 +1,17 @@
 import {describe,it,expect} from 'vitest';
-import {initialState,itemFor,addItem,totals,receiveTable,checkIn,checkOut,transferToRoom,advanceDelivery} from './demo.js';
+import {initialState,itemFor,addItem,totals,receiveTable,checkIn,checkOut,transferToRoom,advanceDelivery,simulatePeak,demoDaySummary} from './demo.js';
 import {DECK26_INITIAL_ROOMS_24 as rooms,DECK26_STAGE7A_MENU_93 as menu} from '@deck26/contracts';
 describe('Fluxos interativos da demonstração',()=>{
+  it('simula movimento sem substituir comandas existentes ou criar recebimentos',()=>{
+    const initial=initialState();
+    const state=simulatePeak(initial);
+    expect(state.tables['1']).toBe(initial.tables['1']);
+    expect(state.tables['8']?.billRequested).toBe(true);
+    expect(state.stays).toHaveLength(8);
+    expect(state.sales).toBe(initial.sales);
+    expect(simulatePeak(state)).toEqual(state);
+    expect(demoDaySummary(state)).toContain('Dados fictícios.');
+  });
   it('mantém mesas separadas e saldo parcial exato',()=>{let s=initialState();s=addItem(s,'2',itemFor(menu[0]!.id));expect(s.tables['3']!.items).toEqual([]);const t=totals(s.tables['2']!.items);s=receiveTable(s,'2',1000,'PIX');expect(totals(s.tables['2']!.items,s.tables['2']!.paidCents).remainingCents).toBe(t.totalCents-1000);expect(()=>receiveTable(s,'2',t.totalCents,'CASH')).toThrow();s=receiveTable(s,'2',t.totalCents-1000,'CASH');expect(s.tables['2']!.items).toEqual([]);});
   it('transfere consumo sem criar receita duplicada e bloqueia obras',()=>{let s=initialState();const count=s.sales.length;const amount=totals(s.tables['1']!.items).totalCents;const stay=s.stays[0]!;s=transferToRoom(s,'1',stay.id);expect(s.sales.length).toBe(count);expect(s.stays[0]!.consumptionCents).toBe(amount);s=checkOut(s,stay.id);expect(s.sales.slice(count).reduce((n,v)=>n+v.totalCents,0)).toBe(amount+stay.nights*stay.rate);const construction=rooms.find(r=>r.commercialStatus==='EM_CONSTRUCAO')!;expect(()=>checkIn(s,construction.number,1)).toThrow(/obras/);});
   it('conclui delivery uma única vez',()=>{let s=initialState();s.deliveries=[{id:'test',number:1,items:[],totalCents:2500,feeCents:500,status:'SAIU_PARA_ENTREGA'}];const count=s.sales.length;s=advanceDelivery(s,'test');expect(s.sales.length).toBe(count+1);expect(()=>advanceDelivery(s,'test')).toThrow(/encerrada/);});
