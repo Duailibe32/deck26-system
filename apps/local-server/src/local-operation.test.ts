@@ -83,11 +83,16 @@ describe('Instalação operacional local, operadores e impressão virtual',()=>{
     const name=path.basename(created.json().path);
     const diagnostics=await app.inject({url:'/api/operation/diagnostics',headers});
     expect(diagnostics.json().backups[0].name).toBe(name);
+    expect(diagnostics.json().lastVerifiedBackup).toBeNull();
     store.openTable({tableNumber:1});
     const verify=(backup:string,remoteAddress?:string)=>app.inject({method:'POST',url:'/api/operation/backup/verify',headers,remoteAddress,payload:{name:backup}});
     const result=await verify(name);
     expect(result.statusCode,result.body).toBe(200);
     expect(result.json()).toMatchObject({verified:true,counts:{users:1,orders:0,payments:0,hotel_stays:0}});
+    const updated=await app.inject({url:'/api/operation/diagnostics',headers});
+    expect(updated.json().lastVerifiedBackup).toMatchObject({name,verifiedAt:expect.any(String)});
+    const remote=await app.inject({url:'/api/operation/diagnostics',headers,remoteAddress:'192.168.1.50'});
+    expect(remote.json()).toMatchObject({local:false,backups:[],lastVerifiedBackup:null});
     expect(store.getDiningTableByNumber(1)?.activeTabId).toBeTruthy();
     expect((await verify(name,'192.168.1.50')).statusCode).toBe(403);
     expect((await verify('../'+name)).statusCode).toBe(400);

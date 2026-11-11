@@ -4,13 +4,7 @@ param(
   [switch]$SemAtalho
 )
 $ErrorActionPreference = 'Stop'
-$nodeCommand = Get-Command node.exe -ErrorAction SilentlyContinue
-$npmCommand = Get-Command npm.cmd -ErrorAction SilentlyContinue
-if (!$nodeCommand -or !$npmCommand) { throw 'Instale Node.js 22.13 ou superior com npm antes de continuar.' }
-$node = $nodeCommand.Source
-$npm = $npmCommand.Source
-& $node -e "const [m,n]=process.versions.node.split('.').map(Number); if(m<22||(m===22&&n<13)) process.exit(1); require('node:sqlite');"
-if ($LASTEXITCODE -ne 0) { throw 'Instale Node.js 22.13 ou superior antes de continuar.' }
+. (Join-Path $PSScriptRoot 'WebView2-DECK26.ps1')
 $payload = Join-Path $PSScriptRoot 'payload'
 if (!(Test-Path -LiteralPath (Join-Path $payload 'ui\deck26-operation.json'))) {
   throw 'O pacote de instalação está incompleto. Baixe novamente o instalador.'
@@ -27,17 +21,24 @@ $locked = $false
 try {
   try { $locked = $mutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $locked = $true }
   if (!$locked) { throw 'Feche a janela do DECK 26 antes de instalar a atualização.' }
+  Install-Deck26WebView2
   $versions = Join-Path $appRoot 'versoes'
   New-Item -ItemType Directory -Force -Path $versions | Out-Null
   $release = Join-Path $versions ($manifest.commit.Substring(0,7)+'-'+[guid]::NewGuid().ToString('N').Substring(0,6))
   Copy-Item -LiteralPath $payload -Destination $release -Recurse
+  $runtime = Join-Path $release 'runtime'
+  $node = Join-Path $runtime 'node.exe'
+  $npm = Join-Path $runtime 'node_modules\npm\bin\npm-cli.js'
+  if (!(Test-Path -LiteralPath $node) -or !(Test-Path -LiteralPath $npm)) { throw 'O pacote está sem o Node.js integrado.' }
+  $previousPath = $env:Path
   Push-Location -LiteralPath $release
   try {
-    & $npm ci --no-audit --no-fund
+    $env:Path = "$runtime;$previousPath"
+    & $node $npm ci --no-audit --no-fund
     if ($LASTEXITCODE -ne 0) { throw 'Falha ao instalar as dependências do pacote. Confira a internet e tente novamente.' }
     & $node --import tsx --input-type=module -e "await import('./apps/local-server/src/server.ts');"
     if ($LASTEXITCODE -ne 0) { throw 'A verificação do servidor instalado falhou.' }
-  } finally { Pop-Location }
+  } finally { $env:Path = $previousPath; Pop-Location }
 
   $database = Join-Path $dataRoot 'deck26-operacao.sqlite'
   $backup = $null
@@ -86,7 +87,7 @@ try {
   if(Test-Path -LiteralPath $statePath){
     try{$previous=(Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json).release}catch{}
   }
-  $record=[ordered]@{commit=$manifest.commit;installedAt=[DateTime]::UtcNow.ToString('o');release=$release;previousRelease=$previous;dataDirectory=$dataRoot;backup=$backup}
+  $record=[ordered]@{version=$manifest.version;commit=$manifest.commit;installedAt=[DateTime]::UtcNow.ToString('o');release=$release;previousRelease=$previous;dataDirectory=$dataRoot;backup=$backup}
   $temporary=$statePath+'.'+[guid]::NewGuid().ToString('N')+'.tmp'
   [IO.File]::WriteAllText($temporary,($record|ConvertTo-Json),[Text.UTF8Encoding]::new($false))
   if(Test-Path -LiteralPath $statePath){[IO.File]::Replace($temporary,$statePath,($statePath+'.anterior'))}

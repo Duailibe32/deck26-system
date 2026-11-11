@@ -4,9 +4,18 @@ A instalação operacional mantém dados reais em `%USERPROFILE%\Deck26\DadosOpe
 
 ## Instalar pelo pacote do GitHub
 
-Baixe o artefato **deck26-windows-operacao-local** de uma execução concluída do [workflow Windows nativo](https://github.com/Duailibe32/deck26-system/actions/workflows/windows-test.yml). Extraia o download. Com Node.js 22.13 ou superior, npm, WebView2 e internet disponíveis, execute **DECK26-Instalador.exe**. Confira as pastas no assistente. Depois, abra **DECK 26 - Operacao Local** na área de trabalho.
+Baixe **DECK26-Instalador.exe** em [GitHub Releases](https://github.com/Duailibe32/deck26-system/releases/latest). Execute o assistente no Windows x64 com internet disponível. O Node.js e o npm ficam na pasta privada de cada versão. O assistente instala as dependências do aplicativo e baixa o WebView2 oficial se o Windows ainda precisar dele. Confira as pastas no assistente e depois abra **DECK 26 - Operacao Local** na área de trabalho.
 
 Para atualizar um computador que já atende clientes, feche o sistema. Quando encontra a base na pasta indicada, o instalador cria e verifica um backup antes de trocar os atalhos. Para consultar versões pelo GitHub, use **Iniciar → DECK 26 → Verificar atualizações** com o GitHub CLI autenticado em uma conta com acesso ao projeto privado. A versão anterior permanece na pasta `versoes`. Se precisar voltar, valide o backup antes de abrir uma versão anterior sobre dados atualizados.
+
+O painel **Administração → Acesso e continuidade** mostra os endereços do garçom e do cliente, a versão instalada, os backups e o último ensaio de restauração. Os botões de caixa e cozinha abrem prévias do simulador térmico.
+
+## Publicar uma Release
+
+1. Atualize a versão em `package.json` e no lockfile. Valide o commit com o CI e a compilação Windows.
+2. Confira se o manifesto e o executável correspondem ao commit. Teste a instalação em uma pasta e um banco separados.
+3. Crie uma Release estável com uma tag `vMAJOR.MINOR.PATCH` correspondente à versão do manifesto. Anexe `DECK26-Instalador.exe` e `release.json` e registre os requisitos nas notas.
+4. Para assinar o instalador, configure `DECK26_SIGNTOOL` com o caminho do SignTool e `DECK26_SIGNING_THUMBPRINT` com o identificador de um certificado Authenticode confiável no repositório de certificados do usuário que compila. O SHA-256 é calculado após a assinatura. Distribua uma versão sem certificado com o status de assinatura indicado nas notas.
 
 ## Primeiro acesso
 

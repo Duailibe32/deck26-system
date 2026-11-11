@@ -20,7 +20,8 @@ try {
     $repo = Split-Path -Parent $PSScriptRoot
     $env:DECK26_OPERATION_DATA_DIR = $DataDirectory
     $env:DECK26_OPERATION_UI_DIR = Join-Path $ApplicationDirectory 'ui'
-    $node = (Get-Command node -ErrorAction Stop).Source
+    $node = Join-Path $ApplicationDirectory 'runtime\node.exe'
+    if (-not (Test-Path -LiteralPath $node)) { $node = (Get-Command node -ErrorAction Stop).Source }
     $script = Join-Path $PSScriptRoot 'start-local-operation.mjs'
     $server = Start-Process -FilePath $node -ArgumentList @('--import','tsx',('"'+$script+'"')) -WorkingDirectory $repo -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $DataDirectory 'servidor.log') -RedirectStandardError (Join-Path $DataDirectory 'servidor-erros.log')
     for ($i=0; $i -lt 60; $i++) {

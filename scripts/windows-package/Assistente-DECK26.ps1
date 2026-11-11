@@ -82,11 +82,11 @@ $null = Add-Label $header 'Instalação do DECK 26' 24 49 700 51 25 $text -Bold
 $null = Add-Label $header 'Restaurante, bar, delivery e hotel na rede local.' 26 107 690 23 11 $muted
 $manifest = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'payload\release.json') -Raw | ConvertFrom-Json
 $shortCommit = ([string]$manifest.commit).Substring(0,7)
-$null = Add-Label $form ('Versão '+$shortCommit+'  ·  Windows') 26 158 695 23 10 $muted
+$null = Add-Label $form ('Versão '+$manifest.version+'  ·  '+$shortCommit+'  ·  Windows x64') 26 158 695 23 10 $muted
 $application = Add-DirectoryField 'Pasta do aplicativo' $ApplicationDirectory 196
 $data = Add-DirectoryField 'Pasta dos dados do estabelecimento' $DataDirectory 270
 $null = Add-Label $form 'Se houver uma base nesta pasta, o instalador cria uma cópia de segurança antes de ativar a versão.' 26 334 690 44 10 $muted
-$status = Add-Label $form 'Requisitos: Node.js 22.13 ou superior, npm, WebView2 e internet para instalar as dependências.' 26 392 694 45 10 $muted
+$status = Add-Label $form 'O instalador inclui Node.js e prepara o WebView2 quando necessário. Mantenha a internet conectada.' 26 392 694 45 10 $muted
 $progress = New-Object Windows.Forms.ProgressBar
 $progress.SetBounds(28,450,692,9)
 $progress.Style = 'Marquee'
@@ -143,7 +143,7 @@ $install.Add_Click({
     $script:process=Start-Process -FilePath (Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe') -ArgumentList $arguments -WindowStyle Hidden -PassThru -RedirectStandardOutput ($script:log+'.out') -RedirectStandardError $script:log
     foreach($control in @($application.Field,$application.Browse,$data.Field,$data.Browse,$install,$cancel)){$control.Enabled=$false}
     $status.ForeColor=$muted
-    $status.Text='Preparando a versão e instalando as dependências. Aguarde…'
+    $status.Text='Verificando o WebView2 e instalando as dependências. Aguarde…'
     $progress.Visible=$true
     $timer.Start()
   }catch{

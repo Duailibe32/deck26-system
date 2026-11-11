@@ -6,7 +6,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $repository='Duailibe32/deck26-system'
-$workflowUrl='https://github.com/'+$repository+'/actions/workflows/windows-test.yml'
+$workflowUrl='https://github.com/'+$repository+'/releases/latest'
 $download=$null
 if(!$SomenteBaixar){Add-Type -AssemblyName System.Windows.Forms}
 function Show-Message([string]$Message){
@@ -20,30 +20,29 @@ try{
     if([Windows.Forms.MessageBox]::Show('O GitHub CLI permite consultar atualizações neste PC. Quer abrir a página de downloads do GitHub?','Atualizações · DECK 26','YesNo','Information') -eq 'Yes'){Start-Process $workflowUrl}
     return
   }
-  $runsJson=& $gh.Source run list --repo $repository --workflow windows-test.yml --branch main --event push --status success --limit 8 --json databaseId,headSha
-  if($LASTEXITCODE -ne 0){throw 'Entre no GitHub CLI com uma conta que tenha acesso ao projeto privado e tente novamente.'}
-  $run=$null
-  foreach($candidate in ($runsJson|Out-String|ConvertFrom-Json)){
-    $ciJson=& $gh.Source run list --repo $repository --workflow ci.yml --branch main --event push --commit $candidate.headSha --status success --limit 1 --json databaseId
-    if($LASTEXITCODE -ne 0){throw 'Não foi possível confirmar os testes da versão no GitHub.'}
-    $ci=$ciJson|Out-String|ConvertFrom-Json
-    if($ci -and $ci[0].databaseId){$run=$candidate;break}
+  $releaseJson=& $gh.Source release view --repo $repository --json tagName,isDraft,isPrerelease,assets
+  if($LASTEXITCODE -ne 0){throw 'Não foi possível consultar as Releases. Entre no GitHub CLI com uma conta que tenha acesso ao projeto.'}
+  $candidate=$releaseJson|Out-String|ConvertFrom-Json
+  if($candidate.isDraft -or $candidate.isPrerelease -or $candidate.tagName -notmatch '^v\d+\.\d+\.\d+$' -or
+     'DECK26-Instalador.exe' -notin $candidate.assets.name -or 'release.json' -notin $candidate.assets.name){
+    throw 'Nenhuma Release estável do DECK 26 foi encontrada.'
   }
-  if(!$run){throw 'Ainda não há versão com as duas verificações concluídas.'}
+  $commit=& $gh.Source api "repos/$repository/commits/$($candidate.tagName)" --jq '.sha'
+  if($LASTEXITCODE -ne 0 -or $commit -notmatch '^[a-f0-9]{40}$'){throw 'Não foi possível confirmar o commit da Release.'}
 
   $installed=$null
   $state=Join-Path $ApplicationDirectory 'instalacao.json'
   if(Test-Path -LiteralPath $state){$installed=Get-Content -LiteralPath $state -Raw|ConvertFrom-Json}
-  if(!$SomenteBaixar -and $installed.commit -eq $run.headSha){Show-Message 'Você já está usando a versão validada mais recente.';return}
+  if(!$SomenteBaixar -and $installed.commit -eq $commit){Show-Message 'Você já está usando a versão estável mais recente.';return}
   if(!$SomenteBaixar -and $installed.commit -match '^[a-f0-9]{40}$'){
-    $relation=& $gh.Source api "repos/$repository/compare/$($installed.commit)...$($run.headSha)" --jq '.status' 2>$null
-    if($LASTEXITCODE -eq 0 -and $relation -ne 'ahead'){throw 'O pacote do GitHub não é sucessor da versão instalada. Confira as versões antes de continuar.'}
+    $relation=& $gh.Source api "repos/$repository/compare/$($installed.commit)...$commit" --jq '.status'
+    if($LASTEXITCODE -ne 0 -or $relation -ne 'ahead'){throw 'Não foi possível confirmar que a Release é sucessora da versão instalada.'}
   }
 
   $parent=if($DiretorioSaida){(New-Item -ItemType Directory -Force -Path $DiretorioSaida).FullName}else{[IO.Path]::GetTempPath()}
   $download=Join-Path $parent ('deck26-update-'+[guid]::NewGuid().ToString('N'))
   New-Item -ItemType Directory -Path $download | Out-Null
-  & $gh.Source run download $run.databaseId --repo $repository --name deck26-windows-operacao-local --dir $download
+  & $gh.Source release download $candidate.tagName --repo $repository --pattern DECK26-Instalador.exe --pattern release.json --dir $download
   if($LASTEXITCODE -ne 0){throw 'O instalador ainda não está disponível para baixar.'}
   $file=Join-Path $download 'DECK26-Instalador.exe'
   $manifestPath=Join-Path $download 'release.json'
@@ -51,10 +50,11 @@ try{
     throw 'O artefato dessa execução não contém o novo formato de instalador.'
   }
   $release=Get-Content -LiteralPath $manifestPath -Raw|ConvertFrom-Json
-  if($release.repository -ne $repository -or $release.commit -ne $run.headSha -or $release.sha256 -notmatch '^[a-fA-F0-9]{64}$' -or
+  if($release.repository -ne $repository -or $release.commit -ne $commit -or ("v"+$release.version) -ne $candidate.tagName -or $release.sha256 -notmatch '^[a-fA-F0-9]{64}$' -or
      (Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -ne $release.sha256){
     throw 'A versão ou o SHA-256 do instalador baixado não corresponde ao pacote do GitHub.'
   }
+  if($release.signed -and (Get-AuthenticodeSignature -LiteralPath $file).Status -ne 'Valid'){throw 'A assinatura digital do instalador é inválida.'}
   if($SomenteBaixar){
     Write-Output ('Instalador verificado: '+$file)
     $download=$null

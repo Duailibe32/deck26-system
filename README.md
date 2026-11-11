@@ -149,9 +149,9 @@ Consulte o [registro completo e evidências](docs/MELHORIAS_DELIVERY_20261106.md
 
 ### Instalar pelo pacote do GitHub
 
-1. Abra [Actions → Windows nativo](https://github.com/Duailibe32/deck26-system/actions/workflows/windows-test.yml) e selecione uma execução concluída com sucesso.
-2. Em **Artifacts**, baixe **deck26-windows-operacao-local** e extraia o download.
-3. No PC de destino, confirme que **Node.js 22.13 ou superior, npm e WebView2** estão disponíveis. Com internet, abra **DECK26-Instalador.exe** e siga o assistente gráfico.
+1. Abra a [Release estável do DECK 26](https://github.com/Duailibe32/deck26-system/releases/latest).
+2. Em **Assets**, baixe **DECK26-Instalador.exe**.
+3. No Windows x64, abra o instalador com internet disponível. Ele usa o Node.js e o npm incluídos no pacote, instala as dependências do lockfile e prepara o WebView2 se estiver ausente.
 4. Abra **DECK 26 - Operacao Local** pela área de trabalho. Em uma instalação nova, cadastre o proprietário. Para atualizar uma base existente, faça backup e confira a pasta de dados antes de abrir a nova versão.
 
 O assistente mostra a versão, a pasta do aplicativo e a pasta dos dados. Cada versão fica em uma pasta própria. Se houver uma base nessa pasta de dados, o instalador verifica um backup consistente antes de ativar a atualização.
@@ -159,9 +159,10 @@ O assistente mostra a versão, a pasta do aplicativo e a pasta dos dados. Cada v
 ### Atualizar pelo GitHub
 
 - No menu Iniciar do Windows, abra **DECK 26 → Verificar atualizações**. A consulta usa o GitHub CLI (`gh auth login`) e requer uma conta com acesso ao repositório privado.
-- O verificador seleciona uma execução da `main` com CI e build do Windows aprovados. Ele confere o commit e o SHA-256 do instalador e pede confirmação antes de abri-lo.
+- O verificador usa a Release estável do GitHub. Confere a tag, o commit, o SHA-256 e, para pacotes assinados, a assinatura Authenticode. A instalação começa após a confirmação.
 - Em um PC sem acesso ao GitHub privado, transfira o instalador verificado. O aplicativo opera normalmente pela rede local depois da instalação.
 - O Dependabot monitora dependências npm, Rust e GitHub Actions e abre pull requests. A versão operacional usa as dependências do lockfile da compilação selecionada.
+- Em **Administração → Acesso e continuidade**, consulte os links para o celular, a versão, o último ensaio de restauração e as prévias térmicas do caixa e da cozinha.
 
 ### Compilar e empacotar a partir do código
 
@@ -385,7 +386,7 @@ A revisão não recompõe lançamentos históricos ausentes: concilie caixa, ban
 | **WhatsApp** | Resumos e listas prontos para copiar. | Envio automático não implementado. |
 | **Acesso pela internet** | Disponível na rede local. | Implantação com HTTPS, origens autorizadas, firewall, backups e monitoramento. |
 | **Cloud / PostgreSQL** | Simulador SQLite e sincronização parcial. | Backend e sincronização integral; `DATABASE_URL` não habilita PostgreSQL. |
-| **Distribuição Windows** | Instalador gráfico com a interface e o servidor, acompanhado de manifesto de versão. | Node.js e WebView2 no PC de destino, internet na instalação e conferência nesse computador. |
+| **Distribuição Windows** | Instalador gráfico com a interface, o servidor e Node.js, acompanhado de manifesto de versão. | Windows x64 e internet para preparar as dependências na instalação. |
 
 ### Preparação fiscal sem A1
 

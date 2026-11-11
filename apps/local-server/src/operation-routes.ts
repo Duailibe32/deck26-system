@@ -64,8 +64,23 @@ export function registerOperationRoutes(app:FastifyInstance,store:LocalOperation
   });
   app.get('/api/operation/diagnostics',async(req,reply)=>{
     if(!authorize(req,reply,'admin:configure'))return;
-    const backups=local(req)?listBackups().slice(0,20):[];
-    return {operational:process.env.DECK26_OPERATIONAL==='true',serverTime:new Date().toISOString(),port:process.env.PORT||null,printerMode:'SIMULATOR',devices:devices(),backups,local:local(req)};
+    const isLocal=local(req);
+    const backups=isLocal?listBackups():[];
+    const verified=isLocal?store.db.prepare(`
+      SELECT entity_id AS name, MAX(created_at) AS verifiedAt FROM audit_logs
+      WHERE entity_type='BACKUP' AND action='LOCAL_BACKUP_RESTORE_VERIFIED'
+      GROUP BY entity_id ORDER BY verifiedAt DESC
+    `).all() as {name:string;verifiedAt:string}[]:[];
+    const createdAtByName=new Map(backups.map(backup=>[backup.name,backup.createdAt]));
+    const lastVerifiedBackup=verified.find(entry=>{
+      const createdAt=createdAtByName.get(entry.name);
+      return createdAt!==undefined&&createdAt<=entry.verifiedAt;
+    })??null;
+    return {
+      operational:process.env.DECK26_OPERATIONAL==='true',serverTime:new Date().toISOString(),
+      version:process.env.DECK26_RELEASE_VERSION??null,commit:process.env.DECK26_RELEASE_COMMIT??null,
+      printerMode:'SIMULATOR',devices:devices(),backups:backups.slice(0,20),lastVerifiedBackup,local:isLocal
+    };
   });
   app.post('/api/operation/backup/verify',async(req,reply)=>{
     const actor=authorize(req,reply,'admin:configure');if(!actor)return;

@@ -20,6 +20,13 @@ if(!secrets.control){secrets.control=crypto.randomBytes(32).toString('hex');fs.w
 const networks=Object.values(os.networkInterfaces()).flat().filter(item=>item?.family==='IPv4'&&!item.internal&&/^(192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/.test(item.address));
 const numeric=ip=>ip.split('.').reduce((sum,part)=>(sum*256+Number(part))>>>0,0);
 process.env.NODE_ENV='production';process.env.DECK26_DEMO_MODE='false';process.env.DECK26_OPERATIONAL='true';
+delete process.env.DECK26_RELEASE_VERSION;delete process.env.DECK26_RELEASE_COMMIT;
+const manifestPath=path.join(root,'release.json');
+if(fs.existsSync(manifestPath)){
+  const release=JSON.parse(fs.readFileSync(manifestPath,'utf8').replace(/^\uFEFF/,''));
+  if(/^\d+\.\d+\.\d+$/.test(release.version))process.env.DECK26_RELEASE_VERSION=release.version;
+  if(/^[a-f0-9]{40}$/.test(release.commit))process.env.DECK26_RELEASE_COMMIT=release.commit;
+}
 process.env.DECK26_OPERATION_DATA_DIR=directory;process.env.DECK26_AUTH_SECRET=secrets.auth;process.env.DECK26_QR_SEED_SECRET=secrets.qr;
 process.env.PORT='4800';process.env.DECK26_CLOUD_API_URL='http://127.0.0.1:4799';
 delete process.env.DECK26_BOOTSTRAP_PIN;delete process.env.DECK26_SYNC_SECRET;

@@ -21,14 +21,18 @@ export function AdministrationModule({api,headers}:{api:string;headers:Headers})
 type Diagnostics = {
   operational: boolean;
   serverTime: string;
+  version: string | null;
+  commit: string | null;
   printerMode: 'SIMULATOR';
   devices: { id: string; name: string; width: number }[];
   local: boolean;
   backups: { name: string; bytes: number; createdAt: string }[];
+  lastVerifiedBackup: { name: string; verifiedAt: string } | null;
 };
 function OperationDiagnostics({api,headers}:{api:string;headers:Headers}) {
   const [data,setData]=useState<Diagnostics|null>(null),[selected,setSelected]=useState('');
   const [busy,setBusy]=useState(false),[status,setStatus]=useState('');
+  const [print,setPrint]=useState<{title:string;html:string}|null>(null);
   const load=async()=>{
     try { setData(await request(api,'/api/operation/diagnostics',headers)); }
     catch (error) { setData(null);setStatus((error as Error).message); }
@@ -40,6 +44,7 @@ function OperationDiagnostics({api,headers}:{api:string;headers:Headers}) {
     try {
       if(verify&&backup){
         const result=await request(api,'/api/operation/backup/verify',headers,{name:backup.name});
+        await load();
         setStatus('Cópia isolada aprovada. '+result.counts.orders+' pedidos, '+result.counts.payments+' pagamentos e '+result.counts.hotel_stays+' hospedagens encontrados.');
       }else{
         await request(api,'/api/operation/backup',headers,{});
@@ -47,13 +52,23 @@ function OperationDiagnostics({api,headers}:{api:string;headers:Headers}) {
       }
     }catch(error){setStatus((error as Error).message);}finally{setBusy(false);}
   };
+  const testPrinter=async(device:'Caixa'|'Cozinha')=>{
+    setBusy(true);setStatus('');setPrint(null);
+    try {
+      const model=device==='Caixa'?'bill':'kitchen';
+      const result=await request(api,'/api/operation/print-models/'+model,headers);
+      setPrint({title:'Via simulada · '+device,html:result.html});
+    } catch(error){setStatus((error as Error).message);}finally{setBusy(false);}
+  };
   return <section className="d26-operation-diagnostics" aria-label="Diagnóstico e backup">
     <h3>Diagnóstico e backup</h3>
     <p>{data?'Servidor respondeu às '+new Date(data.serverTime).toLocaleTimeString('pt-BR')+' · '+(data.operational?'Operação local':'Ambiente de teste'):'Aguardando diagnóstico do servidor.'}</p>
+    {data&&<p>{data.version?'Versão '+data.version:'Versão de desenvolvimento'}{data.commit&&' · '+data.commit.slice(0,7)}</p>}
     {data&&<p>{data.devices.map(device=>device.name+' '+device.width+' mm').join(' · ')} · Simulador</p>}
     <button className="d26-btn d26-btn-secondary" onClick={()=>void load()} disabled={busy}>Atualizar diagnóstico</button>
     {data?.local&&<>
       <p>{data.backups.length?'Último backup em '+new Date(data.backups[0]!.createdAt).toLocaleString('pt-BR'):'Nenhum backup encontrado.'}</p>
+      <p>{data.lastVerifiedBackup?'Última restauração verificada em '+new Date(data.lastVerifiedBackup.verifiedAt).toLocaleString('pt-BR')+' · '+data.lastVerifiedBackup.name:'Nenhum ensaio de restauração registrado para as cópias disponíveis.'}</p>
       <button className="d26-btn d26-btn-primary" disabled={busy} onClick={()=>void run(false)}>Criar backup agora</button>
       {backup&&<>
         <label>Cópia para validar<select className="d26-input" value={backup.name} disabled={busy} onChange={event=>setSelected(event.target.value)}>
@@ -63,6 +78,11 @@ function OperationDiagnostics({api,headers}:{api:string;headers:Headers}) {
         <small>O ensaio abre uma cópia temporária e confere a integridade e os registros do banco.</small>
       </>}
     </>}
+    {data&&<div className="d26-print-models" aria-label="Testes do simulador térmico">
+      <button className="d26-btn d26-btn-secondary" disabled={busy} onClick={()=>void testPrinter('Caixa')}>Simular via do caixa</button>
+      <button className="d26-btn d26-btn-secondary" disabled={busy} onClick={()=>void testPrinter('Cozinha')}>Simular via da cozinha</button>
+    </div>}
+    {print&&<iframe title={print.title} sandbox="" srcDoc={print.html} className="d26-thermal-frame"/>}
     {status&&<p role="status">{status}</p>}
   </section>;
 }
