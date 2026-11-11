@@ -150,11 +150,18 @@ Consulte o [registro completo e evidências](docs/MELHORIAS_DELIVERY_20261106.md
 ### Instalar pelo pacote do GitHub
 
 1. Abra [Actions → Windows nativo](https://github.com/Duailibe32/deck26-system/actions/workflows/windows-test.yml) e selecione uma execução concluída com sucesso.
-2. Em **Artifacts**, baixe **deck26-windows-operacao-local**. Extraia o download e o ZIP de instalação que ele contém.
-3. No PC de destino, confirme que **Node.js 22.13 ou superior, npm e WebView2** estão disponíveis. Com internet, execute **Instalar-DECK26.cmd**.
+2. Em **Artifacts**, baixe **deck26-windows-operacao-local** e extraia o download.
+3. No PC de destino, confirme que **Node.js 22.13 ou superior, npm e WebView2** estão disponíveis. Com internet, abra **DECK26-Instalador.exe** e siga o assistente gráfico.
 4. Abra **DECK 26 - Operacao Local** pela área de trabalho. Em uma instalação nova, cadastre o proprietário. Para atualizar uma base existente, faça backup e confira a pasta de dados antes de abrir a nova versão.
 
-O pacote cria o atalho e instala o servidor em uma pasta própria. **O computador do estabelecimento pode operar na rede local após a instalação.**
+O assistente mostra a versão, a pasta do aplicativo e a pasta dos dados. Cada versão fica em uma pasta própria. Se houver uma base nessa pasta de dados, o instalador verifica um backup consistente antes de ativar a atualização.
+
+### Atualizar pelo GitHub
+
+- No menu Iniciar do Windows, abra **DECK 26 → Verificar atualizações**. A consulta usa o GitHub CLI (`gh auth login`) e requer uma conta com acesso ao repositório privado.
+- O verificador seleciona uma execução da `main` com CI e build do Windows aprovados. Ele confere o commit e o SHA-256 do instalador e pede confirmação antes de abri-lo.
+- Em um PC sem acesso ao GitHub privado, transfira o instalador verificado. O aplicativo opera normalmente pela rede local depois da instalação.
+- O Dependabot monitora dependências npm, Rust e GitHub Actions e abre pull requests. A versão operacional usa as dependências do lockfile da compilação selecionada.
 
 ### Compilar e empacotar a partir do código
 
@@ -175,13 +182,13 @@ npm run build:windows:local
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-local-operation.ps1
 ```
 
-Esse atalho de desenvolvimento usa o repositório e suas dependências. Para entregar o aplicativo a outro computador, compile a versão operacional e monte um ZIP de instalação:
+Esse atalho de desenvolvimento usa o repositório e suas dependências. Para distribuir a versão operacional, compile o aplicativo e monte o instalador:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-windows.ps1 -OutputDirectory ..\Entregas-DECK26
 ```
 
-No computador de destino, instale Node.js **22.13+** com npm, confira o WebView2, extraia todo o ZIP e execute **Instalar-DECK26.cmd**. O instalador baixa as dependências do lockfile, verifica o servidor e cria o atalho **DECK 26 - Operacao Local**. O ZIP já inclui o executável compilado e a interface, e a instalação fica em uma pasta própria, independente do checkout. São necessários internet durante a instalação e acesso à rede local para os terminais.
+O empacotador gera **DECK26-Instalador.exe** e **release.json**, que registra o commit e o SHA-256. O executável reúne a interface compilada e o código do servidor. O instalador baixa as dependências do lockfile e cria os atalhos. A operação usa uma pasta própria, independente do checkout.
 
 | Local no Windows | Conteúdo |
 | --- | --- |
@@ -378,7 +385,7 @@ A revisão não recompõe lançamentos históricos ausentes: concilie caixa, ban
 | **WhatsApp** | Resumos e listas prontos para copiar. | Envio automático não implementado. |
 | **Acesso pela internet** | Disponível na rede local. | Implantação com HTTPS, origens autorizadas, firewall, backups e monitoramento. |
 | **Cloud / PostgreSQL** | Simulador SQLite e sincronização parcial. | Backend e sincronização integral; `DATABASE_URL` não habilita PostgreSQL. |
-| **Distribuição Windows** | ZIP com executável, interface e instalador do servidor, validado em uma pasta isolada. | Node.js e WebView2 no PC de destino, internet na instalação e conferência nesse computador. |
+| **Distribuição Windows** | Instalador gráfico com a interface e o servidor, acompanhado de manifesto de versão. | Node.js e WebView2 no PC de destino, internet na instalação e conferência nesse computador. |
 
 ### Preparação fiscal sem A1
 

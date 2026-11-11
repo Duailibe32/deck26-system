@@ -45,13 +45,15 @@ jobs:
 
       - name: Compilar operação local
         run: npm run build:windows:local
-      - name: Montar ZIP de instalação
+      - name: Montar instalador gráfico
         shell: pwsh
         run: ./scripts/package-windows.ps1 -OutputDirectory windows-package
       - name: Disponibilizar instalador operacional
         uses: actions/upload-artifact@v4
         with:
           name: deck26-windows-operacao-local
-          path: windows-package/*.zip
+          path: |
+            windows-package/DECK26-Instalador.exe
+            windows-package/release.json
           if-no-files-found: error
           retention-days: 14

@@ -4,9 +4,9 @@ A instalação operacional mantém dados reais em `%USERPROFILE%\Deck26\DadosOpe
 
 ## Instalar pelo pacote do GitHub
 
-Baixe o artefato **deck26-windows-operacao-local** de uma execução concluída do [workflow Windows nativo](https://github.com/Duailibe32/deck26-system/actions/workflows/windows-test.yml). Extraia o download e o ZIP de instalação que ele contém. Com Node.js 22.13 ou superior, npm, WebView2 e internet disponíveis, execute **Instalar-DECK26.cmd**. Depois, abra **DECK 26 - Operacao Local** na área de trabalho.
+Baixe o artefato **deck26-windows-operacao-local** de uma execução concluída do [workflow Windows nativo](https://github.com/Duailibe32/deck26-system/actions/workflows/windows-test.yml). Extraia o download. Com Node.js 22.13 ou superior, npm, WebView2 e internet disponíveis, execute **DECK26-Instalador.exe**. Confira as pastas no assistente. Depois, abra **DECK 26 - Operacao Local** na área de trabalho.
 
-Para atualizar um computador que já atende clientes, gere um backup e valide a cópia antes de instalar. Confira o diretório de dados exibido ao final da instalação.
+Para atualizar um computador que já atende clientes, feche o sistema. Quando encontra a base na pasta indicada, o instalador cria e verifica um backup antes de trocar os atalhos. Para consultar versões pelo GitHub, use **Iniciar → DECK 26 → Verificar atualizações** com o GitHub CLI autenticado em uma conta com acesso ao projeto privado. A versão anterior permanece na pasta `versoes`. Se precisar voltar, valide o backup antes de abrir uma versão anterior sobre dados atualizados.
 
 ## Primeiro acesso
 
