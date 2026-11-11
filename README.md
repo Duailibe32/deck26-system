@@ -16,14 +16,14 @@ Dados persistentes no computador do estabelecimento, com acesso pela rede Wi-Fi.
 ![Tauri](https://img.shields.io/badge/Tauri_2-111111?style=flat-square&logo=tauri&logoColor=FFC131)
 ![SQLite WAL](https://img.shields.io/badge/SQLite_WAL-111111?style=flat-square&logo=sqlite&logoColor=68C6F0)
 
-[Conhecer o sistema](#experiencia) · [Começar no Windows](#windows) · [Acessar pelo celular](#celular) · [Checklist](#checklist) · [Documentação](#documentacao)
+[Conhecer o sistema](#experiencia) · [Novidades](#novidades) · [Começar no Windows](#windows) · [Acessar pelo celular](#celular) · [Checklist](#checklist) · [Documentação](#documentacao)
 
 </div>
 
 ---
 
-> **Estado da entrega · Etapa 7A revisada, antes da 7B**<br>
-> Aplicativo Windows compilado, API local e banco persistente; **241 testes automatizados aprovados** na entrega atual de 06/11/2026. Emissão fiscal real, impressão física e publicação na internet têm pendências próprias, detalhadas [abaixo](#limites). O sistema não efetua cobranças bancárias automaticamente.
+> **Entrega de 11/11/2026 · Atendimento mobile, PDV Windows e continuidade**<br>
+> Aplicativo Windows nativo, operação em rede local e **252 testes automatizados aprovados** na validação local. Consulte a [compilação para Windows](#windows), o [roteiro de teste](#checklist) e o [estado das integrações](#limites).
 
 <a id="experiencia"></a>
 
@@ -63,24 +63,42 @@ Fichas técnicas, combos, produção interna, compras por fornecedor, alertas de
 ### A interface na prática
 
 <p align="center">
-  <img src="docs/images/windows-dashboard.png" alt="Painel Windows com indicadores da operação" width="100%"><br>
-  <sub>Painel gerencial · visualização de vendas e ocupação.</sub>
+  <img src="docs/images/avisos-pdv.png" alt="PDV Windows com mapa de mesas, pendências do turno e avisos de pedido, impressão e estoque" width="100%"><br>
+  <sub>Caixa Windows · mapa, filtros, pendências e avisos da operação.</sub>
 </p>
 
 <table>
 <tr>
 <td width="34%" align="center" valign="top">
-  <img src="docs/images/delivery-cliente.png" alt="Cardápio em largura de celular, com busca, categorias e carrinho" width="260"><br>
-  <strong>O cliente faz o pedido</strong><br><sub>Cardápio com a identidade Deck 26.</sub>
+  <img src="docs/images/cardapio-grupos-mobile.png" alt="Cardápio de mesa no celular com busca, filtro Bebidas e navegação inferior" width="245"><br>
+  <strong>Cliente no celular</strong><br><sub>Cardápio, sacola e atendimento pelo QR.</sub>
 </td>
 <td width="66%" align="center" valign="top">
-  <img src="docs/images/calendario-hotel.png" alt="Calendário de apartamentos com barras de hospedagens e reservas" width="100%"><br>
-  <strong>A recepção acompanha as hospedagens</strong><br><sub>Apartamentos, datas, reservas e alertas no mesmo espaço.</sub>
+  <img src="docs/images/pendencias-garcom.png" alt="Terminal do garçom com chamado pendente para a mesa 02" width="350"><br>
+  <strong>Garçom no celular</strong><br><sub>O chamado abre direto no atendimento da mesa.</sub><br><br>
+  <img src="docs/images/pendencias-recepcao.png" alt="Painel da recepção com saída prevista e limpeza pendente" width="100%"><br>
+  <strong>Recepção Hotel Milla</strong><br><sub>Saídas e quartos que exigem atenção.</sub>
 </td>
 </tr>
 </table>
 
-<sub>Capturas de ambientes de demonstração. Nomes, saldos e hospedagens exibidos não representam a operação real. Confira também o [mapa de mesas](docs/images/windows-mesas.png).</sub>
+<sub>Capturas com dados fictícios. Veja também o [painel gerencial](docs/images/windows-dashboard.png) e o [calendário do hotel](docs/images/calendario-hotel.png).</sub>
+
+<a id="novidades"></a>
+
+## 🆕 Novidades desta entrega
+
+| Experiência | O que foi entregue |
+| --- | --- |
+| **Cardápio e pedidos pelo celular** | Menu inferior, filtros de **Bebidas, Entradas e Pratos principais**, busca por nome ou descrição que aceita termos sem acento, personalização, sacola persistente na sessão e acompanhamento de pedidos online. |
+| **Terminal do garçom** | Menu **Mesas · Lançar · Chamados · Mais**, acesso direto ao chamado e confirmação antes de descartar itens ao trocar de mesa. O envio fica vinculado à comanda original. |
+| **PDV Windows** | Mapa por situação, gaveta que abre na ação da mesa, conferência do saldo e abas de resumo, histórico, transferências, cancelamentos e hotel. |
+| **Pendências e avisos do turno** | Caixa, garçom e recepção veem pendências conforme o perfil. Toasts avisam sobre pedidos recebidos, estoque no mínimo ou esgotado e falhas de impressão. |
+| **Fechamento de caixa** | Conferência de dinheiro contado, PIX e cartão registrados. O sistema exige justificativa quando o dinheiro contado diverge do saldo esperado e revalida o saldo ao fechar. |
+| **QR, impressão e backup** | QR escaneável e baixável por mesa, PDF A4 de plaquinhas, fila de impressão com filtros e autorização de 2ª via. Diagnóstico da operação e ensaio de recuperação em cópia isolada. |
+| **Demonstração web** | Horário de pico com mesas e hospedagens fictícias, além de resumo para copiar no WhatsApp. |
+
+[Cardápio da demonstração](docs/images/cardapio-demo-mobile.png) · [Fila de impressão](docs/images/fila-impressao.png) · [Conferência do fechamento](docs/images/conferencia-turno.png)
 
 <a id="funcionalidades"></a>
 
@@ -129,7 +147,16 @@ Consulte o [registro completo e evidências](docs/MELHORIAS_DELIVERY_20261106.md
 
 **Não existe PIN operacional padrão.** Em uma instalação nova, o primeiro acesso no PC permite criar o proprietário com PIN de 6 a 12 dígitos e importar o catálogo inicial. Vendas, hóspedes e saldos começam vazios; estoque inicial zerado exige inventário.
 
-### Instalar a partir do código
+### Instalar pelo pacote do GitHub
+
+1. Abra [Actions → Windows nativo](https://github.com/Duailibe32/deck26-system/actions/workflows/windows-test.yml) e selecione uma execução concluída com sucesso.
+2. Em **Artifacts**, baixe **deck26-windows-operacao-local**. Extraia o download e o ZIP de instalação que ele contém.
+3. No PC de destino, confirme que **Node.js 22.13 ou superior, npm e WebView2** estão disponíveis. Com internet, execute **Instalar-DECK26.cmd**.
+4. Abra **DECK 26 - Operacao Local** pela área de trabalho. Em uma instalação nova, cadastre o proprietário. Para atualizar uma base existente, faça backup e confira a pasta de dados antes de abrir a nova versão.
+
+O pacote cria o atalho e instala o servidor em uma pasta própria. **O computador do estabelecimento pode operar na rede local após a instalação.**
+
+### Compilar e empacotar a partir do código
 
 | Requisito | Uso |
 | --- | --- |
@@ -179,7 +206,9 @@ PC e celulares precisam estar na **mesma rede**, com o servidor ligado. Use o en
 | **Cliente na mesa** | QR gerado para a mesa | Cardápio, pedido e chamada de atendimento. |
 | **Computador principal** | `http://127.0.0.1:4800` | Interface local; também disponível na janela Windows. |
 
-`IP-DO-PC` é um marcador: substitua pelo IPv4 mostrado no sistema. No celular, `localhost` aponta para o próprio aparelho.
+`IP-DO-PC` representa o IPv4 mostrado no sistema. No celular, `localhost` aponta para o próprio aparelho.
+
+No Windows, abra **Mesas & Comandas → Organizar mesas → QR Codes Seguros por Mesa**. Use **Baixar QR** para uma mesa ou **Plaquinhas para imprimir** para gerar um PDF A4 com várias mesas. O QR usa o endereço do servidor local. Confira o acesso pelo celular antes de imprimir as plaquinhas definitivas.
 
 ```mermaid
 flowchart LR
@@ -203,7 +232,7 @@ Comece pelo **[checklist completo em texto](docs/CHECKLIST_COMPLETO.md): 70 veri
 | --- | --- |
 | [Delivery e expedição — interativo](docs/CHECKLIST_DELIVERY.html) | Agenda, carrinho, acompanhamento, etiqueta e recebimento. |
 | [Checklist completo — texto](docs/CHECKLIST_COMPLETO.md) | Ler no GitHub e conferir todos os módulos. |
-| [Checklist completo — interativo](docs/CHECKLIST_COMPLETO.html) | Baixar e abrir no navegador; instalado como **CHECKLIST COMPLETO.html**. |
+| [Checklist completo — interativo](docs/CHECKLIST_COMPLETO.html) | Baixar e abrir no navegador. O pacote de distribuição inclui o arquivo na pasta `docs`. |
 | [PDV touch e roteiro de vídeo](docs/CHECKLIST_PDV_TOUCH.md) | Mesas, observações, pagamento, transferência e auditoria. |
 | [Instalação e continuidade — 66 itens](docs/CHECKLIST_OPERACIONAL.md) | Preparação, acesso, backups e conferência da instalação. |
 | [Preparação fiscal — roteiro separado](docs/CHECKLIST_VIDEO_FISCAL.md) | Apresentação isolada, sem documento fiscal real. |
@@ -211,6 +240,17 @@ Comece pelo **[checklist completo em texto](docs/CHECKLIST_COMPLETO.md): 70 veri
 **Sugestão para a gravação:** login e visão por função → mesa e pedido personalizado → via da cozinha → divisão e troco → pedido do cliente no celular e aceite → calendário, café e extrato do quarto → estoque/convênio → dashboard e auditoria.
 
 Use uma instalação separada com dados fictícios para gravar. Confirmar vendas, estoque, pagamentos ou hospedagens na instalação operacional altera os saldos reais. Arquivos HTML no GitHub aparecem como código; baixe-os ou abra a cópia local no navegador.
+
+<details>
+<summary><strong>Roteiro rápido da entrega atual</strong></summary>
+
+1. Abra uma mesa, baixe a plaquinha em PDF e escaneie o QR pelo celular.
+2. Filtre o cardápio, personalize um item e confirme o recebimento do pedido. Use **Chamar garçom** e confira o aviso no terminal.
+3. No caixa, abra a conta pelo painel de pendências. Registre um PIX parcial, receba o restante em dinheiro e confira o troco e o histórico.
+4. Confira a fila da cozinha e gere uma 2ª via no simulador. Na recepção, abra uma saída prevista e o extrato correspondente.
+5. Crie uma cópia de segurança em **Administração** e execute **Ensaiar restauração**.
+
+</details>
 
 <a id="arquitetura"></a>
 
@@ -307,7 +347,7 @@ Para conhecer somente a prévia visual, use `npm run dev:web`. Os scripts carreg
 | `npm run build:windows:local` | Compila a versão nativa operacional no Windows. |
 | `npm run build:windows:test` | Compila o ambiente nativo de testes, separado da operação. |
 
-A entrega atual de estoque e cardápio passou em **241 testes**. A evolução anterior de delivery foi validada com **227 testes**. Na entrega funcional anterior de **06/11/2026**, os **212 testes** passaram, incluindo os **182 anteriores**, com verificação de tipos, smoke das APIs e compilação Windows. A CI principal também aprovou tipos, testes, auditoria npm e build do [commit funcional 714db78](https://github.com/Duailibe32/deck26-system/commit/714db78d09e8cd5e442877b6b9801d3fc0faec16). Os selos no topo levam aos workflows; consulte as execuções para ver o resultado de cada commit. Eles não representam uma certificação do produto.
+Em **11/11/2026**, passaram localmente **252 testes**, a inicialização das APIs, o `typecheck` e os builds web e Windows. O ensaio no Edge usou dados fictícios para validar QR, pedidos, reenvio, pagamento parcial e misto, transferência ao quarto, fila de impressão, fechamento de turno, backup e filtros. O ZIP foi testado em uma pasta de instalação separada. Os selos no topo levam às execuções do GitHub Actions de cada commit.
 
 As verificações cobrem autenticação, permissões, reenvio sem duplicação, rollback financeiro, PMS, estoque, promoções, escolhas obrigatórias, combos, produção, café, convênios e migração persistente. Bancos de teste são isolados. A interface foi conferida no navegador em tamanhos desktop e celular; isso não substitui teste no aparelho físico.
 
@@ -338,7 +378,7 @@ A revisão não recompõe lançamentos históricos ausentes: concilie caixa, ban
 | **WhatsApp** | Resumos e listas prontos para copiar. | Envio automático não implementado. |
 | **Acesso pela internet** | Disponível na rede local. | Implantação com HTTPS, origens autorizadas, firewall, backups e monitoramento. |
 | **Cloud / PostgreSQL** | Simulador SQLite e sincronização parcial. | Backend e sincronização integral; `DATABASE_URL` não habilita PostgreSQL. |
-| **Distribuição Windows** | Executável com servidor dependente do repositório. | Instalador autossuficiente, atualização e homologação em outros PCs. |
+| **Distribuição Windows** | ZIP com executável, interface e instalador do servidor, validado em uma pasta isolada. | Node.js e WebView2 no PC de destino, internet na instalação e conferência nesse computador. |
 
 ### Preparação fiscal sem A1
 
@@ -376,6 +416,6 @@ Guias de arquitetura, roadmap e revisões anteriores também contêm decisões h
 **DECK 26 · Hotel Auto Posto Milla**<br>
 Atendimento com agilidade. Hospedagem com cuidado. Gestão com clareza.
 
-<sub>Projeto privado em evolução · operação local · documentação revisada em 06/11/2026.</sub>
+<sub>Projeto privado · operação local · documentação revisada em 11/11/2026.</sub>
 
 </div>

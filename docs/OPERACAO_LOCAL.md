@@ -2,6 +2,12 @@
 
 A instalação operacional mantém dados reais em `%USERPROFILE%\Deck26\DadosOperacionais`, fora do repositório, do OneDrive e do banco de demonstração. Não há PIN padrão. A API usa a porta 4800; o aplicativo de testes continua separado na porta 4700.
 
+## Instalar pelo pacote do GitHub
+
+Baixe o artefato **deck26-windows-operacao-local** de uma execução concluída do [workflow Windows nativo](https://github.com/Duailibe32/deck26-system/actions/workflows/windows-test.yml). Extraia o download e o ZIP de instalação que ele contém. Com Node.js 22.13 ou superior, npm, WebView2 e internet disponíveis, execute **Instalar-DECK26.cmd**. Depois, abra **DECK 26 - Operacao Local** na área de trabalho.
+
+Para atualizar um computador que já atende clientes, gere um backup e valide a cópia antes de instalar. Confira o diretório de dados exibido ao final da instalação.
+
 ## Primeiro acesso
 
 1. Abra **DECK 26 - Operacao Local** na área de trabalho.
@@ -55,7 +61,7 @@ npm run build:windows:local
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-local-operation.ps1
 ```
 
-O instalador copia o executável e a interface para `%USERPROFILE%\Deck26\Aplicativo`, cria o atalho e copia o checklist. O servidor utiliza o código e as dependências do repositório; mantenha a pasta no mesmo local. Ainda não é um instalador autossuficiente para outros computadores. Nenhum dado operacional é sobrescrito na atualização do aplicativo.
+O script de desenvolvimento copia o executável e a interface para `%USERPROFILE%\Deck26\Aplicativo`, cria o atalho e copia o checklist. O servidor iniciado por esse atalho usa o código e as dependências do repositório. Para gerar o pacote de distribuição após o build operacional, use `scripts/package-windows.ps1 -OutputDirectory ..\Entregas-DECK26`.
 
 ## Rotinas integradas e checklist completo
 

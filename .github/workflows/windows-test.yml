@@ -6,8 +6,10 @@ on:
     branches: [main]
     paths:
       - 'apps/desktop/**'
+      - 'apps/local-server/**'
       - 'packages/**'
       - 'scripts/*windows*'
+      - 'scripts/windows-package/**'
       - 'scripts/*local*'
       - 'scripts/*fiscal*'
       - 'package*.json'
@@ -43,14 +45,13 @@ jobs:
 
       - name: Compilar operação local
         run: npm run build:windows:local
-      - name: Disponibilizar operação local
+      - name: Montar ZIP de instalação
+        shell: pwsh
+        run: ./scripts/package-windows.ps1 -OutputDirectory windows-package
+      - name: Disponibilizar instalador operacional
         uses: actions/upload-artifact@v4
         with:
           name: deck26-windows-operacao-local
-          path: |
-            native-target/release/deck26-desktop.exe
-            apps/desktop/dist
-            docs/CHECKLIST_OPERACIONAL.html
-            docs/CHECKLIST_VIDEO_FISCAL.html
+          path: windows-package/*.zip
           if-no-files-found: error
           retention-days: 14
