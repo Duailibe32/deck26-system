@@ -1,0 +1,38 @@
+.d26-order-corrections form,
+.d26-order-corrections form > label {
+  display: grid;
+  gap: 8px;
+}
+.d26-order-corrections form { gap: 14px; }
+.d26-order-corrections form > button { justify-self: start; }
+.d26-order-corrections fieldset {
+  border: 1px solid #6b4a60;
+  border-radius: 10px;
+}
+.d26-correction-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+}
+.d26-correction-option input { width: auto; }
+.d26-correction-alert {
+  margin: 12px 0;
+  padding: 14px;
+  border: 1px solid #df9e4b;
+  border-left: 5px solid #ffbd6a;
+  border-radius: 10px;
+  background: #302318;
+  color: #fff3df;
+}
+.d26-correction-alert h3 { margin: 0 0 10px; }
+.d26-correction-alert article,
+.d26-order-corrections > article {
+  padding: 12px 0;
+  border-top: 1px solid #795738;
+  overflow-wrap: anywhere;
+}
+.d26-order-corrections > article { margin-top: 12px; }
+.d26-order-corrections > article small { display: block; }
+.d26-correction-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.d26-correction-actions button { min-height: 42px; }

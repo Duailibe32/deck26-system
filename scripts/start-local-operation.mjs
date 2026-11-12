@@ -54,7 +54,7 @@ app.post('/api/_local/stop',async(req,reply)=>{
 });
 await app.register(fastifyStatic,{root:ui,index:'index.html',dotfiles:'deny'});
 const models=path.join(directory,'modelos-de-impressao');fs.mkdirSync(models,{recursive:true});
-for(const [key,text] of Object.entries(thermalModels))for(const width of [58,80])fs.writeFileSync(path.join(models,key+'-'+width+'mm.html'),renderThermalPreview(text,width,key==='kitchen'?'Cozinha':'Caixa'),'utf8');
+for(const [key,text] of Object.entries(thermalModels))for(const width of [58,80])fs.writeFileSync(path.join(models,key+'-'+width+'mm.html'),renderThermalPreview(text,width,key==='kitchen'||key==='correction'?'Cozinha':'Caixa'),'utf8');
 const backups=path.join(directory,'backups');fs.mkdirSync(backups,{recursive:true});
 const automaticBackup=(closing=false)=>{if(!(store.db.prepare('SELECT COUNT(*) AS count FROM users').get()).count)return;const label=closing?'encerramento-'+new Date().toISOString().replace(/[:.]/g,'-'):'diario-'+new Date().toISOString().slice(0,10);const target=path.join(backups,label+'.sqlite');if(!fs.existsSync(target))store.db.prepare('VACUUM INTO ?').run(target);};
 try{automaticBackup();}catch(error){console.error('Não foi possível criar o backup automático:',error.message);}

@@ -15,6 +15,7 @@ import {fetchHotelFolio,sendHotelFolioPayment,HotelFolioRequestError} from './ho
 import {FiscalPreparationModule,FiscalCheckoutPreview} from './FiscalPreparationModule.js';
 import {FirstRunGate} from './FirstRunGate.js';
 import {MobileWaiter} from './MobileWaiter.js';
+import {KitchenCorrections} from './OrderCorrections.js';
 import {StaffModule,AdministrationModule,PrintingModule} from './OperationModules.js';
 import { LoginScreen } from './LoginScreen.js';
 import { FinancialDashboard } from './FinancialDashboard.js';
@@ -3514,6 +3515,7 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
            ===================================================================== */}
         {activeModule === 'cozinha' && (
           <div className="d26-card">
+            <KitchenCorrections api={localApiBase} headers={getAuthHeaders}/>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px', flexWrap: 'wrap', gap: '10px' }}>
               <div>
                 <h2 style={{ fontSize: '1.05rem' }}>
@@ -3599,7 +3601,7 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
                             {ord.waiterName ? ` • ${ord.waiterName}` : ''}
                           </div>
                           <ul style={{ paddingLeft: '16px', fontSize: '0.86rem', marginBottom: '10px' }}>
-                            {ord.items.map((it) => (
+                            {ord.items.filter(it=>it.status!=='CANCELLED').map((it) => (
                               <li key={it.id}>
                                 <strong>
                                   {it.quantity}x {it.productName}

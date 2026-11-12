@@ -5,7 +5,7 @@ import os from 'node:os';
 import {DatabaseSync} from 'node:sqlite';
 import {buildLocalServer} from './server.js';
 import {renderThermalPreview} from './thermal-preview.js';
-import {createWindowsPrintQueue,type WindowsPrintTransport} from './windows-printing.js';
+import {createWindowsPrintQueue,thermalBytes,type WindowsPrintTransport} from './windows-printing.js';
 const cleanup:Array<()=>Promise<void>>=[];
 afterEach(async()=>{for(const close of cleanup.splice(0).reverse())await close();vi.unstubAllEnvs();});
 async function fixture(importCatalog=true){
@@ -121,6 +121,75 @@ describe('Instalação operacional local, operadores e impressão virtual',()=>{
     const {app,store,headers}=await fixture(false);const before=store.listFinancialTransactions().length;
     const model=await app.inject({url:'/api/operation/print-models/bill',headers});expect(model.json().html).toContain('SEM VALIDADE FISCAL');expect(store.listFinancialTransactions()).toHaveLength(before);
     const html=renderThermalPreview('<script>alert(1)</script>',58,'Caixa');expect(html).toContain('58mm');expect(html).toContain('&lt;script&gt;');expect(html).not.toContain('<script>');
+  });
+  it('reduz a quantidade, mantém o consumo de estoque e envia uma única correção com confirmação',async()=>{
+    const {app,store,headers,login}=await fixture();
+    const product=store.getCatalog().products.find(item=>item.prepStation!=='NONE'&&!item.modifierGroups.length)!;
+    store.db.prepare('UPDATE catalog_products SET track_stock=0 WHERE id=?').run(product.id);
+    const {tab}=store.openTable({tableNumber:8});
+    const original=store.createOrder({tabId:tab.id,tableNumber:8,originNode:'WINDOWS_PDV',channel:'DINE_IN',idempotencyKey:'correction-reduce-fixture',
+      items:[{productId:product.id,quantity:2}]});
+    await app.inject({method:'POST',url:'/api/operation/operators',headers,payload:{name:'Cozinha fixture',role:'KITCHEN',pin:'771923',active:true}});
+    const kitchen=await login('771923');
+    const endpoint='/api/orders/'+original.order.id+'/corrections';
+    const input={tabId:tab.id,itemId:original.order.items[0]!.id,reason:'Cliente pediu apenas uma porção',change:{action:'REMOVE',quantity:1}};
+    const quote=await app.inject({method:'POST',url:endpoint+'/preview',headers,payload:input});
+    expect(quote.statusCode,quote.body).toBe(200);
+    const {tabVersion,orderVersion,expectedTotalCents}=quote.json();
+    expect(expectedTotalCents).toBeLessThan(quote.json().currentTotalCents);
+    const payload={...input,tabVersion,orderVersion,expectedTotalCents,requestId:'a'.repeat(32)};
+    const send=(auth=headers,body=payload)=>app.inject({method:'POST',url:endpoint,headers:auth,payload:body});
+    expect((await send(kitchen)).statusCode).toBe(403);
+    expect((await send(headers,{...payload,tabVersion:tabVersion+1})).statusCode).toBe(409);
+    const before=store.getProductStockQuantity(product.id);
+    const saved=await send();
+    expect(saved.statusCode,saved.body).toBe(200);
+    expect((await send()).json()).toMatchObject({idempotentReplay:true,printJobIds:saved.json().printJobIds});
+    expect(store.getOrderById(original.order.id)?.items[0]?.quantity).toBe(1);
+    expect(store.getTabById(tab.id)?.totalCents).toBe(expectedTotalCents);
+    expect(store.getProductStockQuantity(product.id)).toBe(before);
+    const job=store.getPrintJob(saved.json().printJobIds[0])!;
+    expect(job.targetPrinter).toBe(original.printJobs[0]?.targetPrinter);
+    expect(job.payloadText).toContain('CANCELAR PREPARO');
+    expect(job.payloadText).toContain('MANTER 1 x');
+    expect(Buffer.from(thermalBytes(job,58),'base64').toString('ascii')).toContain('\x1d!\x01CORRECAO DE PEDIDO');
+    expect(renderThermalPreview(job.payloadText,80,'Cozinha')).toContain('class="line correction-title"');
+    expect(()=>store.reprintJob(original.printJobs[0]!.id,'usr-owner-01',1)).toThrow(/corrigido/);
+    const list=(await app.inject({url:'/api/order-corrections',headers:kitchen})).json();
+    expect(list[0]).toMatchObject({id:payload.requestId,acknowledgment:null});
+    expect(list[0]).not.toHaveProperty('totalCents');
+    const ack=await app.inject({method:'POST',url:'/api/order-corrections/'+payload.requestId+'/acknowledge',headers:kitchen,payload:{outcome:'ALREADY_PREPARED'}});
+    expect(ack.statusCode,ack.body).toBe(200);
+    const history=(await app.inject({url:'/api/order-corrections?tabId='+tab.id,headers})).json();
+    expect(history[0].acknowledgment).toMatchObject({operator:'Cozinha fixture',outcome:'ALREADY_PREPARED'});
+  });
+  it('altera a observação e troca o item com duas instruções separadas para a produção',async()=>{
+    const {app,store,headers}=await fixture();
+    const [first,next]=store.getCatalog().products.filter(item=>item.prepStation!=='NONE'&&!item.modifierGroups.length&&item.availableChannels.includes('DINE_IN'));
+    store.db.prepare('UPDATE catalog_products SET track_stock=0').run();
+    const {tab}=store.openTable({tableNumber:9});
+    const original=store.createOrder({tabId:tab.id,tableNumber:9,originNode:'WINDOWS_PDV',channel:'DINE_IN',idempotencyKey:'correction-replace-fixture',
+      items:[{productId:first!.id,quantity:1,notes:'Com cebola'}]});
+    const endpoint='/api/orders/'+original.order.id+'/corrections';
+    const apply=async(change:Record<string,unknown>,key:string)=>{
+      const input={tabId:tab.id,itemId:original.order.items[0]!.id,reason:'Mudança solicitada na mesa',change};
+      const quote=await app.inject({method:'POST',url:endpoint+'/preview',headers,payload:input});
+      expect(quote.statusCode,quote.body).toBe(200);
+      const {tabVersion,orderVersion,expectedTotalCents}=quote.json();
+      const result=await app.inject({method:'POST',url:endpoint,headers,payload:{...input,tabVersion,orderVersion,expectedTotalCents,requestId:key.repeat(32)}});
+      expect(result.statusCode,result.body).toBe(200);
+      return result.json();
+    };
+    const note=await apply({action:'NOTE',notes:'Sem cebola <alergia>'},'b');
+    expect(store.getTabById(tab.id)?.totalCents).toBe(original.tab?.totalCents);
+    const noteJob=store.getPrintJob(note.printJobIds[0])!;
+    expect(renderThermalPreview(noteJob.payloadText,58,'Cozinha')).toContain('&lt;alergia&gt;');
+    const swap=await apply({action:'REPLACE',quantity:1,productId:next!.id,notes:'Bem passado',options:[]},'c');
+    expect(store.getOrderById(original.order.id)?.status).toBe('CANCELLED');
+    expect(store.getOrderById(swap.replacementOrderId)?.items[0]?.productId).toBe(next!.id);
+    expect(swap.printJobIds).toHaveLength(2);
+    expect(store.getPrintJob(swap.printJobIds[0])?.payloadText).toContain('CANCELAR PREPARO');
+    expect(store.getPrintJob(swap.printJobIds[1])?.payloadText).toContain('PREPARAR SUBSTITUIÇÃO');
   });
   it('preserva a via ao faltar papel e só permite repetir um envio recusado antes da entrega',async()=>{
     const {store}=await fixture();

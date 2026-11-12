@@ -1,6 +1,7 @@
 import React,{useEffect,useState} from 'react';
 import type {PrintJob,UserRole} from '@deck26/contracts';
 import './operation.css';
+import {KitchenCorrections} from './OrderCorrections.js';
 type Headers=()=>Record<string,string>;
 const roles:UserRole[]=['OWNER','MANAGER','CASHIER','WAITER','KITCHEN','RECEPTIONIST','STOCK_CLERK'];
 const labels:Record<UserRole,string>={OWNER:'Proprietário',MANAGER:'Gerente',CASHIER:'Caixa',WAITER:'Garçom',KITCHEN:'Cozinha',RECEPTIONIST:'Recepção',STOCK_CLERK:'Estoque'};
@@ -142,6 +143,7 @@ export function PrintingModule({api,headers,jobs,onRefresh,initialJobId}:{api:st
     }catch(error){setMessage((error as Error).message);}finally{setBusy(false);}
   };
   return <>
+    <KitchenCorrections api={api} headers={headers}/>
     <div className="d26-card"><h2>Fila de impressão</h2><p>Caixa, cozinha e bar. As prévias em simulador geram arquivos para conferência.</p>
       {focusedJob&&<button className="d26-btn d26-btn-secondary" onClick={()=>setFocusedJob(undefined)}>Mostrar todas as vias</button>}
       <div className="d26-print-models" aria-label="Filtrar vias">
@@ -158,7 +160,7 @@ export function PrintingModule({api,headers,jobs,onRefresh,initialJobId}:{api:st
         {visible.map(job=>{
           const dispatch=dispatches.find(item=>item.job_id===job.id&&item.copy_number===(job.copyNumber??1));
           return <article key={job.id} className="d26-print-row">
-          <strong>{printerName(job)} · {job.jobType}{job.isReprint?' · 2ª via (cópia '+job.copyNumber+')':''}</strong>
+          <strong>{printerName(job)} · {job.payloadText.split('\n').includes('CORREÇÃO DE PEDIDO')?'CORREÇÃO DE PEDIDO':job.jobType}{job.isReprint?' · 2ª via (cópia '+job.copyNumber+')':''}</strong>
           <span className={blocked(job)?'d26-print-error':''}>{dispatch&&job.status==='SENDING'?'Na fila do Windows':problem(job)||!simulated(job)?printStatus[job.status]:'Via simulada'} · {new Date(job.createdAt).toLocaleString('pt-BR')}</span>
           {dispatch&&<small>{dispatch.printer_name}</small>}
           {blocked(job)&&job.lastError&&<small>{job.lastError}</small>}
@@ -176,7 +178,7 @@ export function PrintingModule({api,headers,jobs,onRefresh,initialJobId}:{api:st
         </article>;})}
       </div>
       <div className="d26-card"><h2>Prévia térmica</h2>
-        <div className="d26-print-models">{[['kitchen','Produção'],['bill','Pré-conta'],['payment','Recibo'],['closing','Fechamento']].map(([model,label])=>
+        <div className="d26-print-models">{[['kitchen','Produção'],['correction','Correção de pedido'],['bill','Pré-conta'],['payment','Recibo'],['closing','Fechamento']].map(([model,label])=>
           <button key={model} className="d26-btn d26-btn-secondary" onClick={async()=>{try{
             setHtml((await request(api,'/api/operation/print-models/'+model,headers)).html);setMessage('Modelo de exemplo.');
           }catch(error){setMessage((error as Error).message);}}}>{label}</button>)}</div>

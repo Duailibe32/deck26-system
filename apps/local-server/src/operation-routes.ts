@@ -152,7 +152,7 @@ export function registerOperationRoutes(app:FastifyInstance,store:LocalOperation
       return reply.code(409).send({error:'Ação indisponível para esta via.'});
     }catch(error){return reply.code(409).send({error:(error as Error).message});}
   });
-  app.get<{Params:{model:string}}>('/api/operation/print-models/:model',async(req,reply)=>{if(!authorize(req,reply,'printers:manage'))return;const key=req.params.model as keyof typeof thermalModels;if(!thermalModels[key])return reply.code(404).send({error:'Modelo não encontrado.'});const device=key==='kitchen'?'Cozinha':'Caixa';return {html:renderThermalPreview(thermalModels[key],key==='kitchen'?settings().kitchenWidth:settings().cashierWidth,device)};});
+  app.get<{Params:{model:string}}>('/api/operation/print-models/:model',async(req,reply)=>{if(!authorize(req,reply,'printers:manage'))return;const key=req.params.model as keyof typeof thermalModels;if(!Object.hasOwn(thermalModels,key))return reply.code(404).send({error:'Modelo não encontrado.'});const kitchen=key==='kitchen'||key==='correction';return {html:renderThermalPreview(thermalModels[key],kitchen?settings().kitchenWidth:settings().cashierWidth,kitchen?'Cozinha':'Caixa')};});
   app.post<{Params:{id:string}}>('/api/operation/print-jobs/:id/simulate',async(req,reply)=>{
     const actor=authorize(req,reply,'printers:manage');if(!actor)return;const job=store.getPrintJob(req.params.id);if(!job)return reply.code(404).send({error:'Trabalho não encontrado.'});if(job.status==='CANCELLED')return reply.code(409).send({error:'Trabalho cancelado.'});
     if(windows?.targets[job.targetPrinter])return {html:renderThermalPreview(job.payloadText,widthFor(job),job.targetPrinter==='PRINTER_CASHIER'?'Caixa':'Cozinha'),simulated:true,jobStatus:job.status};

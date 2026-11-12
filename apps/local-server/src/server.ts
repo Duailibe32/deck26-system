@@ -4,6 +4,7 @@ import {stayOptionsSchema,extensionSettings} from './extension-models.js';
 import {registerDesktopRoutes} from './desktop-routes.js';
 import {registerFiscalPreparationRoutes} from './fiscal-preparation-routes.js';
 import {registerOperationRoutes} from './operation-routes.js';
+import {orderCorrectionSchema,orderCorrectionCommitSchema} from './order-correction.js';
 import type {WindowsPrintTargets,WindowsPrintTransport} from './windows-printing.js';
 /**
  * DECK 26 — Servidor Operacional Local (Fastify + SQLite WAL + Autenticação Real & Autorização RBAC)
@@ -1264,6 +1265,47 @@ export async function buildLocalServer(options?: {
       }
       return reply.status(400).send({ error: msg });
     }
+  });
+
+  app.post<{Params:{id:string}}>('/api/orders/:id/corrections/preview',(req,reply)=>{
+    if(!authorizePermission(req,reply,'tabs:discount_or_void'))return;
+    const input=orderCorrectionSchema.safeParse(req.body);
+    if(!input.success)return reply.code(400).send({error:'Confira o item, a quantidade e o motivo da correção.'});
+    try{return store.quoteOrderCorrection(req.params.id,input.data);}
+    catch(error){return reply.code(409).send({error:(error as Error).message});}
+  });
+  app.post<{Params:{id:string}}>('/api/orders/:id/corrections',(req,reply)=>{
+    const actor=authorizePermission(req,reply,'tabs:discount_or_void');
+    if(!actor)return;
+    const input=orderCorrectionCommitSchema.safeParse(req.body);
+    if(!input.success)return reply.code(400).send({error:'Confira os dados da correção.'});
+    try{return store.correctOrder(req.params.id,input.data,actor.userId);}
+    catch(error){return reply.code(409).send({error:(error as Error).message});}
+  });
+  app.get<{Querystring:{tabId?:string}}>('/api/order-corrections',(req,reply)=>{
+    const actor=resolveSession(req);
+    if(!actor)return reply.code(401).send({error:'Entre para consultar as correções.'});
+    const tabId=req.query.tabId;
+    if(!hasPermission(actor.role,'orders:advance_kitchen')&&!hasPermission(actor.role,'printers:manage')){
+      return reply.code(403).send({error:'Sem permissão para consultar correções.'});
+    }
+    if(tabId&&(!z.string().uuid().safeParse(tabId).success||!hasPermission(actor.role,'tabs:manage'))){
+      return reply.code(403).send({error:'Sem permissão para consultar o histórico desta comanda.'});
+    }
+    const corrections=store.listOrderCorrections(tabId);
+    if(tabId)return corrections;
+    return corrections.map(({totalCents:_total,previousTotalCents:_previous,...correction})=>correction);
+  });
+  app.post<{Params:{id:string}}>('/api/order-corrections/:id/acknowledge',(req,reply)=>{
+    const actor=resolveSession(req);
+    if(!actor)return reply.code(401).send({error:'Entre para confirmar a correção.'});
+    if(!hasPermission(actor.role,'orders:advance_kitchen')&&!hasPermission(actor.role,'printers:manage')){
+      return reply.code(403).send({error:'Sem permissão para confirmar a correção.'});
+    }
+    const input=z.object({outcome:z.enum(['STOPPED','ALREADY_PREPARED','NOTED'])}).safeParse(req.body);
+    if(!input.success)return reply.code(400).send({error:'Informe o resultado da correção.'});
+    try{return store.acknowledgeOrderCorrection(req.params.id,input.data.outcome,actor.userId);}
+    catch(error){return reply.code(409).send({error:(error as Error).message});}
   });
 
   // 8. Registro de Pagamento Parcial, Misto, Dividido ou Total + Estorno Autorizado (Seções 11 e 12)

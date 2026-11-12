@@ -1,3 +1,4 @@
+import {correctionTicket,correctionTicketHeader,type OrderCorrectionInput,type OrderCorrectionCommit} from './order-correction.js';
 import {localDate,promotionalPrice,activeCover,saveStayOptions,stayOptionsSchema,plannedCheckout,type StayOptions} from './extension-models.js';
 /**
  * DECK 26 — Repositório Transacional SQLite (node:sqlite nativo — Etapa 3 Completa)
@@ -2805,6 +2806,173 @@ export class LocalOperationalStore {
    * - Não duplica receita financeira.
    * - Bloqueia transferência de item cancelado ou já pago.
    */
+  private prepareOrderCorrection(orderId:string,input:OrderCorrectionInput){
+    const order=this.getOrderById(orderId);
+    const tab=this.getTabById(input.tabId);
+    const item=order?.items.find(line=>line.id===input.itemId);
+    if(!tab||!order||!item||order.tabId!==tab.id)throw Error('Pedido ou item não pertence a esta comanda.');
+    if(!['DINE_IN','QR_TABLE','COUNTER_PDV','PICKUP'].includes(order.channel)||!['TABLE','COUNTER','INDIVIDUAL_CARD'].includes(tab.type)){
+      throw Error('Esta correção está disponível para comandas de mesa, balcão e retirada no PDV.');
+    }
+    if(!['OPEN','BILL_REQUESTED'].includes(tab.status)||tab.paidCents>0||
+      this.db.prepare('SELECT 1 FROM payments WHERE tab_id=? LIMIT 1').get(tab.id)){
+      throw Error('Confira os recebimentos com o caixa. A correção exige uma comanda aberta sem histórico de pagamentos.');
+    }
+    if(!['RECEIVED','IN_PREPARATION','READY'].includes(order.status)||item.status==='CANCELLED'||
+      item.paidQuantity||item.transferredAt||item.transferredFromTabId||item.transferredToTabId){
+      throw Error('O item não pode ser corrigido nesta etapa. Confira a entrega ou a transferência.');
+    }
+    if(input.change.action==='NOTE'&&(item.prepStation==='NONE'||(item.notes??'')===input.change.notes)){
+      throw Error('Informe uma observação diferente para um item de preparo.');
+    }
+    const quantity=input.change.action==='NOTE'?0:input.change.quantity;
+    if(quantity>item.quantity)throw Error('A quantidade informada ultrapassa a quantidade atual do item.');
+    const remaining=item.quantity-quantity;
+    const remainingCents=quantity===0?item.totalItemCents:Math.round((item.unitPriceCents+item.modifiersTotalCents)*remaining);
+    const correctionTotal=order.totalOrderCents-item.totalItemCents+remainingCents;
+    let replacement: {product:CatalogProduct;modifiers:OrderItem['modifiers'];total:number}|undefined;
+    if(input.change.action==='REPLACE'){
+      const change=input.change;
+      const product=this.getProductById(change.productId);
+      if(!product?.active||!product.availableChannels.includes(order.channel)||product.id===item.productId)throw Error('Escolha outro produto ativo neste canal.');
+      const modifiers:OrderItem['modifiers']=[];
+      for(const group of product.modifierGroups){
+        const selections=change.options.filter(option=>option.groupId===group.id);
+        const selected=new Set(selections.map(option=>option.optionId));
+        if(selected.size!==selections.length||selected.size<group.minSelect||selected.size>group.maxSelect)throw Error('Confira os complementos de '+group.name+'.');
+        for(const optionId of selected){
+          const option=group.options.find(candidate=>candidate.id===optionId&&candidate.available!==false);
+          if(!option)throw Error('Complemento indisponível.');
+          modifiers.push({groupId:group.id,groupName:group.name,optionId,optionName:option.name,priceDeltaCents:option.priceDeltaCents});
+        }
+      }
+      if(modifiers.length!==change.options.length)throw Error('Complemento inválido para o produto.');
+      const unit=promotionalPrice(this.db,product,order.channel).priceCents+modifiers.reduce((sum,modifier)=>sum+modifier.priceDeltaCents,0);
+      if(unit<0)throw Error('O preço do substituto é inválido.');
+      replacement={product,modifiers,total:unit*quantity};
+    }
+    const projected=this.listOrdersByTab(tab.id).map(entry=>entry.id===order.id?
+      {...entry,totalOrderCents:correctionTotal+(replacement?.total??0)}:entry);
+    const totals=this.calculateCurrentTabTotals(tab,projected,tab.paidCents);
+    return {order,tab,item,quantity,remaining,remainingCents,correctionTotal,replacement,expectedTotalCents:totals.totalCents};
+  }
+
+  public quoteOrderCorrection(orderId:string,input:OrderCorrectionInput){
+    const {tab,order,expectedTotalCents}=this.prepareOrderCorrection(orderId,input);
+    return {currentTotalCents:tab.totalCents,expectedTotalCents,tabVersion:tab.version,orderVersion:order.version};
+  }
+
+  public correctOrder(orderId:string,input:OrderCorrectionCommit,actorUserId:string){
+    const hash=crypto.createHash('sha256').update(JSON.stringify([orderId,input,actorUserId])).digest('hex');
+    return this.atomic(()=>{
+      const recorded=this.db.prepare("SELECT metadata_json FROM audit_logs WHERE entity_type='ORDER_CORRECTION' AND entity_id=? AND action='ORDER_CORRECTED'").get(input.requestId);
+      if(recorded){
+        const previous=JSON.parse(String(recorded.metadata_json));
+        if(previous.hash!==hash)throw Error('Este envio já foi utilizado. Atualize a comanda.');
+        return {...previous.result,idempotentReplay:true};
+      }
+      const change=this.prepareOrderCorrection(orderId,input);
+      const {tab,order,item,quantity,remaining,remainingCents,correctionTotal,replacement}=change;
+      if(tab.version!==input.tabVersion||order.version!==input.orderVersion||change.expectedTotalCents!==input.expectedTotalCents){
+        throw Error('A comanda ou o preço mudou. Revise a correção antes de confirmar.');
+      }
+      const now=new Date().toISOString();
+      const operator=String(this.db.prepare('SELECT name FROM users WHERE id=?').get(actorUserId)?.name??actorUserId);
+      const context={code:tab.code,orderId,operator,reason:input.reason,at:now};
+      const printJobIds:string[]=[];
+      if(item.prepStation!=='NONE'){
+        const originalDestinations=[...new Set(this.getPrintJobsByReference('ORDER',orderId)
+          .filter(job=>job.jobType==='PRODUCTION_TICKET'&&(
+            !job.payloadText.includes(correctionTicketHeader)&&job.payloadText.includes(item.productName.toUpperCase()+' ['+item.prepStation+']')||
+            order.items.length===1&&job.payloadText.includes('\nPREPARAR SUBSTITUIÇÃO\n')
+          )).map(job=>job.targetPrinter))];
+        const currentTarget=this.getProductById(item.productId,true)?.targetPrinter??this.defaultPrinterForStation(item.prepStation);
+        const targets=originalDestinations.length?originalDestinations:[currentTarget];
+        const payload=correctionTicket({...context,action:input.change.action,product:item.productName,
+          quantity:input.change.action==='NOTE'?item.quantity:quantity,remaining,
+          notes:input.change.action==='NOTE'?input.change.notes:undefined,
+          replacement:replacement?.product.name,wasReady:order.status!=='RECEIVED'});
+        for(const target of targets){
+          const id=crypto.randomUUID();
+          this.db.prepare(`INSERT INTO print_jobs(id,target_printer,job_type,status,reference_entity_type,reference_entity_id,payload_text,attempts,created_at)
+            VALUES(?,?,'PRODUCTION_TICKET','QUEUED','ORDER',?,?,0,?)`).run(id,target,orderId,payload,now);
+          printJobIds.push(id);
+        }
+      }
+      if(input.change.action==='NOTE'){
+        this.db.prepare('UPDATE order_items SET notes=? WHERE id=?').run(input.change.notes||null,item.id);
+      }else if(remaining===0){
+        this.db.prepare("UPDATE order_items SET status='CANCELLED', total_item_cents=0 WHERE id=?").run(item.id);
+      }else{
+        this.db.prepare('UPDATE order_items SET quantity=?,total_item_cents=? WHERE id=?').run(remaining,remainingCents,item.id);
+      }
+      const fullyCancelled=remaining===0&&order.items.every(line=>line.id===item.id||line.status==='CANCELLED');
+      this.db.prepare(`UPDATE orders SET total_order_cents=?,updated_at=?,version=version+1,
+        status=CASE WHEN ? THEN 'CANCELLED' ELSE status END,
+        cancel_reason=CASE WHEN ? THEN ? ELSE cancel_reason END WHERE id=?`)
+        .run(correctionTotal,now,Number(fullyCancelled),Number(fullyCancelled),input.reason,orderId);
+      const updatedOrder=this.getOrderById(orderId)!;
+      this.appendOutboxEvent({idempotencyKey:'order-correct-'+input.requestId,originNode:'WINDOWS_PDV',entityType:'ORDER',
+        entityId:orderId,operation:'UPSERT',entityVersion:updatedOrder.version,payload:updatedOrder});
+      let replacementOrderId:string|null=null;
+      if(replacement&&input.change.action==='REPLACE'){
+        const placed=this.createOrder({actorUserId,idempotencyKey:'order-replacement-'+input.requestId,
+          tabId:tab.id,tableNumber:order.tableNumber,channel:order.channel,originNode:'WINDOWS_PDV',
+          waiterUserId:order.waiterUserId,waiterName:order.waiterName,
+          items:[{productId:replacement.product.id,quantity,notes:input.change.notes,modifiers:replacement.modifiers}]});
+        replacementOrderId=placed.order.id;
+        for(const job of placed.printJobs){
+          const text=correctionTicket({...context,action:'PREPARE',product:replacement.product.name,quantity,notes:input.change.notes,
+            options:replacement.modifiers.map(option=>option.groupName+': '+option.optionName)});
+          this.db.prepare('UPDATE print_jobs SET payload_text=? WHERE id=?').run(text,job.id);
+          printJobIds.push(job.id);
+        }
+      }
+      const currentTab=replacement?this.getTabById(tab.id)!:this.recalculateTabInTx(tab.id,'WINDOWS_PDV');
+      if(currentTab.totalCents!==input.expectedTotalCents)throw Error('O valor mudou. Revise a correção antes de confirmar.');
+      const result={id:input.requestId,orderId,tabId:tab.id,tabCode:tab.code,itemName:item.productName,
+        action:input.change.action,quantity:input.change.action==='NOTE'?item.quantity:quantity,remaining,
+        notes:input.change.action==='NOTE'?input.change.notes:undefined,replacementName:replacement?.product.name,
+        reason:input.reason,operator,at:now,totalCents:currentTab.totalCents,previousTotalCents:tab.totalCents,
+        requiresKitchenConfirmation:item.prepStation!=='NONE',printJobIds,replacementOrderId};
+      this.recordAuditLog({actorUserId,action:'ORDER_CORRECTED',entityType:'ORDER_CORRECTION',entityId:input.requestId,
+        metadata:{hash,result,orderId,tabId:tab.id,action:input.change.action,originalItem:item,stockReturned:false}});
+      return {...result,idempotentReplay:false};
+    });
+  }
+
+  public listOrderCorrections(tabId?:string){
+    const rows=this.db.prepare(`SELECT c.metadata_json, a.metadata_json AS acknowledgment, a.created_at AS acknowledged_at
+      FROM audit_logs c LEFT JOIN audit_logs a ON a.entity_id=c.entity_id AND a.entity_type=c.entity_type
+        AND a.action='ORDER_CORRECTION_ACKNOWLEDGED'
+      WHERE c.entity_type='ORDER_CORRECTION' AND c.action='ORDER_CORRECTED'
+        AND ((? IS NOT NULL AND json_extract(c.metadata_json,'$.tabId')=?) OR
+          (? IS NULL AND a.id IS NULL AND json_extract(c.metadata_json,'$.result.requiresKitchenConfirmation')=1))
+      ORDER BY ${tabId?'c.created_at DESC,c.rowid DESC':'c.created_at,c.rowid'} LIMIT 100`).all(tabId??null,tabId??null,tabId??null);
+    return rows.map(row=>({
+      ...JSON.parse(String(row.metadata_json)).result,
+      acknowledgment:row.acknowledgment?{...JSON.parse(String(row.acknowledgment)),at:row.acknowledged_at}:null
+    }));
+  }
+
+  public acknowledgeOrderCorrection(id:string,outcome:'STOPPED'|'ALREADY_PREPARED'|'NOTED',actorUserId:string){
+    return this.atomic(()=>{
+      const original=this.db.prepare("SELECT metadata_json FROM audit_logs WHERE entity_type='ORDER_CORRECTION' AND entity_id=? AND action='ORDER_CORRECTED'").get(id);
+      if(!original)throw Error('Correção não encontrada.');
+      const {result}=JSON.parse(String(original.metadata_json));
+      if(!result.requiresKitchenConfirmation||(result.action==='NOTE')!==(outcome==='NOTED'))throw Error('Resultado incompatível com esta correção.');
+      const existing=this.db.prepare("SELECT metadata_json FROM audit_logs WHERE entity_type='ORDER_CORRECTION' AND entity_id=? AND action='ORDER_CORRECTION_ACKNOWLEDGED'").get(id);
+      if(existing){
+        if(JSON.parse(String(existing.metadata_json)).outcome!==outcome)throw Error('Esta correção já foi confirmada.');
+        return {acknowledged:true};
+      }
+      const operator=String(this.db.prepare('SELECT name FROM users WHERE id=?').get(actorUserId)?.name??actorUserId);
+      this.recordAuditLog({actorUserId,action:'ORDER_CORRECTION_ACKNOWLEDGED',entityType:'ORDER_CORRECTION',entityId:id,
+        metadata:{orderId:result.orderId,tabId:result.tabId,operator,outcome}});
+      return {acknowledged:true};
+    });
+  }
+
   public transferOrderItemBetweenTabs(input: {
     orderItemId: string;
     expectedSourceTabId?: string;
@@ -3436,7 +3604,7 @@ export class LocalOperationalStore {
         );
 
       this.db
-        .prepare('UPDATE order_items SET status = ? WHERE order_id = ?')
+        .prepare("UPDATE order_items SET status = ? WHERE order_id = ? AND status != 'CANCELLED'")
         .run(input.newStatus, input.orderId);
 
       if (input.newStatus === 'IN_PREPARATION' && existing.tabId) {
@@ -3471,10 +3639,12 @@ export class LocalOperationalStore {
 
       // Caso o pedido seja CANCELLED: executa estorno auditável de estoque apenas quando BEFORE_PREP (ou quando explicitamente forçado)
       if (input.newStatus === 'CANCELLED' && existing.status !== 'CANCELLED') {
-        const shouldReverse =
+        const hadQuantityCorrection=!!this.db.prepare(`SELECT 1 FROM audit_logs WHERE entity_type='ORDER_CORRECTION' AND action='ORDER_CORRECTED'
+          AND json_extract(metadata_json,'$.orderId')=? AND json_extract(metadata_json,'$.action') IN ('REMOVE','REPLACE') LIMIT 1`).get(existing.id);
+        const shouldReverse = !hadQuantityCorrection && (
           input.reverseStockOnCancel !== undefined
             ? input.reverseStockOnCancel
-            : cancelStage === 'BEFORE_PREP';
+            : cancelStage === 'BEFORE_PREP');
 
         if (shouldReverse) {
           const originalDeductions = this.getStockMovementsByReference('ORDER', existing.id).filter(
@@ -4320,17 +4490,7 @@ export class LocalOperationalStore {
   private assertNoPendingOrders(tabId:string):void {
     if(this.db.prepare("SELECT id FROM orders WHERE tab_id=? AND status='PENDING_APPROVAL' LIMIT 1").get(tabId))throw new Error('Aprove ou cancele os pedidos pendentes antes de receber ou encerrar a comanda.');
   }
-  private recalculateTabInTx(tabId: string, originNode: OriginNode): Tab {
-    const tabRow = this.db.prepare('SELECT * FROM tabs WHERE id = ?').get(tabId) as Record<string, unknown>;
-    const currentTab = this.mapTabRow(tabRow);
-    const tabOrders = this.listOrdersByTab(tabId);
-
-    const paidRow = this.db
-      .prepare("SELECT COALESCE(SUM(amount_cents), 0) as paid FROM payments WHERE tab_id = ? AND status = 'CONFIRMED'")
-      .get(tabId) as { paid: number };
-
-    const paidCents = Number(paidRow.paid);
-
+  private calculateCurrentTabTotals(currentTab:Tab,tabOrders:Order[],paidCents:number){
     // Recalcula desconto proporcional caso o tipo seja PERCENTAGE ou COURTESY
     const activeOrdersSubtotal = tabOrders
       .filter((o) => o.status !== 'CANCELLED' && o.status !== 'PENDING_APPROVAL')
@@ -4349,14 +4509,29 @@ export class LocalOperationalStore {
       effectiveDiscountCents = 0;
     }
 
-    const totals = calculateTabTotals({
+    return { ...calculateTabTotals({
       orders: tabOrders,
       serviceFeeEnabled: currentTab.serviceFeeEnabled,
       serviceFeeBasisPoints: currentTab.serviceFeeBasisPoints,
       coverChargeCents:currentTab.coverChargeCents,
       discountCents: effectiveDiscountCents,
       paidCents
-    });
+    }), effectiveDiscountCents };
+  }
+
+  private recalculateTabInTx(tabId: string, originNode: OriginNode): Tab {
+    const tabRow = this.db.prepare('SELECT * FROM tabs WHERE id = ?').get(tabId) as Record<string, unknown>;
+    const currentTab = this.mapTabRow(tabRow);
+    const tabOrders = this.listOrdersByTab(tabId);
+
+    const paidRow = this.db
+      .prepare("SELECT COALESCE(SUM(amount_cents), 0) as paid FROM payments WHERE tab_id = ? AND status = 'CONFIRMED'")
+      .get(tabId) as { paid: number };
+
+    const paidCents = Number(paidRow.paid);
+
+    const totals = this.calculateCurrentTabTotals(currentTab, tabOrders, paidCents);
+    const {effectiveDiscountCents}=totals;
 
     let nextStatus = currentTab.status;
     let closedAt = currentTab.closedAt ?? null;
@@ -4915,6 +5090,11 @@ export class LocalOperationalStore {
     }
     if (row.status === 'CANCELLED') throw new Error('Trabalho de impressão cancelado.');
     if (row.status === 'SENDING' || row.status === 'PRINTING') throw new Error('A via ainda está na fila da impressora.');
+    if(row.job_type==='PRODUCTION_TICKET'&&!String(row.payload_text).includes(correctionTicketHeader)&&
+      this.db.prepare(`SELECT 1 FROM audit_logs WHERE entity_type='ORDER_CORRECTION' AND action='ORDER_CORRECTED'
+        AND json_extract(metadata_json,'$.orderId')=? LIMIT 1`).get(String(row.reference_entity_id))){
+      throw new Error('O pedido foi corrigido. Consulte as vias de correção antes de reimprimir a produção.');
+    }
     const copyNumber = Number(row.copy_number ?? 1);
     if (expectedCopyNumber !== undefined && expectedCopyNumber !== copyNumber) {
       throw new Error('A via já mudou. Atualize a fila antes de autorizar outra cópia.');

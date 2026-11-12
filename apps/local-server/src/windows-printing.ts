@@ -3,6 +3,8 @@ import path from 'node:path';
 import {z} from 'zod';
 import type {PrintJob} from '@deck26/contracts';
 import type {LocalOperationalStore} from './store.js';
+import {correctionTicketHeader} from './order-correction.js';
+import {wrapThermalLine} from './thermal-preview.js';
 
 const queueName=z.string().trim().min(1).max(220);
 export const WindowsPrintConfigurationSchema=z.object({
@@ -55,11 +57,19 @@ export function windowsPrintTransport(script:string):WindowsPrintTransport {
   });
 }
 
-function thermalBytes(job:PrintJob,width:58|80):string {
+export function thermalBytes(job:PrintJob,width:58|80):string {
   const columns=width===58?32:48;
+  const isCorrection=job.payloadText.split('\n').includes(correctionTicketHeader);
   const text=job.payloadText.normalize('NFD').replace(/\p{M}/gu,'').replace(/\r/g,'')
-    .replace(/[^\x20-\x7e\n]/g,' ').split('\n')
-    .flatMap(line=>line.match(new RegExp('.{1,'+columns+'}','g'))??['']).join('\n');
+    .replace(/[^\x20-\x7e\n]/g,' ').split('\n').map(line=>{
+      const wrapped=wrapThermalLine(line,columns).join('\n');
+      if(!isCorrection)return wrapped;
+      if(line==='CORRECAO DE PEDIDO')return '\x1ba\x01\x1bE\x01\x1d!\x01'+wrapped+'\n\x1d!\x00\x1bE\x00\x1ba\x00';
+      if(/^(CANCELAR PREPARO|NOVA OBSERVACAO|PREPARAR SUBSTITUICAO|ITEM JA EM PRODUCAO|NAO PREPARAR|MANTER )/.test(line)){
+        return '\x1bE\x01'+wrapped+'\x1bE\x00';
+      }
+      return wrapped;
+    }).join('\n');
   return Buffer.from('\x1b@'+text+'\n\n\n\x1dV\x00','ascii').toString('base64');
 }
 

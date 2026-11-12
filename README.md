@@ -164,6 +164,7 @@ O assistente mostra a versão, a pasta do aplicativo e a pasta dos dados. Cada v
 - O Dependabot monitora dependências npm, Rust e GitHub Actions e abre pull requests. A versão operacional usa as dependências do lockfile da compilação selecionada.
 - Em **Administração → Acesso e continuidade**, consulte os links para o celular, a versão, o último ensaio de restauração e as prévias térmicas do caixa e da cozinha.
 - Veja no [guia de operação](docs/OPERACAO_LOCAL.md) como vincular filas térmicas do Windows, recuperar vias com falha e acessar o inventário por prateleira pelo celular.
+- Use **Corrigir pedido** na comanda para reduzir quantidade, trocar um produto ou alterar a observação. A cozinha recebe uma via destacada, e o caixa acompanha a confirmação. [Fluxo de correção](docs/OPERACAO_LOCAL.md#corrigir-um-pedido-enviado)
 
 ### Compilar e empacotar a partir do código
 

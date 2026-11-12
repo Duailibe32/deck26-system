@@ -53,6 +53,14 @@ Abra o aplicativo novamente. A fila da cozinha recebe as vias de cozinha quente,
 
 Em **Impressoras → Falhas**, consulte o motivo. Se o Windows recebeu a via e informar falta de papel ou pausa, corrija o equipamento e aguarde a mesma via. Se houve recusa antes da entrega, use **Reenviar a mesma via**. Se o resultado for desconhecido, confira a fila do Windows e o papel antes de confirmar a saída ou autorizar a segunda via. Valide com um pedido fictício, teste sem papel e confira a recuperação antes de usar em atendimento.
 
+## Corrigir um pedido enviado
+
+Na comanda, um gerente ou proprietário pode abrir **Corrigir pedido**, selecionar um item, reduzir a quantidade, trocar o produto ou atualizar a observação de preparo. Informe o motivo, confira o novo total e confirme. A comanda precisa estar aberta e sem histórico de pagamentos.
+
+A via **CORREÇÃO DE PEDIDO** identifica a comanda, o pedido e a instrução para a cozinha. Na troca, a produção recebe uma via para cancelar o item anterior e outra para preparar o substituto. Confira exemplos de 58 e 80 mm em **Impressoras → Correção de pedido** ou na pasta `modelos-de-impressao`.
+
+Em **Cozinha** ou **Impressoras**, registre se o preparo foi interrompido, se o item já estava pronto ou se a nova observação foi recebida. A correção e a resposta ficam no histórico. Para devolução de insumo, confira o que pode voltar ao estoque e registre o ajuste no módulo de estoque. A correção da cobrança preserva a baixa original.
+
 ## Inventário pelo celular
 
 Na mesma rede, abra o endereço local do computador principal com `/?terminal=estoque` e entre com um PIN autorizado para estoque. Informe o local, busque por nome, SKU ou código de barras e registre a quantidade de cada prateleira. Confira todos os locais de cada produto incluído, revise as divergências e confirme. O inventário é aplicado em uma transação, e o sistema pede nova contagem se alguma venda ou movimentação alterar o saldo durante a conferência.
