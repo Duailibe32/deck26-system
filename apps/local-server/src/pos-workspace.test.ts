@@ -4,6 +4,34 @@ import fs from 'node:fs';import os from 'node:os';import path from 'node:path';
 const clean:Array<()=>Promise<void>>=[];afterEach(async()=>{for(const f of clean.splice(0).reverse())await f();vi.unstubAllEnvs();});
 async function fixture(){const directory=fs.mkdtempSync(path.join(os.tmpdir(),'deck26-pos-tests-'));vi.stubEnv('DECK26_OPERATION_DATA_DIR',directory);const {app,store}=await buildLocalServer({dbPath:':memory:',demoMode:false,requireStrictAuth:true});clean.push(async()=>{await app.close();store.close();if(path.resolve(directory).startsWith(path.resolve(os.tmpdir())+path.sep+'deck26-pos-tests-'))fs.rmSync(directory,{recursive:true,force:true});});store.initializeLocalOperation({name:'Responsável fixture',pin:'536821',importCatalog:true,actorIp:'127.0.0.1'});const login=await app.inject({method:'POST',url:'/api/auth/login',payload:{pin:'536821'}});const token=login.json().token;const user=store.db.prepare("SELECT id FROM users WHERE role='OWNER'").get() as {id:string};store.db.prepare('UPDATE catalog_products SET track_stock=0').run();return {app,store,actor:user.id,token,headers:{authorization:'Bearer '+token}};}
 describe('PDV por função, chamados QR e transferência confirmada',()=>{
+ it('mantém o chamado assumido em aberto, protege o responsável e mede o atendimento no histórico',async()=>{
+   const {app,store,headers}=await fixture();
+   const {table}=store.openTable({tableNumber:8});
+   const call=store.requestTableService({qrToken:table.qrToken,kind:'WAITER'});
+   store.db.prepare('UPDATE table_service_calls SET requested_at=? WHERE id=?').run(new Date(Date.now()-130000).toISOString(),call.id);
+   const waiter=async(pin:string)=>{
+     await app.inject({method:'POST',url:'/api/operation/operators',headers,payload:{name:'Garçom '+pin,role:'WAITER',pin,active:true}});
+     const login=await app.inject({method:'POST',url:'/api/auth/login',payload:{pin}});
+     return {authorization:'Bearer '+login.json().token};
+   };
+   const first=await waiter('562731'),second=await waiter('671935');
+   const url='/api/pos/service-board';
+   const get=(auth=headers)=>app.inject({url:url+'?days=7&history=1',headers:auth});
+   const post=(action:string,auth=first)=>app.inject({method:'POST',url:url+'/'+call.id+'/'+action,headers:auth});
+   expect((await get(first)).json()).toMatchObject({history:null,pending:[{status:'WAITING',waitSeconds:expect.any(Number)}]});
+   expect((await post('complete')).statusCode).toBe(409);
+   expect((await post('assign')).statusCode).toBe(200);
+   expect((await post('assign',second)).statusCode).toBe(409);
+   expect((await post('complete',second)).statusCode).toBe(409);
+   expect((await get()).json().pending[0]).toMatchObject({id:call.id,status:'ASSIGNED',assignee:'Garçom 562731'});
+   expect((await post('complete')).statusCode).toBe(200);
+   expect((await post('complete')).statusCode).toBe(200);
+   const report=(await get()).json();
+   expect(report.pending).toEqual([]);
+   expect(report.history).toMatchObject({total:1,completed:1,tables:[{tableNumber:8,calls:1}],recent:[{id:call.id,status:'DONE',completedBy:'Garçom 562731'}]});
+   expect(report.history.averageSeconds).toBeGreaterThanOrEqual(130);
+   expect(report.history.hours[0].count).toBe(1);
+ });
  it('mantém chamados resolvidos no histórico da comanda e restringe o acesso',async()=>{
    const {app,store,headers}=await fixture();
    const {table,tab}=store.openTable({tableNumber:1,waiterUserId:'usr-owner-01'});

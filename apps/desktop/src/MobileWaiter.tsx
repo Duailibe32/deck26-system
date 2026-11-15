@@ -1,3 +1,4 @@
+import {ServiceBoard} from './ServiceBoard.js';
 import {ShiftQueue} from './ShiftQueue.js';
 import {restaurantQueue} from './shiftQueueModel.js';
 import {ProductPicture} from './ProductPhotos.js';
@@ -32,13 +33,7 @@ export function MobileWaiter({qrToken}:{qrToken?:string}){
   const [paperWorkflow,setPaperWorkflow]=useState(false);useEffect(()=>{if(session)void call('/api/ops/settings').then(d=>setPaperWorkflow(d.kitchenWorkflow==='PAPER')).catch(()=>{});},[session?.token]);
   const [serviceCalls,setServiceCalls]=useState<TableServiceCall[]>([]),[billChoice,setBillChoice]=useState(false);
   const [focusedCall,setFocusedCall]=useState<string|null>(null);
-  useEffect(()=>{
-    if(view!=='calls'||!focusedCall)return;
-    const row=document.getElementById('d26-waiter-call-'+focusedCall);
-    row?.scrollIntoView({block:'center'});
-    row?.focus({preventScroll:true});
-    setFocusedCall(null);
-  },[view,focusedCall]);
+
   const [category, setCategory] = useState('all');
   const [favoriteIds, setFavoriteIds] = useState<string[]>([]);
   const [nextTable, setNextTable] = useState<number|null>(null);
@@ -68,7 +63,7 @@ export function MobileWaiter({qrToken}:{qrToken?:string}){
   const {toasts,push,dismiss}=useDesktopToasts();
   const serviceSound=useServiceSound(serviceCalls,session?.token,connected,call=>{
     push({...serviceAlert(call),action:{label:'Ver chamados',run:()=>{setFocusedCall(call.id);navigate('calls');}}});
-  });
+  },'waiter-mobile');
   useOperationalEvents(api,session?.token,!!session,()=>{void refresh();});
   const pendingStorageKey=session?'deck26-pending:'+session.userId:qrToken?'deck26-pending-qr:'+qrToken:null;
   const draftKey=session&&!qrToken?'deck26-waiter-draft:'+session.userId:null;
@@ -168,9 +163,9 @@ export function MobileWaiter({qrToken}:{qrToken?:string}){
   const total=cart.reduce((sum,item)=>sum+item.quantity*(item.price+item.modifiers.reduce((n,m)=>n+m.priceDeltaCents,0)),0);
   return <main className={'d26-waiter view-'+view+(cart.length?' has-cart':'')+(!qrToken?' staff-terminal':'')}><header><div><strong>DECK <b>26</b></strong><small>{qrToken?'Cardápio da mesa '+table:session?.name+' · Atendimento'}</small></div><span className={connected?'connected':'disconnected'}>{connected?'Conectado':'Sem conexão'}</span>{!qrToken&&<button disabled={busy||pending||cart.length>0} onClick={()=>{setSession(null);setCart([]);setDraftTabId(null);setTable(null);setView('tables');setSentAt(null);setServiceCalls([]);setFavoriteIds([]);setProducts([]);setTabs([]);setTables([]);setOrders([]);}}>Sair</button>}</header>
     <div className="d26-waiter-heading"><div><small>{qrToken?'PEDIDO PELO QR CODE':'OPERAÇÃO LOCAL'}</small><h1>{{tables:'Mapa de mesas',menu:'Lançar pedido',cart:'Conferir pedido',calls:'Chamados',more:'Mais opções',breakfast:'Café do hóspede'}[view]}</h1></div>{!qrToken&&table!==null&&<strong className="d26-waiter-active-table">Mesa {String(table).padStart(2,'0')}</strong>}</div>
-    {!qrToken&&<><AlertSoundControls audio={serviceSound}/><DesktopToasts toasts={toasts} dismiss={dismiss} mobile/></>}{message&&<div role="status" className="d26-waiter-message">{message}<button onClick={()=>setMessage('')} aria-label="Fechar aviso">×</button></div>}
+    {!qrToken&&<><AlertSoundControls audio={serviceSound} kinds={['waiter','bill']}/><DesktopToasts toasts={toasts} dismiss={dismiss} mobile/></>}{message&&<div role="status" className="d26-waiter-message">{message}<button onClick={()=>setMessage('')} aria-label="Fechar aviso">×</button></div>}
     {qrToken&&<section className="d26-qr-service"><strong>Precisa da equipe?</strong><div><button disabled={busy} onClick={async()=>{setBusy(true);try{await call('/api/public/qr-service-call',{qrToken,kind:'WAITER'});setMessage('Garçom chamado. A equipe recebeu o aviso da sua mesa.');}catch(error){setMessage((error as Error).message);}finally{setBusy(false);}}}>🔔 Chamar Garçom</button><button disabled={busy} onClick={()=>setBillChoice(value=>!value)}>💳 Pedir a Conta</button></div>{billChoice&&<><small>Como pretende pagar? A equipe trará a conta para conferência.</small><div>{[['CARD','Trazer maquininha'],['PIX','Vou pagar por PIX']].map(([method,label])=><button key={method} disabled={busy} onClick={async()=>{setBusy(true);try{await call('/api/public/qr-service-call',{qrToken,kind:'BILL',paymentPreference:method});setBillChoice(false);setMessage('Conta solicitada. Aguarde a equipe; nenhum pagamento foi registrado.');}catch(error){setMessage((error as Error).message);}finally{setBusy(false);}}}>{label}</button>)}</div></>}</section>}
-    {!qrToken&&view==='calls'&&<section className="d26-waiter-call-list">{!serviceCalls.length&&<p>Nenhum chamado pendente.</p>}{[...serviceCalls].sort((a,b)=>Number(b.kind==='BILL')-Number(a.kind==='BILL')||a.requestedAt.localeCompare(b.requestedAt)).map(item=><article key={item.id} id={'d26-waiter-call-'+item.id} tabIndex={-1}><strong>Mesa {item.tableNumber} · {item.kind==='WAITER'?'Chamou garçom':item.paymentPreference==='PIX'?'Pediu conta / PIX':'Pediu conta / maquininha'}</strong><small>Pendente · {new Date(item.requestedAt).toLocaleTimeString('pt-BR',{hour:'2-digit',minute:'2-digit'})} · {minutesSince(item.requestedAt)} min de espera</small>{session&&hasPermission(session.role,'tabs:manage')&&<button disabled={busy} onClick={async()=>{setBusy(true);try{await call('/api/pos/service-calls/'+item.id+'/resolve',{});await refresh();setMessage('Solicitação assumida.');}catch(error){setMessage((error as Error).message);}finally{setBusy(false);}}}>Assumir atendimento</button>}</article>)}</section>}
+    {!qrToken&&view==='calls'&&session&&<ServiceBoard api={api} token={session.token} userId={session.userId} role={session.role} focusedId={focusedCall}/>}
     {view==='tables'&&!qrToken&&<><ShiftQueue tasks={tasks} now={now} connected={connected} onOpen={target=>{
       if(target.kind!=='table')return;
       if(target.intent==='call'||target.intent==='pay'){setFocusedCall(target.callId??null);navigate('calls');return;}

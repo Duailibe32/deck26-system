@@ -168,6 +168,7 @@ O assistente mostra a versão, a pasta do aplicativo e a pasta dos dados. Cada v
 - O cardápio da mesa oferece atalhos para chamar o garçom e pedir a conta. Ative o som no cabeçalho do PDV ou no terminal do garçom. No delivery, **Minha conta** é opcional e preenche os dados básicos na sacola. [Acesso pelo celular](docs/OPERACAO_LOCAL.md#celular-do-garçom)
 - Os cardápios de mesa e delivery têm fotos de referência identificadas como **Imagem ilustrativa**. Fotos cadastradas pelo estabelecimento têm prioridade.
 - No caixa e no terminal do garçom, **Ativar som dos alertas** libera o áudio. Use **Ajustar som** para controlar o volume e testar o toque. Os avisos na tela identificam o evento e mostram um atalho quando o operador tem acesso à área.
+- Em **Chamados**, assuma e conclua solicitações da mesa. Chamados com dois minutos de espera sem responsável ganham destaque. Gerentes e proprietários têm acesso ao histórico e aos horários de maior movimento.
 
 ### Compilar e empacotar a partir do código
 

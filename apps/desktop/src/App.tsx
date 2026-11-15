@@ -1,5 +1,5 @@
 import {DesktopToasts,useDesktopToasts} from './DesktopToasts.js';
-import {alertBaseline,alertsSince} from './desktopAlerts.js';
+import {alertBaseline,alertsSince,type AlertKind} from './desktopAlerts.js';
 import {ShiftQueue,useShiftClock} from './ShiftQueue.js';
 import {receptionQueue} from './shiftQueueModel.js';
 import {TableQrCode,TableQrKit,tableMenuBase} from './TableQrCode.js';
@@ -443,8 +443,14 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
   const [maintBlockRoom, setMaintBlockRoom] = useState<boolean>(true);
 
   const activeRole: UserRole = authSession?.role ?? 'WAITER';
+  const audibleKinds:AlertKind[]=[];
+  if(hasPermission(activeRole,'tabs:manage'))audibleKinds.push('waiter','bill');
+  if(hasPermission(activeRole,'tabs:manage')||activeRole==='KITCHEN')audibleKinds.push('order');
+  if(hasPermission(activeRole,'delivery:manage_orders'))audibleKinds.push('delivery');
+  if(hasPermission(activeRole,'printers:manage'))audibleKinds.push('print');
+  if(hasPermission(activeRole,'stock:adjust'))audibleKinds.push('stock');
   currentSessionToken.current=authSession?.token;
-  const serviceSound=useServiceSound(snapshot.serviceCalls,authSession?.token,serverConnected);
+  const serviceSound=useServiceSound(snapshot.serviceCalls,authSession?.token,serverConnected,undefined,activeRole);
   useEffect(()=>{
     if(!authSession||!serverConnected)return;
     const baseline=alertBaseline(snapshot,authSession.role);
@@ -459,7 +465,7 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
       pushToast(accessible?{...alert,action:{label:'Abrir área',run:()=>setActiveModule(destination)}}:alert);
     }
     if(alerts.some(alert=>alert.kind==='bill'||alert.kind==='waiter'))return;
-    const audible=alerts.find(alert=>alert.kind==='print')??alerts.find(alert=>alert.kind);
+    const audible=alerts.find(alert=>alert.kind==='print'&&serviceSound.preferences.print!==false)??alerts.find(alert=>alert.kind&&serviceSound.preferences[alert.kind]!==false);
     if(audible?.kind)serviceSound.sound(audible.kind);
   },[snapshot,serverConnected,authSession]);
   const receptionTasks=useMemo(()=>activeModule==='hotel-reservas'?receptionQueue(snapshot.hotelRooms,snapshot.hotelStays??[],snapshot.tabs,activeRole,shiftNow):[],[activeModule,snapshot.hotelRooms,snapshot.hotelStays,snapshot.tabs,activeRole,shiftNow]);
@@ -1830,7 +1836,7 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
               : `Não configurada · ${pendingOutboxCount} evento(s) local(is)`}
           </span>
 
-          {authSession&&<AlertSoundControls audio={serviceSound}/>}
+          {!!audibleKinds.length&&<AlertSoundControls audio={serviceSound} kinds={audibleKinds}/>}
           <button
             className="d26-btn d26-btn-tertiary"
             style={{ padding: '6px 12px', fontSize: '0.78rem' }}
