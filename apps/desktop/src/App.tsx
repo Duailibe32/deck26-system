@@ -10,6 +10,7 @@ import {CustomerMenu} from './CustomerMenu.js';
 import {PosWorkspace} from './PosWorkspace.js';
 import {AuditLogs} from './AuditLogs.js';
 import {visibleModules,roleHome,canChooseView,parseMoney,type InterfaceMode} from './desktopModels.js';
+import {AlertSoundControls} from './AlertSoundControls.js';
 import {useServiceSound} from './useServiceSound.js';
 import {useOperationalEvents} from './useOperationalEvents.js';
 import {fetchHotelFolio,sendHotelFolioPayment,HotelFolioRequestError} from './hotelFolio.js';
@@ -449,7 +450,17 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
     const baseline=alertBaseline(snapshot,authSession.role);
     const prior=alertsRef.current;
     alertsRef.current={token:authSession.token,baseline};
-    if(prior?.token===authSession.token)alertsSince(prior.baseline,baseline).forEach(pushToast);
+    if(prior?.token!==authSession.token)return;
+    const alerts=alertsSince(prior.baseline,baseline);
+    const destinations={waiter:'mesas-comandas',bill:'mesas-comandas',order:authSession.role==='KITCHEN'?'cozinha':'mesas-comandas',delivery:'pedidos',print:'impressoras',stock:'estoque'} as const;
+    for(const alert of alerts){
+      const destination=alert.kind&&destinations[alert.kind];
+      const accessible=destination&&visibleModules(authSession.role,interfaceMode).some(module=>module.id===destination);
+      pushToast(accessible?{...alert,action:{label:'Abrir área',run:()=>setActiveModule(destination)}}:alert);
+    }
+    if(alerts.some(alert=>alert.kind==='bill'||alert.kind==='waiter'))return;
+    const audible=alerts.find(alert=>alert.kind==='print')??alerts.find(alert=>alert.kind);
+    if(audible?.kind)serviceSound.sound(audible.kind);
   },[snapshot,serverConnected,authSession]);
   const receptionTasks=useMemo(()=>activeModule==='hotel-reservas'?receptionQueue(snapshot.hotelRooms,snapshot.hotelStays??[],snapshot.tabs,activeRole,shiftNow):[],[activeModule,snapshot.hotelRooms,snapshot.hotelStays,snapshot.tabs,activeRole,shiftNow]);
   useEffect(()=>{
@@ -1819,7 +1830,7 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
               : `Não configurada · ${pendingOutboxCount} evento(s) local(is)`}
           </span>
 
-          {hasPermission(activeRole,'tabs:manage')&&<div className="d26-service-sound"><button className="d26-btn d26-btn-secondary" aria-pressed={serviceSound.enabled} onClick={()=>void serviceSound.toggle()}>{serviceSound.enabled?'Silenciar chamados':'Ativar som dos chamados'}</button><small role="status">{serviceSound.feedback}</small></div>}
+          {authSession&&<AlertSoundControls audio={serviceSound}/>}
           <button
             className="d26-btn d26-btn-tertiary"
             style={{ padding: '6px 12px', fontSize: '0.78rem' }}

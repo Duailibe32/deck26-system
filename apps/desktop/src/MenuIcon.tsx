@@ -12,7 +12,16 @@ const paths={
   search:'M16 10a6 6 0 1 1-12 0 6 6 0 0 1 12 0zm-2 4 6 6',
   plus:'M12 5v14M5 12h14',
   arrow:'M4 12h15m-6-6 6 6-6 6',
-  dish:'M3 16h18M5 15a7 7 0 0 1 14 0M12 5v2M4 19h16'
+  dish:'M3 16h18M5 15a7 7 0 0 1 14 0M12 5v2M4 19h16',
+  check:'M5 12l4 4L19 6',
+  close:'M6 6l12 12M18 6 6 18',
+  warning:'M12 3 2 20h20zM12 9v4m0 3h.01',
+  print:'M6 9V3h12v6M6 17H3V9h18v8h-3M6 14h12v7H6zM17 12h1',
+  stock:'m3 7 9-4 9 4v10l-9 4-9-4zm0 0 9 4 9-4m-9 4v10m-4.5-16 9 4',
+  volume:'M3 9h4l5-4v14l-5-4H3zM15 9a4 4 0 0 1 0 6m3-9a8 8 0 0 1 0 12',
+  mute:'M3 9h4l5-4v14l-5-4H3zM16 9l5 6m0-6-5 6',
+  table:'M3 8h18M5 8v11m14-11v11M5 5h14',
+  more:'M5 12h.01m7 0h.01m7 0h.01'
 };
 export function MenuIcon({name}:{name:keyof typeof paths}){
   return <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"

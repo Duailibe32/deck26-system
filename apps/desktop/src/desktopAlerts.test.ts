@@ -1,5 +1,5 @@
 import {describe,expect,it} from 'vitest';
-import type {Order,PrintJob} from '@deck26/contracts';
+import type {Order,PrintJob,TableServiceCall} from '@deck26/contracts';
 import {alertBaseline,alertsSince} from './desktopAlerts.js';
 
 const date='2026-11-11T15:00:00.000Z';
@@ -19,6 +19,14 @@ const next={...previous,orders:[order],printJobs:[via],publicDeliveryPendingCoun
   stock:{balances:[{productId:'coffee',productName:'Café',currentQuantity:0,lowStockAlert:true}]}};
 
 describe('Avisos do desktop',()=>{
+  it('identifica a mesa e o meio de pagamento sem repetir o mesmo chamado',()=>{
+    const call:TableServiceCall={id:'call',tableNumber:8,tabId:'tab',kind:'BILL',paymentPreference:'PIX',requestedAt:date};
+    const before=alertBaseline(previous,'CASHIER');
+    const after=alertBaseline({...previous,serviceCalls:[call]},'CASHIER');
+    expect(alertsSince(before,after)).toEqual([{kind:'bill',key:'call',tone:'warning',title:'Mesa 08',detail:'Pediu a conta · PIX'}]);
+    expect(alertsSince(after,after)).toEqual([]);
+    expect(alertsSince(alertBaseline(previous,'KITCHEN'),alertBaseline({...previous,serviceCalls:[call]},'KITCHEN'))).toEqual([]);
+  });
   it('gera avisos de mudança e ignora um estado repetido',()=>{
     const baseline=alertBaseline(next,'OWNER');
     expect(alertsSince(alertBaseline(previous,'OWNER'),baseline).map(item=>item.title))

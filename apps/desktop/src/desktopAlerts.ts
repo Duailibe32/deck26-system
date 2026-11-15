@@ -9,7 +9,13 @@ type AlertSnapshot = {
   stock: { balances: Stock[] };
   catalog: {products: {id:string;active:boolean;trackStock?:boolean}[]};
 };
-export type DesktopAlert = {title:string; detail?:string; tone:'info'|'warning'|'error'};
+export type AlertKind='waiter'|'bill'|'order'|'delivery'|'print'|'stock';
+export type DesktopAlert = {title:string; detail?:string; tone:'info'|'warning'|'error';kind?:AlertKind;key?:string;action?:{label:string;run:()=>void}};
+export function serviceAlert(call:TableServiceCall):DesktopAlert {
+  return {kind:call.kind==='BILL'?'bill':'waiter',key:call.id,tone:'warning',
+    title:'Mesa '+String(call.tableNumber).padStart(2,'0'),
+    detail:call.kind==='BILL'?'Pediu a conta'+(call.paymentPreference==='PIX'?' · PIX':call.paymentPreference==='CARD'?' · maquininha':''):'Chamou o garçom'};
+}
 
 export function alertBaseline(snapshot:AlertSnapshot,role:UserRole) {
   const kitchen=hasPermission(role,'orders:advance_kitchen')&&role==='KITCHEN';
@@ -42,24 +48,23 @@ export function alertBaseline(snapshot:AlertSnapshot,role:UserRole) {
 export function alertsSince(previous:ReturnType<typeof alertBaseline>,current:ReturnType<typeof alertBaseline>):DesktopAlert[] {
   const alerts:DesktopAlert[]=[];
   for(const [id,call] of current.calls){
-    if(!previous.calls.has(id))alerts.push({tone:'warning',title:'Mesa '+call.tableNumber,
-      detail:call.kind==='BILL'?'Pediu a conta.':'Chamou o garçom.'});
+    if(!previous.calls.has(id))alerts.push(serviceAlert(call));
   }
   const orders=[...current.orders].filter(([id,ready])=>ready&&(current.kitchen?!previous.orders.get(id):!previous.orders.has(id))).length;
-  if(orders)alerts.push({tone:'info',title:orders===1?'Novo pedido recebido':orders+' novos pedidos recebidos',detail:current.kitchen?'Confira a fila de preparo.':'Confira o salão e os pedidos por QR.'});
+  if(orders)alerts.push({kind:'order',tone:'info',title:orders===1?'Novo pedido recebido':orders+' novos pedidos recebidos',detail:current.kitchen?'Confira a fila de preparo.':'Confira o salão e os pedidos por QR.'});
   const delivery=current.delivery-previous.delivery;
-  if(delivery>0)alerts.push({tone:'info',title:delivery===1?'Novo pedido online':delivery+' novos pedidos online',detail:'Confira os pedidos aguardando aceite.'});
+  if(delivery>0)alerts.push({kind:'delivery',tone:'info',title:delivery===1?'Novo pedido online':delivery+' novos pedidos online',detail:'Confira os pedidos aguardando aceite.'});
   const print=[...current.failed].filter(([id,status])=>previous.failed.get(id)!==status).length;
-  if(print)alerts.push({tone:'error',title:print===1?'Via de impressão precisa de atenção':print+' vias precisam de atenção',detail:'Confira a fila de impressão antes de autorizar outra via.'});
+  if(print)alerts.push({kind:'print',tone:'error',title:print===1?'Via de impressão precisa de atenção':print+' vias precisam de atenção',detail:'Confira a fila de impressão antes de autorizar outra via.'});
   const stock=[...current.stock.values()].filter(balance=>{
     const before=previous.stock.get(balance.productId);
     return before&&((before.currentQuantity>0&&balance.currentQuantity<=0)||(!before.lowStockAlert&&balance.lowStockAlert));
   });
   if(stock.length===1){
     const item=stock[0]!;
-    alerts.push({tone:'warning',title:item.currentQuantity<=0?'Estoque esgotado':'Estoque no mínimo',detail:item.productName});
+    alerts.push({kind:'stock',tone:'warning',title:item.currentQuantity<=0?'Estoque esgotado':'Estoque no mínimo',detail:item.productName});
   }else if(stock.length>1){
-    alerts.push({tone:'warning',title:stock.length+' itens precisam de reposição',detail:'Confira os saldos no estoque.'});
+    alerts.push({kind:'stock',tone:'warning',title:stock.length+' itens precisam de reposição',detail:'Confira os saldos no estoque.'});
   }
   return alerts;
 }

@@ -9,3 +9,23 @@
 .d26-toast[data-tone="error"] .d26-toast-icon { background:#633245; color:#ffd0da; }
 .d26-toast button { min-width:44px; min-height:44px; border:1px solid transparent; border-radius:8px; color:#ffe3ee; background:transparent; cursor:pointer; font-size:20px; }
 .d26-toast button:hover,.d26-toast button:focus-visible { border-color:#f7a6c7; }
+
+.d26-toast { border-radius:16px; padding:12px; background:#242027; }
+.d26-toast[data-kind="bill"] { border-left-color:#efafe8; }
+.d26-toast[data-kind="bill"] .d26-toast-icon { background:#492947; color:#ffd0f5; }
+.d26-toast-icon { width:32px; height:32px; }
+.d26-toast-icon svg, .d26-toast button svg { width:18px; height:18px; }
+.d26-toast .d26-toast-action {
+  display:inline-flex; align-items:center; gap:6px; min-height:44px;
+  padding:0 8px; margin:4px 0 0 -8px; color:#ffacd2; font:inherit; font-size:12px; font-weight:700;
+}
+.d26-toast-stack.d26-toast-mobile { bottom:calc(84px + env(safe-area-inset-bottom,0px)); }
+.d26-alert-audio { display:flex; align-items:center; flex-wrap:wrap; gap:8px; position:relative; }
+.d26-alert-audio > button { display:inline-flex; gap:6px; align-items:center; min-height:40px; }
+.d26-alert-audio > small:empty { display:none; }
+.d26-alert-audio details { color:#ffd1e4; font-size:12px; }
+.d26-alert-audio summary { cursor:pointer; padding:8px 4px; }
+.d26-alert-audio details label { display:flex; gap:8px; align-items:center; }
+.d26-alert-audio details input { width:90px; accent-color:#ff4d9e; }
+.d26-alert-audio details button { cursor:pointer; background:#352731; color:#ffd1e4; border:1px solid #77506a; border-radius:7px; padding:6px; }
+.d26-waiter .d26-alert-audio { margin:10px 0; }
