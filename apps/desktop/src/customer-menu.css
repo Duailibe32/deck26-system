@@ -152,3 +152,25 @@ div.d26-customer-feature-photo { background:#21171f; display:grid; place-items:c
   .d26-stitch-menu .d26-customer-grid footer { gap:5px; }
   .d26-stitch-menu .d26-customer-grid button { padding-inline:8px; }
 }
+
+.d26-stitch-menu svg { flex:none; vertical-align:middle; }
+.d26-stitch-menu button svg { width:17px; height:17px; }
+.d26-stitch-menu .d26-customer-bottom button svg { width:20px; height:20px; }
+.d26-stitch-menu.is-delivery .d26-customer-bottom { grid-template-columns:repeat(4,minmax(0,1fr)); }
+.d26-stitch-menu.is-delivery .d26-customer-bottom button { padding-inline:3px; white-space:nowrap; }
+.d26-stitch-menu .d26-customer-search { position:relative; }
+.d26-stitch-menu .d26-customer-search svg { position:absolute; left:35px; top:14px; color:#ffb1cf; pointer-events:none; }
+.d26-stitch-menu .d26-customer-search input { padding-left:44px; }
+.d26-dish-photo { margin:0; display:block; position:relative; overflow:hidden; background:#2b2027; }
+.d26-dish-photo img { display:block; width:100%; height:100%; object-fit:cover; }
+.d26-dish-placeholder { display:grid; place-items:center; width:100%; height:100%; color:#e994b8; }
+.d26-dish-placeholder svg { width:32px; height:32px; }
+.d26-dish-photo figcaption {
+  position:absolute; inset:auto 0 0; padding:4px 3px; text-align:center;
+  color:#fff0f6; background:#1b0d16e8; font-size:9px; line-height:1.2;
+}
+.d26-customer-feature .d26-customer-feature-photo { height:clamp(114px,32vw,208px); }
+.d26-customer-product-photo.d26-dish-photo { height:clamp(160px,45vw,255px); }
+.d26-stitch-menu .d26-customer-grid article { align-items:start; }
+.d26-stitch-menu .d26-customer-grid h3 { font-size:clamp(16px,4vw,20px); line-height:1.25; }
+.d26-stitch-menu .d26-customer-grid p { margin:6px 0 11px; }
