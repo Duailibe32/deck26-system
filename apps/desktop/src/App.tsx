@@ -10,6 +10,7 @@ import {CustomerMenu} from './CustomerMenu.js';
 import {PosWorkspace} from './PosWorkspace.js';
 import {AuditLogs} from './AuditLogs.js';
 import {visibleModules,roleHome,canChooseView,parseMoney,type InterfaceMode} from './desktopModels.js';
+import {useServiceSound} from './useServiceSound.js';
 import {useOperationalEvents} from './useOperationalEvents.js';
 import {fetchHotelFolio,sendHotelFolioPayment,HotelFolioRequestError} from './hotelFolio.js';
 import {FiscalPreparationModule,FiscalCheckoutPreview} from './FiscalPreparationModule.js';
@@ -442,6 +443,7 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
 
   const activeRole: UserRole = authSession?.role ?? 'WAITER';
   currentSessionToken.current=authSession?.token;
+  const serviceSound=useServiceSound(snapshot.serviceCalls,authSession?.token,serverConnected);
   useEffect(()=>{
     if(!authSession||!serverConnected)return;
     const baseline=alertBaseline(snapshot,authSession.role);
@@ -1817,6 +1819,7 @@ const DesktopSession: React.FC<{onSignOut:()=>void}> = ({onSignOut}) => {
               : `Não configurada · ${pendingOutboxCount} evento(s) local(is)`}
           </span>
 
+          {hasPermission(activeRole,'tabs:manage')&&<div className="d26-service-sound"><button className="d26-btn d26-btn-secondary" aria-pressed={serviceSound.enabled} onClick={()=>void serviceSound.toggle()}>{serviceSound.enabled?'Silenciar chamados':'Ativar som dos chamados'}</button><small role="status">{serviceSound.feedback}</small></div>}
           <button
             className="d26-btn d26-btn-tertiary"
             style={{ padding: '6px 12px', fontSize: '0.78rem' }}

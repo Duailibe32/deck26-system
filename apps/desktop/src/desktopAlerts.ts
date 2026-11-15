@@ -1,10 +1,11 @@
-import {hasPermission,type Order,type PrintJob,type UserRole} from '@deck26/contracts';
+import {hasPermission,type Order,type PrintJob,type TableServiceCall,type UserRole} from '@deck26/contracts';
 
 type Stock = {productId:string;productName:string;currentQuantity:number;lowStockAlert?:boolean};
 type AlertSnapshot = {
   orders: Order[];
   printJobs: PrintJob[];
   publicDeliveryPendingCount?: number;
+  serviceCalls?: TableServiceCall[];
   stock: { balances: Stock[] };
   catalog: {products: {id:string;active:boolean;trackStock?:boolean}[]};
 };
@@ -34,11 +35,16 @@ export function alertBaseline(snapshot:AlertSnapshot,role:UserRole) {
       if(tracked.has(balance.productId))stock.set(balance.productId,balance);
     }
   }
-  return {orders,failed,stock,kitchen,delivery:hasPermission(role,'delivery:manage_orders')?(snapshot.publicDeliveryPendingCount??0):0};
+  const calls=new Map((hasPermission(role,'tabs:manage')?snapshot.serviceCalls??[]:[]).map(call=>[call.id,call]));
+  return {orders,failed,stock,kitchen,calls,delivery:hasPermission(role,'delivery:manage_orders')?(snapshot.publicDeliveryPendingCount??0):0};
 }
 
 export function alertsSince(previous:ReturnType<typeof alertBaseline>,current:ReturnType<typeof alertBaseline>):DesktopAlert[] {
   const alerts:DesktopAlert[]=[];
+  for(const [id,call] of current.calls){
+    if(!previous.calls.has(id))alerts.push({tone:'warning',title:'Mesa '+call.tableNumber,
+      detail:call.kind==='BILL'?'Pediu a conta.':'Chamou o garçom.'});
+  }
   const orders=[...current.orders].filter(([id,ready])=>ready&&(current.kitchen?!previous.orders.get(id):!previous.orders.has(id))).length;
   if(orders)alerts.push({tone:'info',title:orders===1?'Novo pedido recebido':orders+' novos pedidos recebidos',detail:current.kitchen?'Confira a fila de preparo.':'Confira o salão e os pedidos por QR.'});
   const delivery=current.delivery-previous.delivery;

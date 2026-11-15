@@ -28,6 +28,10 @@ O painel **Administração → Acesso e continuidade** mostra os endereços do g
 
 ## Celular do garçom
 
+No caixa e no terminal do garçom, toque em **Ativar som dos chamados** e confira o toque de teste. Novos pedidos de atendimento e de conta tocam sinais diferentes no dispositivo. Mantenha a tela aberta e o volume ligado. Em celulares, suspensão e aba em segundo plano podem interromper o áudio.
+
+No cardápio de delivery, **Minha conta** permite criar um cadastro com telefone e senha e preencher o nome e o telefone na finalização. Em outro aparelho, o login exige HTTPS. Para publicar atrás de um proxy local, termine o TLS no proxy, sobrescreva `X-Forwarded-Proto` com o protocolo recebido e mantenha a porta do servidor atrás do proxy. O checkout como visitante e o acesso pelo QR da mesa continuam disponíveis na rede local.
+
 PC e celular precisam estar na mesma rede local, sem isolamento de clientes Wi-Fi. Abra o link exibido em **Administração → Acesso e continuidade**, com `/?terminal=garcom`. Entre com o PIN do garçom. É possível abrir mesa, lançar itens e observações, aprovar pedidos QR, confirmar entrega e solicitar conta. Os pedidos são gravados no PC e chegam à produção.
 
 O PC deve permanecer ligado e sem suspensão. Fechar a janela nativa pelo atalho encerra o servidor que o atalho iniciou. Também existe **Encerrar servidor local** na Administração. Desligar o servidor interrompe os celulares e preserva os lançamentos já confirmados. Se houver falha durante um envio, use **Reenviar com segurança**: a identificação do pedido evita duplicação.

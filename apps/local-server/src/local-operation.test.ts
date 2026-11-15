@@ -17,6 +17,25 @@ async function fixture(importCatalog=true){
   return {app,store,login,headers:await login(),directory};
 }
 describe('Instalação operacional local, operadores e impressão virtual',()=>{
+  it('isola a conta do delivery e revoga o token ao sair',async()=>{
+    const {app,store}=await fixture(false);
+    const url='/api/public/delivery/account';
+    const body={name:'Cliente de ensaio',phone:'(98) 99999-1234',password:'senha-forte-fixture'};
+    const post=(action:string,payload=body)=>app.inject({method:'POST',url:url+'/'+action,payload});
+    const remote=await app.inject({method:'POST',url:url+'/register',payload:body,remoteAddress:'192.168.1.11'});
+    expect(remote.statusCode).toBe(403);
+    const created=await post('register');
+    expect(created.statusCode,created.body).toBe(200);
+    const token=created.json().token;
+    const headers={authorization:'Bearer '+token};
+    expect((await app.inject({url,headers})).json()).toEqual({customer:{name:body.name,phone:'98999991234'}});
+    expect((await app.inject({url:'/api/state',headers})).statusCode).toBe(401);
+    expect(JSON.stringify(store.db.prepare('SELECT * FROM delivery_accounts').all())).not.toContain(body.password);
+    expect((await post('login',{...body,password:'senha-incorreta'})).statusCode).toBe(401);
+    expect((await post('login')).statusCode).toBe(200);
+    expect((await app.inject({method:'POST',url:url+'/logout',headers})).statusCode).toBe(200);
+    expect((await app.inject({url,headers})).statusCode).toBe(401);
+  });
   it('pedido QR pendente não cobra nem imprime; garçom aprova e confirma entrega sem acessar a cozinha',async()=>{
     const {app,store,headers,login}=await fixture();
     const product=store.getCatalog().products[0]!;store.db.prepare('UPDATE catalog_products SET track_stock=0 WHERE id=?').run(product.id);

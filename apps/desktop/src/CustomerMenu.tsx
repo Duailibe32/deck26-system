@@ -1,4 +1,5 @@
-import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import React, { useCallback,useEffect, useLayoutEffect, useRef, useState } from 'react';
+import {DeliveryAccount} from './DeliveryAccount.js';
 import { Deck26Logo,MenuCategoryFilter,matchesMenuGroup,type MenuGroup } from '@deck26/ui';
 import { formatBrlCents as money, resolveChannelPriceCents, type CatalogProduct, type CatalogCategory, type Order } from '@deck26/contracts';
 import { noteSuggestions, toggleNote } from './desktopModels.js';
@@ -29,7 +30,7 @@ export function CustomerMenu({
     [error, setError] = useState(''),
     [message, setMessage] = useState(''),
     [busy, setBusy] = useState(false),
-    [view, setView] = useState<'menu' | 'cart' | 'status' | 'service'>('menu'),
+    [view, setView] = useState<'menu' | 'cart' | 'status' | 'service' | 'account'>('menu'),
     [group,setGroup]=useState<MenuGroup>('all'),
     [category, setCategory] = useState('ALL'),
     [search, setSearch] = useState(''),
@@ -61,6 +62,9 @@ export function CustomerMenu({
     [status, setStatus] = useState<any>(null),
     [billChoice, setBillChoice] = useState(false);
   const [cep,setCep]=useState(''),[cepMessage,setCepMessage]=useState(''),[cepBusy,setCepBusy]=useState(false);
+  const applyCustomer=useCallback((customer:{name:string;phone:string}|null)=>{
+    setName(customer?.name??'');setPhone(customer?.phone??'');
+  },[]);
   const [lastItems, setLastItems] = useState<Line[]>(() => {
     try {
       const saved = JSON.parse(sessionStorage.getItem(draftKey + ':last-items') ?? '[]');
@@ -357,13 +361,38 @@ export function CustomerMenu({
   const ordered = categories.filter(c=>menuCategoryIds.has(c.id)&&matchesMenuGroup(c.id,group))
     .sort((a, b) => Number(highlights(b)) - Number(highlights(a)) || a.sortOrder - b.sortOrder);
   const visible=ordered.filter(c=>(category==='ALL'||c.id===category)&&byCategory.has(c.id));
-  return <main className="d26-customer"><header><Deck26Logo showHotelSubtitle /><span>{qrToken ? 'Mesa ' + data.table.tableNumber + ' · DECK 26' : 'Peça do seu jeito'}</span><button aria-label="Atualizar cardápio" onClick={() => void call(endpoint).then(setData).catch(e => setMessage(e.message))}>↻</button></header>{view==='menu'&&<section className="d26-customer-hero"><small>FEITO NA HORA · DO NOSSO JEITO</small><h1>Seu próximo<br /><em>favorito está aqui.</em></h1><p>{qrToken ? 'Escolha, personalize e envie seu pedido direto para nossa equipe.' : 'Do Deck 26 até você. Comida de verdade, sabor de casa.'}</p>{!qrToken && <span className="d26-customer-eta">◷ Previsão atual: {etaMin}–{etaMax} min{data.eta.busy ? ' · cozinha movimentada' : ''}</span>}</section>}
+  const candidates=term||category!=='ALL'||group!=='all'?[]:ordered
+    .flatMap(item=>byCategory.get(item.id)??[]).filter(item=>item.availableForSale!==false);
+  const featured=candidates.find(item=>item.imageUrl)??candidates[0];
+  const canOrder=storeOpen&&!busy&&!pendingFlag&&(!qrToken||data.table.open);
+  const count=cart.reduce((sum,line)=>sum+line.quantity,0);
+  return <main className={'d26-customer d26-stitch-menu'+(qrToken?' is-table':' is-delivery')+(view==='menu'&&count?' has-bag':'')}>
+  <header><Deck26Logo /><span>{qrToken?'Mesa '+data.table.tableNumber:'Delivery DECK 26'}</span>
+    {qrToken?<button className="d26-customer-quiet" onClick={()=>navigate('service')}>Atendimento</button>:<button className="d26-customer-quiet" disabled={pendingFlag||busy} onClick={()=>navigate('account')}>Minha conta</button>}
+  </header>
+  {!qrToken&&<div hidden={view!=='account'}><DeliveryAccount onCustomer={applyCustomer}/></div>}
+  {view==='menu'&&<div className="d26-customer-intro">
+    {qrToken?<section className="d26-customer-context" aria-label="Atendimento da mesa">
+      <div><strong>Mesa {data.table.tableNumber}</strong><small>{data.table.open?'Pedidos disponíveis':'Aguardando abertura'}</small></div>
+      <div className="d26-customer-context-actions"><button disabled={!canOrder} onClick={()=>void service('WAITER')}>Chamar garçom</button>
+        <button disabled={!canOrder} onClick={()=>{setBillChoice(true);navigate('service');}}>Pedir a conta</button></div>
+    </section>:<section className="d26-customer-context" aria-label="Como receber">
+      <div className="d26-customer-context-actions"><button aria-pressed={kind==='DELIVERY'} disabled={pendingFlag||busy} onClick={()=>setKind('DELIVERY')}>Entrega</button>
+        <button aria-pressed={kind==='PICKUP'} disabled={pendingFlag||busy} onClick={()=>setKind('PICKUP')}>Retirada no balcão</button></div>
+      {kind==='DELIVERY'&&<small>Previsão de entrega · {etaMin}–{etaMax} min</small>}
+    </section>}
+    {featured&&<article className="d26-customer-feature">
+      <div><small>Destaque do cardápio</small><h1>{featured.name}</h1><p>{featured.description}</p>
+        <button className="d26-customer-primary" disabled={!canOrder} onClick={()=>add(featured)}>{money(resolveChannelPriceCents(featured,channel))} <span aria-hidden="true">＋</span></button>
+      </div><ProductPicture product={featured} className="d26-customer-feature-photo"/>
+    </article>}
+  </div>}
  {qrToken && view === 'service' && <section className="d26-customer-service"><h1>Atendimento</h1><button disabled={busy || !data.table.open} onClick={() => void service('WAITER')}>🔔 Chamar garçom</button><button disabled={busy || !data.table.open} onClick={() => setBillChoice(!billChoice)}>💳 Pedir a conta</button>{billChoice && <div><button onClick={() => void service('BILL', 'CARD')}>Trazer maquininha</button><button onClick={() => void service('BILL', 'PIX')}>Pagar com PIX</button></div>}{!data.table.open && <p>Aguarde a equipe abrir sua mesa para enviar pedidos.</p>}</section>}
  {!qrToken&&data.service&&<div className={'d26-customer-store '+(storeOpen?'':'closed')} role="status"><strong>{storeOpen?'● ':''}{data.service.message}</strong>{data.service.notice&&<small>{data.service.notice}</small>}{!storeOpen&&<small>Você pode consultar o cardápio. Novos envios voltam a ser aceitos quando o atendimento reabrir.</small>}</div>}
  {qrToken && data.coverNotice && <p className="d26-customer-notice">🎵 {data.coverNotice.notice} · {money(data.coverNotice.unitCents)} por pessoa.</p>}{(message || error) && <p role="status" className="d26-customer-notice">{message || error}</p>}
  {view === 'menu' && <><div className="d26-customer-search"><input type="search" aria-label="Buscar produto" value={search} placeholder="Buscar no cardápio" onChange={e => setSearch(e.target.value)} /></div><MenuCategoryFilter value={group} categoryIds={menuCategoryIds} onChange={next=>{setGroup(next);setCategory('ALL');}}/><nav className="d26-customer-categories" aria-label="Categorias específicas"><button aria-pressed={category === 'ALL'} onClick={() => setCategory('ALL')}>Todas desta seleção</button>{ordered.map(c => <button key={c.id} aria-pressed={category === c.id} onClick={() => setCategory(c.id)}>{highlights(c) ? '★ ' : ''}{c.name}</button>)}</nav>{!visible.length&&<p className="d26-customer-notice" role="status">Nenhum produto neste filtro.</p>}{visible.map(c => {
         const list = byCategory.get(c.id)!;
-        return <section className="d26-customer-category" key={c.id}><header><div><small>{highlights(c) ? 'DESTAQUE PARA AGORA' : 'PREPARADO COM CUIDADO'}</small><h2>{c.name}</h2></div><span>{list.length} opções</span></header><div className="d26-customer-grid">{list.map(p => {
+        return <section className="d26-customer-category" key={c.id}><header><h2>{c.name}</h2><span>{list.length} opções</span></header><div className="d26-customer-grid">{list.map(p => {
               const seal = productSeal(p, c.name);
               return <article className={'d26-seal-' + seal.tone} key={p.id}><ProductPicture product={p} className="d26-customer-dish" fallback={seal.icon}/><div><h3>{p.name}</h3><p>{p.description}</p><footer><strong>{money(resolveChannelPriceCents(p, channel))}</strong><button disabled={!storeOpen || busy || pendingFlag || p.availableForSale === false || !!qrToken && !data.table.open} aria-label={(p.modifierGroups.length ? 'Personalizar ' : 'Adicionar ') + p.name} onClick={() => add(p)}>{p.availableForSale === false ? 'Indisponível agora' : p.modifierGroups.length ? 'Personalizar' : 'Adicionar ＋'}</button>{!p.modifierGroups.length && p.availableForSale !== false && <button disabled={!storeOpen || busy || pendingFlag || !!qrToken && !data.table.open} aria-label={'Personalizar ' + p.name} onClick={() => personalize(p)}>Personalizar</button>}</footer></div></article>;
             })}</div></section>;
@@ -398,10 +427,12 @@ export function CustomerMenu({
         pending.current = null;
         navigate('menu');
       }}>Fazer outro pedido</button>}{!pendingFlag && !cart.length && lastItems.length > 0 && <button disabled={busy} onClick={() => void repeatOrder()}>Pedir novamente</button>}</>}</section>}
+ {view==='menu'&&count>0&&<button className="d26-customer-bag" onClick={()=>navigate('cart')}><span>Ver sacola · {count} {count===1?'item':'itens'}</span><strong>{money(subtotal)} →</strong></button>}
  <nav className="d26-customer-bottom" aria-label="Navegação do cliente">
    <button aria-current={view === 'menu' ? 'page' : undefined} onClick={() => navigate('menu')}><span aria-hidden="true">☷</span>Cardápio</button>
    <button aria-current={view === 'cart' ? 'page' : undefined} onClick={() => navigate('cart')}><span aria-hidden="true">▣</span>Sacola{cart.length > 0 && <b>{cart.reduce((sum, line) => sum + line.quantity, 0)}</b>}</button>
    <button aria-current={view === (qrToken ? 'service' : 'status') ? 'page' : undefined} onClick={() => navigate(qrToken ? 'service' : 'status')}><span aria-hidden="true">{qrToken ? '♧' : '◷'}</span>{qrToken ? 'Atendimento' : 'Meu pedido'}</button>
+   {!qrToken&&<button aria-current={view==='account'?'page':undefined} disabled={pendingFlag||busy} onClick={()=>navigate('account')}>Minha conta</button>}
  </nav>
  {custom && <div className="d26-customer-modal"><section role="dialog" aria-modal="true" aria-label={'Personalizar ' + custom.name}><button className="d26-customer-close" aria-label="Fechar personalização" onClick={() => setCustom(null)}>×</button><small>DO SEU JEITO</small><h2>{custom.name}</h2>{custom.imageUrl&&<ProductPicture product={custom} className="d26-customer-product-photo"/>}<p>{custom.description}</p>{custom.modifierGroups.map(g => <fieldset key={g.id}><legend>{g.name} · {g.minSelect ? `escolha ${g.minSelect} a ${g.maxSelect}` : 'opcional'}</legend>{g.options.filter(o => o.available !== false).map(o => <label key={o.id}><input type="checkbox" checked={mods[g.id]?.includes(o.id) ?? false} disabled={!mods[g.id]?.includes(o.id) && (mods[g.id]?.length ?? 0) >= g.maxSelect} onChange={e => setMods(current => ({
               ...current,

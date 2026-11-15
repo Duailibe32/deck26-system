@@ -1,4 +1,5 @@
 import {registerStockExperienceRoutes} from './stock-experience.js';
+import {registerDeliveryAccounts} from './delivery-accounts.js';
 import {registerExtensionRoutes} from './extension-routes.js';
 import {stayOptionsSchema,extensionSettings} from './extension-models.js';
 import {registerDesktopRoutes} from './desktop-routes.js';
@@ -3010,6 +3011,7 @@ export async function buildLocalServer(options?: {
 
   registerExtensionRoutes(app,store,authorizePermission);
   registerStockExperienceRoutes(app,store,authorizePermission);
+  registerDeliveryAccounts(app,store);
   registerDesktopRoutes(app,store,authorizePermission,resolveSession);
   registerOperationRoutes(app,store,authorizePermission,options?.windowsPrinting);
   registerFiscalPreparationRoutes(app,store,authorizePermission);
